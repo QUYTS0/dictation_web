@@ -43,8 +43,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json<ResolveVideoResponse>({ videoId, status: "ok" });
   } catch (err) {
     console.error("[resolve] unexpected error:", err);
+    const message =
+      err instanceof Error && err.message.includes("Missing Supabase")
+        ? "Server is not configured yet. Please set up environment variables (see .env.local.example)."
+        : "Internal server error.";
     return NextResponse.json<ResolveVideoResponse>(
-      { videoId: "", status: "error", message: "Internal server error." },
+      { videoId: "", status: "error", message },
       { status: 500 }
     );
   }
