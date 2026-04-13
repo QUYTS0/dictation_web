@@ -31,21 +31,30 @@ export async function POST(request: NextRequest) {
       .from("videos")
       .upsert({ youtube_video_id: videoId }, { onConflict: "youtube_video_id" });
 
-    // Check if a transcript is already being processed or is ready for this video
+    // Check if there is already a READY transcript for this video (cached result)
     const { data: existing } = await supabase
       .from("transcripts")
       .select("id, status")
       .eq("youtube_video_id", videoId)
       .eq("language", language)
-      .in("status", ["processing", "ready"])
+      .eq("status", "ready")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (existing) {
-      console.log(`[transcript generate] transcript ${existing.id} already exists with status=${existing.status}`);
+      console.log(`[transcript generate] ready transcript ${existing.id} already exists, skipping re-fetch`);
       return NextResponse.json({ transcriptId: existing.id, status: existing.status });
     }
+
+    // Mark any previous stale "processing" transcripts for this video as failed
+    // so they don't block future attempts
+    await supabase
+      .from("transcripts")
+      .update({ status: "failed" })
+      .eq("youtube_video_id", videoId)
+      .eq("language", language)
+      .eq("status", "processing");
 
     // Create a transcript record in "processing" state
     const { data: transcript, error: tError } = await supabase
@@ -143,6 +152,21 @@ export async function POST(request: NextRequest) {
     // Merge very short cue lines into sentence-level segments
     const merged = mergeIntoSentences(ytItems);
 
+    if (merged.length === 0) {
+      console.error(
+        `[transcript generate] mergeIntoSentences produced 0 segments from ${ytItems.length} cues` +
+        ` (cue texts may be empty or unit detection may have failed)`
+      );
+      await supabase
+        .from("transcripts")
+        .update({ status: "failed" })
+        .eq("id", transcriptId);
+      return NextResponse.json(
+        { transcriptId, status: "failed", error: "Could not extract segments from captions." },
+        { status: 422 }
+      );
+    }
+
     const rows = merged.map((seg, i) => ({
       transcript_id: transcriptId,
       segment_index: i,
@@ -167,10 +191,17 @@ export async function POST(request: NextRequest) {
     }
 
     const fullText = merged.map((s) => s.text).join(" ");
-    await supabase
+    const { error: updateError } = await supabase
       .from("transcripts")
       .update({ status: "ready", full_text: fullText })
       .eq("id", transcriptId);
+
+    if (updateError) {
+      console.error("[transcript generate] status update error:", updateError);
+      // Attempt to mark as failed so the client doesn't poll forever
+      await supabase.from("transcripts").update({ status: "failed" }).eq("id", transcriptId);
+      return NextResponse.json({ error: "Failed to finalize transcript" }, { status: 500 });
+    }
 
     console.log(
       `[transcript generate] stored ${rows.length} segments (from ${ytItems.length} cues) for transcript ${transcriptId}`
@@ -206,18 +237,42 @@ interface Segment {
 
 const MAX_SEGMENT_DURATION_SEC = 8;
 
+// Number of leading cues to sample when detecting offset/duration units.
+const UNIT_DETECT_SAMPLE_SIZE = 10;
+// Threshold separating ms from seconds: InnerTube cues are 500-10000ms; classic
+// XML cues are 0.5-10s. 100 sits safely between the two ranges (10s max in
+// seconds format, 500ms min in ms format) making it a reliable decision point.
+const MS_DURATION_THRESHOLD = 100;
+
 function mergeIntoSentences(cues: CueItem[]): Segment[] {
   const result: Segment[] = [];
   let buf: string[] = [];
   let start = 0;
   let end = 0;
 
+  // youtube-transcript returns offsets/durations in ms for InnerTube (srv3) format
+  // but in seconds for the classic XML fallback. Detect by sampling durations and
+  // offsets: real caption cues are 0.5-10s (500-10000ms). Values ≥ 100 → ms.
+  const sampleCues = cues.slice(0, UNIT_DETECT_SAMPLE_SIZE);
+  const validDurations = sampleCues.map((c) => c.duration).filter((d) => d > 0);
+  const validOffsets = sampleCues.map((c) => c.offset).filter((o) => o > 0);
+  const sampleValues = [...validDurations, ...validOffsets];
+  const avgSample = sampleValues.length
+    ? sampleValues.reduce((a, b) => a + b, 0) / sampleValues.length
+    : 0;
+  // If no non-zero samples are available (e.g., first cues all start at 0),
+  // fall back to assuming ms (InnerTube is the common path for modern videos).
+  if (sampleValues.length === 0) {
+    console.warn("[mergeIntoSentences] no non-zero offset/duration samples; defaulting to ms");
+  }
+  const divisor = sampleValues.length === 0 || avgSample >= MS_DURATION_THRESHOLD ? 1000 : 1;
+
   for (const cue of cues) {
     const text = cue.text.replace(/\n/g, " ").trim();
     if (!text) continue;
 
-    const cueStart = cue.offset / 1000;
-    const cueEnd = cueStart + cue.duration / 1000;
+    const cueStart = cue.offset / divisor;
+    const cueEnd = cueStart + cue.duration / divisor;
 
     if (buf.length === 0) {
       start = cueStart;

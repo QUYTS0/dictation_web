@@ -130,6 +130,9 @@ export default function DictationPage({ params }: PageProps) {
       setUxState("transcript_failed");
     } else if (transcriptStatus === "ready" && segments.length > 0) {
       setUxState("transcript_ready");
+    } else if (transcriptStatus === "ready" && segments.length === 0) {
+      // Transcript marked ready but no segments — treat as failed so user gets feedback
+      setUxState("transcript_failed");
     }
   }, [transcriptStatus, transcriptQuery.isLoading, segments.length]);
 
