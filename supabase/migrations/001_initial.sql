@@ -10,7 +10,7 @@ create extension if not exists "uuid-ossp";
 -- Table: videos
 -- -------------------------------------------------------
 create table if not exists videos (
-  id               uuid primary key default uuid_generate_v4(),
+  id               uuid primary key default gen_random_uuid(),
   youtube_video_id text not null unique,
   title            text,
   language         text not null default 'en',
@@ -22,7 +22,7 @@ create table if not exists videos (
 -- Table: transcripts
 -- -------------------------------------------------------
 create table if not exists transcripts (
-  id               uuid primary key default uuid_generate_v4(),
+  id               uuid primary key default gen_random_uuid(),
   youtube_video_id text not null references videos(youtube_video_id) on delete cascade,
   language         text not null default 'en',
   source           text not null check (source in ('cache', 'ai', 'manual')),
@@ -40,7 +40,7 @@ create index if not exists transcripts_status_idx   on transcripts(status);
 -- Table: transcript_segments
 -- -------------------------------------------------------
 create table if not exists transcript_segments (
-  id               uuid primary key default uuid_generate_v4(),
+  id               uuid primary key default gen_random_uuid(),
   transcript_id    uuid not null references transcripts(id) on delete cascade,
   segment_index    integer not null,
   start_sec        numeric not null,
@@ -84,7 +84,7 @@ create trigger on_auth_user_created
 -- Table: learning_sessions
 -- -------------------------------------------------------
 create table if not exists learning_sessions (
-  id                    uuid primary key default uuid_generate_v4(),
+  id                    uuid primary key default gen_random_uuid(),
   user_id               uuid references users(id) on delete set null,
   youtube_video_id      text not null,
   transcript_id         uuid references transcripts(id) on delete set null,
@@ -103,7 +103,7 @@ create index if not exists sessions_video_idx   on learning_sessions(youtube_vid
 -- Table: attempt_logs
 -- -------------------------------------------------------
 create table if not exists attempt_logs (
-  id             uuid primary key default uuid_generate_v4(),
+  id             uuid primary key default gen_random_uuid(),
   session_id     uuid not null references learning_sessions(id) on delete cascade,
   segment_index  integer not null,
   expected_text  text not null,
@@ -119,7 +119,7 @@ create index if not exists attempts_session_idx on attempt_logs(session_id);
 -- Table: ai_feedback
 -- -------------------------------------------------------
 create table if not exists ai_feedback (
-  id              uuid primary key default uuid_generate_v4(),
+  id              uuid primary key default gen_random_uuid(),
   attempt_id      uuid references attempt_logs(id) on delete cascade,
   explanation     text,
   corrected_text  text,
