@@ -284,24 +284,28 @@ function mergeIntoSentences(cues: CueItem[]): Segment[] {
   }
   const divisor = sampleValues.length === 0 || avgSample >= MS_DURATION_THRESHOLD ? 1000 : 1;
 
+  // Pre-compute the next non-empty cue offset for every cue in O(n).
+  // YouTube's json3 timedtext format gives each cue a "display duration" that
+  // extends past the point where the next cue starts (overlap / fade-out time).
+  // Using offset + duration therefore inflates end_sec.  Instead we use the next
+  // non-empty cue's offset as the real end of a cue.  For the final cue we fall
+  // back to offset + duration.
+  const nextNonEmptyOffset: (number | null)[] = new Array(cues.length).fill(null);
+  let lastNonEmptyStartSec: number | null = null;
+  for (let i = cues.length - 1; i >= 0; i--) {
+    if (cues[i].text.replace(/\n/g, " ").trim()) {
+      nextNonEmptyOffset[i] = lastNonEmptyStartSec;
+      lastNonEmptyStartSec = cues[i].offset / divisor;
+    }
+  }
+
   for (let i = 0; i < cues.length; i++) {
     const cue = cues[i];
     const text = cue.text.replace(/\n/g, " ").trim();
     if (!text) continue;
 
     const cueStart = cue.offset / divisor;
-    // YouTube's json3 timedtext format gives each cue a "display duration" that
-    // extends past the point where the next cue starts (overlap / fade-out time).
-    // Using offset + duration therefore inflates end_sec.  Instead, use the next
-    // non-empty cue's offset as the real end of this cue.  For the final cue fall
-    // back to offset + duration.
-    let nextOffset: number | null = null;
-    for (let ni = i + 1; ni < cues.length; ni++) {
-      if (cues[ni].text.replace(/\n/g, " ").trim()) {
-        nextOffset = cues[ni].offset / divisor;
-        break;
-      }
-    }
+    const nextOffset = nextNonEmptyOffset[i];
     const cueEnd = nextOffset !== null ? nextOffset : cueStart + cue.duration / divisor;
 
     if (buf.length === 0) {
