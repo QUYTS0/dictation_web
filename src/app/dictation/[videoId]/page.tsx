@@ -97,8 +97,15 @@ export default function DictationPage({ params }: PageProps) {
   const [showAI, setShowAI] = useState(false);
   const [transcriptId, setTranscriptId] = useState<string | undefined>();
   const [isRegenerating, setIsRegenerating] = useState(false);
+  // Incremented on each wrong-answer retry to force-remount DictationInput
+  // (gives it fresh state without needing setState inside a useEffect).
+  const [dictationKey, setDictationKey] = useState(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
+  // Tracks whether the player is replaying the current segment after a correct
+  // answer (before advancing to the next one).
+  const isReplayingAfterCorrect = useRef(false);
+  const nextSegAfterReplay = useRef(0);
 
   // ---- Transcript query ----
   const transcriptQuery = useQuery({
@@ -141,13 +148,43 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Segment end handler (called by YouTubePlayer) ----
   const handleSegmentEnd = useCallback((segIdx: number) => {
+    if (isReplayingAfterCorrect.current) {
+      // The player just finished the post-correct replay — advance to next segment.
+      isReplayingAfterCorrect.current = false;
+      const nextIdx = nextSegAfterReplay.current;
+      setCheckResult(null);
+      setWrongAttempts(0);
+      setHintLevel(0);
+      setShowAI(false);
+
+      if (nextIdx < segments.length) {
+        setCurrentSegIdx(nextIdx);
+        ytPlayerRef.current?.playSegment(nextIdx);
+        // uxState stays "playing" until the next segment ends normally
+      } else {
+        setUxState("session_completed");
+        const state = useSessionStore.getState();
+        void saveProgress(
+          videoId,
+          nextIdx,
+          selectAccuracy(state),
+          state.totalAttempts,
+          state.sessionId ?? undefined,
+          transcriptId,
+          "completed"
+        );
+      }
+      return;
+    }
+
+    // Normal flow: segment ended while practicing — show the dictation input.
     setCurrentSegIdx(segIdx);
     setCheckResult(null);
     setWrongAttempts(0);
     setHintLevel(0);
     setShowAI(false);
     setUxState("paused_waiting_input");
-  }, []);
+  }, [segments.length, videoId, transcriptId]);
 
   // ---- Answer submission ----
   const handleAnswerSubmit = useCallback(
@@ -172,32 +209,17 @@ export default function DictationPage({ params }: PageProps) {
           setHintLevel(0);
           setUxState("playing");
 
-          // Auto-advance to next segment after a brief delay
-          const nextIdx = currentSegIdx + 1;
-          if (nextIdx < segments.length) {
-            setTimeout(() => {
-              setCurrentSegIdx(nextIdx);
-              playSegment(nextIdx);
-            }, 800);
-          } else {
-            // Session completed
-            setUxState("session_completed");
-            void saveProgress(
-              videoId,
-              nextIdx,
-              selectAccuracy(useSessionStore.getState()),
-              useSessionStore.getState().totalAttempts,
-              useSessionStore.getState().sessionId ?? undefined,
-              transcriptId,
-              "completed"
-            );
-          }
+          // Replay the current sentence so the user hears it again before moving on.
+          // handleSegmentEnd will advance to the next segment when the replay finishes.
+          isReplayingAfterCorrect.current = true;
+          nextSegAfterReplay.current = currentSegIdx + 1;
+          ytPlayerRef.current?.playSegment(currentSegIdx);
 
-          // Save progress periodically
+          // Save progress (fire-and-forget)
           const state = useSessionStore.getState();
           saveProgress(
             videoId,
-            nextIdx,
+            currentSegIdx + 1,
             selectAccuracy(state),
             state.totalAttempts,
             state.sessionId ?? undefined,
@@ -211,6 +233,7 @@ export default function DictationPage({ params }: PageProps) {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
           if (newWrong >= 3) setShowAI(true);
+          setDictationKey((k) => k + 1); // remount DictationInput so state resets cleanly
           setUxState("paused_waiting_input");
         }
       } catch {
@@ -223,12 +246,12 @@ export default function DictationPage({ params }: PageProps) {
   // ---- Start session (seek to segment 0 and play) ----
   const handleStart = useCallback(() => {
     setUxState("playing");
-    playSegment(0);
+    ytPlayerRef.current?.playSegment(0);
   }, []);
 
   // ---- Replay current segment ----
   const handleReplay = useCallback(() => {
-    playSegment(currentSegIdx);
+    ytPlayerRef.current?.playSegment(currentSegIdx);
     setUxState("playing");
     setCheckResult(null);
   }, [currentSegIdx]);
@@ -238,7 +261,7 @@ export default function DictationPage({ params }: PageProps) {
     const nextIdx = currentSegIdx + 1;
     if (nextIdx < segments.length) {
       setCurrentSegIdx(nextIdx);
-      playSegment(nextIdx);
+      ytPlayerRef.current?.playSegment(nextIdx);
       setCheckResult(null);
       setWrongAttempts(0);
       setHintLevel(0);
@@ -273,11 +296,6 @@ export default function DictationPage({ params }: PageProps) {
       setIsRegenerating(false);
     }
   }, [videoId, queryClient]);
-
-  // ---- Play segment helper ----
-  function playSegment(segIdx: number) {
-    ytPlayerRef.current?.playSegment(segIdx);
-  }
 
   // ---- Keyboard shortcuts ----
   useEffect(() => {
@@ -481,25 +499,14 @@ export default function DictationPage({ params }: PageProps) {
               )}
 
               <DictationInput
+                key={`${currentSegIdx}-${dictationKey}`}
                 isEnabled={uxState === "paused_waiting_input"}
                 wordCount={wordCount}
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}
-                errorMessage={
-                  checkResult && !checkResult.isCorrect
-                    ? `Error type: ${checkResult.errorType}`
-                    : null
-                }
                 wrongAttempts={wrongAttempts}
               />
-
-              {/* Correct feedback */}
-              {checkResult?.isCorrect && (
-                <p className="text-emerald-600 font-semibold text-center">
-                  ✅ Correct! Moving to next sentence…
-                </p>
-              )}
 
               {/* Hint */}
               {currentSegment && !checkResult?.isCorrect && (

@@ -6,14 +6,32 @@ import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
   isEnabled: boolean;
-  /** Number of words the user needs to type (shown as a hint) */
-  wordCount?: number;
+  /** Total number of expected words — determines how many blank slots to show */
+  wordCount: number;
   onSubmit: (text: string) => void;
   diff?: DiffToken[];
   isCorrect?: boolean | null;
-  errorMessage?: string | null;
   /** Number of wrong attempts for this segment */
   wrongAttempts?: number;
+}
+
+/**
+ * Extracts expected-position correctness from an LCS diff.
+ * Returns an array of length ~wordCount where each entry is the matched
+ * word string (if correct at that expected position) or null (missing/wrong).
+ * "extra" tokens (user-only) are skipped — they have no expected slot.
+ */
+function buildCorrectSlots(diff: DiffToken[]): (string | null)[] {
+  const result: (string | null)[] = [];
+  for (const token of diff) {
+    if (token.status === "correct") {
+      result.push(token.word);
+    } else if (token.status === "missing" || token.status === "wrong") {
+      result.push(null); // expected slot that wasn't correctly matched
+    }
+    // skip "extra" tokens — they are user-only tokens with no expected slot
+  }
+  return result;
 }
 
 export default function DictationInput({
@@ -22,122 +40,182 @@ export default function DictationInput({
   onSubmit,
   diff,
   isCorrect,
-  errorMessage,
   wrongAttempts = 0,
 }: DictationInputProps) {
-  const [value, setValue] = useState("");
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [typedWords, setTypedWords] = useState<string[]>([]);
+  const [currentInput, setCurrentInput] = useState("");
+  const [currentWordIdx, setCurrentWordIdx] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Focus input whenever it becomes enabled
+  // Reset state and focus the input on mount (component is remounted for each
+  // new segment and after each wrong-answer retry via the `key` prop in page.tsx).
   useEffect(() => {
-    if (isEnabled) {
-      inputRef.current?.focus();
-    }
-  }, [isEnabled]);
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, []);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+  /**
+   * Commits `input` as the word at slot `idx`, advances the pointer,
+   * and auto-submits when all slots are filled.
+   */
+  const commitWord = (input: string, typed: string[], idx: number) => {
+    const word = input.trim();
+    if (!word) return;
+    const newTyped = [...typed];
+    newTyped[idx] = word;
+    const newIdx = idx + 1;
+
+    if (newIdx >= wordCount) {
+      // All slots filled — auto-submit immediately
+      setTypedWords(newTyped);
+      setCurrentInput("");
+      setCurrentWordIdx(newIdx);
+      onSubmit(newTyped.join(" "));
+    } else {
+      setTypedWords(newTyped);
+      setCurrentInput("");
+      setCurrentWordIdx(newIdx);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Space advances to the next slot
+    if ((e.key === " " || e.key === "Spacebar") && currentWordIdx < wordCount) {
       e.preventDefault();
-      if (!value.trim() || !isEnabled) return;
-      onSubmit(value.trim());
-      setValue("");
+      commitWord(currentInput, typedWords, currentWordIdx);
+    // Enter on any slot: commit current word and submit (handles last word too)
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (currentWordIdx < wordCount && currentInput.trim()) {
+        commitWord(currentInput, typedWords, currentWordIdx);
+      } else if (typedWords.filter(Boolean).length > 0 || currentInput.trim()) {
+        const finalWords = [...typedWords];
+        if (currentInput.trim() && currentWordIdx < wordCount) {
+          finalWords[currentWordIdx] = currentInput.trim();
+        }
+        onSubmit(finalWords.filter(Boolean).join(" "));
+      }
+    // Backspace on empty input navigates back to re-type the previous word
+    } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
+      const prevIdx = currentWordIdx - 1;
+      const prevWord = typedWords[prevIdx] ?? "";
+      setTypedWords(typedWords.slice(0, prevIdx));
+      setCurrentInput(prevWord);
+      setCurrentWordIdx(prevIdx);
     }
   };
 
-  const handleSubmit = () => {
-    const trimmed = value.trim();
-    if (!trimmed || !isEnabled) return;
-    onSubmit(trimmed);
-    setValue("");
+  // Handle paste: split on first space so pasting a full word works naturally
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val.includes(" ")) {
+      const first = val.split(" ")[0].trim();
+      if (first) commitWord(first, typedWords, currentWordIdx);
+    } else {
+      setCurrentInput(val);
+    }
   };
+
+  // After an incorrect result: show which positions were correct (green) and
+  // which were wrong (blank). Disappears once the user starts typing again.
+  const showCorrectSlots =
+    diff &&
+    diff.length > 0 &&
+    isCorrect === false &&
+    currentWordIdx === 0 &&
+    typedWords.length === 0 &&
+    currentInput === "";
+
+  const correctSlots = showCorrectSlots ? buildCorrectSlots(diff!) : null;
+
+  // ---- Build word-slot nodes ----
+  const slots: React.ReactNode[] = [];
+  for (let i = 0; i < wordCount; i++) {
+    if (correctSlots) {
+      // Post-incorrect result: show correctly matched words, blank the rest
+      const w = correctSlots[i];
+      slots.push(
+        <span
+          key={i}
+          className={clsx(
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2",
+            w
+              ? "border-emerald-400 text-emerald-700 bg-emerald-50"
+              : "border-slate-200 text-slate-300"
+          )}
+        >
+          {w ?? "_"}
+        </span>
+      );
+    } else if (i < currentWordIdx) {
+      // Already-committed word
+      slots.push(
+        <span
+          key={i}
+          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-400 text-slate-700 bg-slate-50"
+        >
+          {typedWords[i] ?? "_"}
+        </span>
+      );
+    } else if (i === currentWordIdx && isEnabled) {
+      // Active slot — mirrors what the user is currently typing
+      slots.push(
+        <span
+          key={i}
+          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-indigo-500 text-indigo-700"
+        >
+          {currentInput || <span className="opacity-30 select-none">_</span>}
+        </span>
+      );
+    } else {
+      // Empty future slot
+      slots.push(
+        <span
+          key={i}
+          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300"
+        >
+          _
+        </span>
+      );
+    }
+  }
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Word count hint */}
-      {wordCount !== undefined && wordCount > 0 && (
-        <div className="flex items-center justify-between">
-          <span className="text-slate-700 font-semibold text-sm">
-            Fill in{" "}
-            <span className="inline-block min-w-[2rem] text-center rounded-md bg-indigo-100 text-indigo-800 px-2 py-0.5 font-bold">
-              {wordCount}
-            </span>{" "}
-            word{wordCount !== 1 ? "s" : ""}
-          </span>
-          <span className="text-xs text-slate-400">Case &amp; punctuation: ignored</span>
-        </div>
-      )}
-
-      {/* Text area */}
-      <div className="relative">
-        <textarea
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={!isEnabled}
-          placeholder={
-            isEnabled ? "Type what you heard… (Enter to submit)" : "Waiting…"
-          }
-          rows={3}
-          className={clsx(
-            "w-full rounded-xl border px-4 py-3 text-base font-medium resize-none transition-colors outline-none",
-            isEnabled
-              ? "border-indigo-300 bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
-              : "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed",
-            isCorrect === true && "border-emerald-400 bg-emerald-50",
-            isCorrect === false && "border-red-400 bg-red-50"
-          )}
-        />
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <span className="text-slate-500 text-xs">
+          {isEnabled && currentWordIdx < wordCount
+            ? `Word ${currentWordIdx + 1} of ${wordCount} — type then press Space`
+            : `Fill in ${wordCount} word${wordCount !== 1 ? "s" : ""}`}
+        </span>
+        <span className="text-xs text-slate-400">Case &amp; punctuation: ignored</span>
       </div>
 
-      {/* Submit button */}
-      <button
-        onClick={handleSubmit}
-        disabled={!isEnabled || !value.trim()}
-        className={clsx(
-          "self-end px-6 py-2 rounded-xl font-semibold text-sm transition-colors",
-          isEnabled && value.trim()
-            ? "bg-indigo-600 text-white hover:bg-indigo-700"
-            : "bg-slate-200 text-slate-400 cursor-not-allowed"
-        )}
-      >
-        Check Answer
-      </button>
+      {/* Word-slot display */}
+      <div className="flex flex-wrap gap-2 p-3 rounded-xl border border-slate-200 bg-white min-h-12 items-center">
+        {slots}
+      </div>
 
-      {/* Feedback diff */}
-      {diff && diff.length > 0 && (
-        <div
-          className={clsx(
-            "rounded-xl border p-3 text-sm font-mono flex flex-wrap gap-1",
-            isCorrect ? "border-emerald-300 bg-emerald-50" : "border-red-300 bg-red-50"
-          )}
-        >
-          {diff.map((token, i) => (
-            <span
-              key={i}
-              className={clsx(
-                "px-1 rounded",
-                token.status === "correct" && "text-emerald-700",
-                token.status === "wrong" && "bg-red-200 text-red-800",
-                token.status === "missing" && "bg-amber-200 text-amber-800 line-through",
-                token.status === "extra" && "bg-blue-200 text-blue-800"
-              )}
-            >
-              {token.word}
-            </span>
-          ))}
-        </div>
+      {/* Current-word input field (only shown while filling slots) */}
+      {isEnabled && currentWordIdx < wordCount && (
+        <input
+          ref={inputRef}
+          type="text"
+          value={currentInput}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={`Type word ${currentWordIdx + 1}…`}
+          className="w-full rounded-xl border border-indigo-300 px-4 py-2 text-base font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+        />
       )}
 
-      {/* Error message */}
-      {errorMessage && (
-        <p className="text-red-600 text-sm flex items-center gap-1">
-          <span>⚠</span> {errorMessage}
-        </p>
-      )}
-
-      {/* Wrong attempts hint */}
-      {wrongAttempts >= 2 && !isCorrect && (
+      {/* Wrong-attempts hint */}
+      {wrongAttempts >= 2 && isCorrect !== true && (
         <p className="text-slate-500 text-xs">
           Having trouble? Try using a hint or ask the AI tutor for help.
         </p>
