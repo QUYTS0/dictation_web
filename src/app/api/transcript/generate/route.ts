@@ -273,8 +273,12 @@ interface NormalizedCue {
 
 const MAX_SEGMENT_DURATION_SEC = 6;
 const SOFT_SPLIT_DURATION_SEC = 3;
-/** Segments shorter than this (seconds) or with fewer than MIN_WORDS words are
- *  merged back into the preceding segment during the tail-merge pass. */
+/** Segments are considered "tiny" (and merged into the preceding segment) only
+ *  when BOTH conditions are true: duration shorter than MIN_SEGMENT_DURATION_SEC
+ *  AND word count fewer than MIN_SEGMENT_WORDS.  Using AND (not OR) prevents
+ *  merging complete short sentences like "It really does." (3 words, ~1 s) into
+ *  a preceding unrelated sentence while still catching genuine one-word tail
+ *  fragments like "natural." (1 word, 0.8 s). */
 const MIN_SEGMENT_DURATION_SEC = 2;
 const MIN_SEGMENT_WORDS = 3;
 
@@ -333,6 +337,9 @@ function normalizeCues(cues: CueItem[]): NormalizedCue[] {
 // Matches a sentence-ending punctuation mark followed by whitespace and an
 // uppercase letter (genuine sentence boundary) and splits there, distributing
 // time proportionally by character count.
+//
+// Lookbehind assertions require Node.js ≥ 10 (V8 ≥ 6.3), which is met by
+// any supported Next.js version.
 // ---------------------------------------------------------------------------
 const INTRA_CUE_SENTENCE_SPLIT = /(?<=[.!?])\s+(?=[A-Z])/;
 
