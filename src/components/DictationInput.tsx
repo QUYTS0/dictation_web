@@ -73,9 +73,21 @@ export default function DictationInput({
       onSubmit(newTyped.join(" "));
     } else {
       setTypedWords(newTyped);
-      setCurrentInput("");
+      // Pre-populate the next slot if the user had previously typed something there
+      setCurrentInput(newTyped[newIdx] ?? "");
       setCurrentWordIdx(newIdx);
     }
+  };
+
+  /**
+   * Navigate to slot `i` for editing — sets it as the active slot and
+   * restores any previously committed value as the current input.
+   */
+  const navigateToSlot = (i: number) => {
+    if (!isEnabled) return;
+    setCurrentInput(typedWords[i] ?? "");
+    setCurrentWordIdx(i);
+    setTimeout(() => inputRef.current?.focus(), 10);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -97,11 +109,7 @@ export default function DictationInput({
       }
     // Backspace on empty input navigates back to re-type the previous word
     } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
-      const prevIdx = currentWordIdx - 1;
-      const prevWord = typedWords[prevIdx] ?? "";
-      setTypedWords(typedWords.slice(0, prevIdx));
-      setCurrentInput(prevWord);
-      setCurrentWordIdx(prevIdx);
+      navigateToSlot(currentWordIdx - 1);
     }
   };
 
@@ -147,16 +155,6 @@ export default function DictationInput({
           {w ?? "_"}
         </span>
       );
-    } else if (i < currentWordIdx) {
-      // Already-committed word
-      slots.push(
-        <span
-          key={i}
-          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-400 text-slate-700 bg-slate-50"
-        >
-          {typedWords[i] ?? "_"}
-        </span>
-      );
     } else if (i === currentWordIdx && isEnabled) {
       // Active slot — mirrors what the user is currently typing
       slots.push(
@@ -165,6 +163,27 @@ export default function DictationInput({
           className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-indigo-500 text-indigo-700"
         >
           {currentInput || <span className="opacity-30 select-none">_</span>}
+        </span>
+      );
+    } else if (typedWords[i]) {
+      // Committed word (before cursor) or previously-typed word (after cursor) —
+      // clicking it navigates directly to that slot for editing.
+      const isBeforeCursor = i < currentWordIdx;
+      slots.push(
+        <span
+          key={i}
+          onClick={() => navigateToSlot(i)}
+          title="Click to edit"
+          className={clsx(
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 cursor-pointer transition-colors",
+            isEnabled
+              ? isBeforeCursor
+                ? "border-slate-400 text-slate-700 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
+                : "border-amber-300 text-amber-700 bg-amber-50 hover:border-indigo-400 hover:bg-indigo-50"
+              : "border-slate-400 text-slate-700 bg-slate-50"
+          )}
+        >
+          {typedWords[i]}
         </span>
       );
     } else {
