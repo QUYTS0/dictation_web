@@ -132,9 +132,16 @@ export default function DictationInput({
         }
         onSubmit(finalWords.filter(Boolean).join(" "));
       }
-    // Backspace on empty input navigates back to re-type the previous word
+    // Backspace on empty input navigates back to re-type the previous word.
+    // Also clears the current slot so the deleted word does not reappear.
     } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
-      navigateToSlot(currentWordIdx - 1);
+      const newTyped = [...typedWords];
+      newTyped[currentWordIdx] = "";
+      setTypedWords(newTyped);
+      const prevIdx = currentWordIdx - 1;
+      setCurrentInput(newTyped[prevIdx] ?? "");
+      setCurrentWordIdx(prevIdx);
+      setTimeout(() => inputRef.current?.focus(), 10);
     }
   };
 
