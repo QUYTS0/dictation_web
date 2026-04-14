@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { clsx } from "clsx";
 
@@ -86,6 +86,7 @@ export default function DictationPage({ params }: PageProps) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
   const accuracy = selectAccuracy(sessionStore);
+  const queryClient = useQueryClient();
 
   // Local state
   const [currentSegIdx, setCurrentSegIdx] = useState(0);
@@ -95,6 +96,7 @@ export default function DictationPage({ params }: PageProps) {
   const [hintLevel, setHintLevel] = useState<HintLevel>(0);
   const [showAI, setShowAI] = useState(false);
   const [transcriptId, setTranscriptId] = useState<string | undefined>();
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
 
@@ -245,6 +247,33 @@ export default function DictationPage({ params }: PageProps) {
     }
   }, [currentSegIdx, segments.length]);
 
+  // ---- Force-regenerate transcript ----
+  const handleRegenerate = useCallback(async () => {
+    setIsRegenerating(true);
+    setTranscriptId(undefined);
+    try {
+      const res = await fetch("/api/transcript/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, force: true }),
+      });
+      if (!res.ok) throw new Error("Regenerate request failed");
+      // Reset UI state back to loading so the query refetch picks up the
+      // new "processing" transcript and starts polling.
+      setUxState("loading_transcript");
+      setCurrentSegIdx(0);
+      setCheckResult(null);
+      setWrongAttempts(0);
+      setHintLevel(0);
+      setShowAI(false);
+      await queryClient.invalidateQueries({ queryKey: ["transcript", videoId] });
+    } catch {
+      // Ignore errors — the user can try again
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [videoId, queryClient]);
+
   // ---- Play segment helper ----
   function playSegment(segIdx: number) {
     ytPlayerRef.current?.playSegment(segIdx);
@@ -300,6 +329,18 @@ export default function DictationPage({ params }: PageProps) {
         <h1 className="text-base font-bold text-slate-800 truncate flex-1">
           English Dictation Trainer
         </h1>
+        {/* Regenerate button — shown when a transcript is loaded so user can fix timestamp issues */}
+        {(uxState === "transcript_ready" || uxState === "playing" || uxState === "paused_waiting_input" || uxState === "checking_answer") && (
+          <button
+            onClick={handleRegenerate}
+            disabled={isRegenerating}
+            title="Re-fetch captions from YouTube if sentences don't match the audio"
+            aria-label={isRegenerating ? "Regenerating transcript…" : "Regenerate transcript"}
+            className="text-xs text-slate-400 hover:text-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate"}
+          </button>
+        )}
         <span className="text-xs text-slate-400 font-mono">{videoId}</span>
       </header>
 
@@ -367,12 +408,21 @@ export default function DictationPage({ params }: PageProps) {
           )}
 
           {uxState === "transcript_failed" && (
-            <StatusCard
-              icon="❌"
-              title="Transcript failed"
-              description="Could not generate a transcript for this video. Try a different video."
-              error
-            />
+            <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-2">
+              <p className="text-2xl">❌</p>
+              <p className="font-semibold text-slate-800">Transcript failed</p>
+              <p className="text-sm text-slate-500">
+                Could not generate a transcript for this video. You can try re-fetching from YouTube.
+              </p>
+              <button
+                onClick={handleRegenerate}
+                disabled={isRegenerating}
+                aria-label={isRegenerating ? "Regenerating transcript…" : "Retry or regenerate transcript"}
+                className="self-start mt-1 px-4 py-2 rounded-xl bg-amber-500 text-white font-semibold text-sm hover:bg-amber-600 disabled:opacity-50 transition-colors"
+              >
+                {isRegenerating ? "⏳ Regenerating…" : "🔄 Retry / Regenerate transcript"}
+              </button>
+            </div>
           )}
 
           {uxState === "transcript_ready" && segments.length > 0 && (
@@ -383,12 +433,23 @@ export default function DictationPage({ params }: PageProps) {
               <p className="text-sm text-slate-600">
                 Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.
               </p>
-              <button
-                onClick={handleStart}
-                className="self-start mt-1 px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
-              >
-                ▶ Start Dictation
-              </button>
+              <div className="flex items-center gap-3 mt-1">
+                <button
+                  onClick={handleStart}
+                  className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
+                >
+                  ▶ Start Dictation
+                </button>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating}
+                  title="Re-fetch captions from YouTube to fix sentence/audio mismatches"
+                  aria-label={isRegenerating ? "Regenerating transcript…" : "Regenerate transcript"}
+                  className="text-xs text-slate-500 hover:text-amber-600 disabled:opacity-50 transition-colors underline"
+                >
+                  {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate transcript"}
+                </button>
+              </div>
             </div>
           )}
 

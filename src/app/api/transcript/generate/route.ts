@@ -6,6 +6,12 @@ import { normalizeText } from "@/lib/utils/text";
 interface GenerateRequest {
   videoId: string;
   language?: string;
+  /**
+   * When true, mark any existing transcript (including "ready" ones) as failed
+   * so a fresh fetch is performed. Use this when the cached transcript has
+   * incorrect timestamps or mismatched text/audio.
+   */
+  force?: boolean;
   /** Optional pre-built segments (e.g., from YouTube captions) */
   segments?: Array<{
     segmentIndex: number;
@@ -18,7 +24,7 @@ interface GenerateRequest {
 export async function POST(request: NextRequest) {
   try {
     const body: GenerateRequest = await request.json();
-    const { videoId, language = "en", segments } = body;
+    const { videoId, language = "en", segments, force = false } = body;
 
     if (!videoId || typeof videoId !== "string") {
       return NextResponse.json({ error: "videoId is required" }, { status: 400 });
@@ -30,6 +36,16 @@ export async function POST(request: NextRequest) {
     await supabase
       .from("videos")
       .upsert({ youtube_video_id: videoId }, { onConflict: "youtube_video_id" });
+
+    // If force=true, mark all existing transcripts as failed so we always do a fresh fetch
+    if (force) {
+      await supabase
+        .from("transcripts")
+        .update({ status: "failed" })
+        .eq("youtube_video_id", videoId)
+        .eq("language", language)
+        .in("status", ["ready", "processing"]);
+    }
 
     // Check if there is already a READY transcript for this video (cached result)
     const { data: existing } = await supabase
