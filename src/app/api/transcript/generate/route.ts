@@ -284,12 +284,25 @@ function mergeIntoSentences(cues: CueItem[]): Segment[] {
   }
   const divisor = sampleValues.length === 0 || avgSample >= MS_DURATION_THRESHOLD ? 1000 : 1;
 
-  for (const cue of cues) {
+  for (let i = 0; i < cues.length; i++) {
+    const cue = cues[i];
     const text = cue.text.replace(/\n/g, " ").trim();
     if (!text) continue;
 
     const cueStart = cue.offset / divisor;
-    const cueEnd = cueStart + cue.duration / divisor;
+    // YouTube's json3 timedtext format gives each cue a "display duration" that
+    // extends past the point where the next cue starts (overlap / fade-out time).
+    // Using offset + duration therefore inflates end_sec.  Instead, use the next
+    // non-empty cue's offset as the real end of this cue.  For the final cue fall
+    // back to offset + duration.
+    let nextOffset: number | null = null;
+    for (let ni = i + 1; ni < cues.length; ni++) {
+      if (cues[ni].text.replace(/\n/g, " ").trim()) {
+        nextOffset = cues[ni].offset / divisor;
+        break;
+      }
+    }
+    const cueEnd = nextOffset !== null ? nextOffset : cueStart + cue.duration / divisor;
 
     if (buf.length === 0) {
       start = cueStart;
