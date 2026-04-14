@@ -219,11 +219,16 @@ export default function DictationInput({
         </span>
       );
     } else {
-      // Empty future slot
+      // Empty future slot — clickable so the user can jump directly to any position
       slots.push(
         <span
           key={i}
-          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300"
+          onClick={() => isEnabled && navigateToSlot(i)}
+          title={isEnabled ? "Click to type here" : undefined}
+          className={clsx(
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300 transition-colors",
+            isEnabled && "cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
+          )}
         >
           _
         </span>

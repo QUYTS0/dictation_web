@@ -102,10 +102,6 @@ export default function DictationPage({ params }: PageProps) {
   const [dictationKey, setDictationKey] = useState(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
-  // Tracks whether the player is replaying the current segment after a correct
-  // answer (before advancing to the next one).
-  const isReplayingAfterCorrect = useRef(false);
-  const nextSegAfterReplay = useRef(0);
   // Tracks whether the user manually triggered a replay while already paused
   // (R key / Replay button while input is visible). In this case we keep the
   // input and its typed words intact when the segment ends.
@@ -159,35 +155,6 @@ export default function DictationPage({ params }: PageProps) {
       return;
     }
 
-    if (isReplayingAfterCorrect.current) {
-      // The player just finished the post-correct replay — advance to next segment.
-      isReplayingAfterCorrect.current = false;
-      const nextIdx = nextSegAfterReplay.current;
-      setCheckResult(null);
-      setWrongAttempts(0);
-      setHintLevel(0);
-      setShowAI(false);
-
-      if (nextIdx < segments.length) {
-        setCurrentSegIdx(nextIdx);
-        ytPlayerRef.current?.playSegment(nextIdx);
-        // uxState stays "playing" until the next segment ends normally
-      } else {
-        setUxState("session_completed");
-        const state = useSessionStore.getState();
-        void saveProgress(
-          videoId,
-          nextIdx,
-          selectAccuracy(state),
-          state.totalAttempts,
-          state.sessionId ?? undefined,
-          transcriptId,
-          "completed"
-        );
-      }
-      return;
-    }
-
     // Normal flow: segment ended while practicing — show the dictation input.
     setCurrentSegIdx(segIdx);
     setCheckResult(null);
@@ -195,7 +162,7 @@ export default function DictationPage({ params }: PageProps) {
     setHintLevel(0);
     setShowAI(false);
     setUxState("paused_waiting_input");
-  }, [segments.length, videoId, transcriptId]);
+  }, []);
 
   // ---- Answer submission ----
   const handleAnswerSubmit = useCallback(
@@ -218,19 +185,16 @@ export default function DictationPage({ params }: PageProps) {
         if (result.isCorrect) {
           setWrongAttempts(0);
           setHintLevel(0);
-          setUxState("playing");
+          setCheckResult(null);
+          setShowAI(false);
 
-          // Replay the current sentence so the user hears it again before moving on.
-          // handleSegmentEnd will advance to the next segment when the replay finishes.
-          isReplayingAfterCorrect.current = true;
-          nextSegAfterReplay.current = currentSegIdx + 1;
-          ytPlayerRef.current?.playSegment(currentSegIdx);
+          const nextIdx = currentSegIdx + 1;
 
           // Save progress (fire-and-forget)
           const state = useSessionStore.getState();
           saveProgress(
             videoId,
-            currentSegIdx + 1,
+            nextIdx,
             selectAccuracy(state),
             state.totalAttempts,
             state.sessionId ?? undefined,
@@ -240,6 +204,23 @@ export default function DictationPage({ params }: PageProps) {
               if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
             })
             .catch(() => {});
+
+          if (nextIdx < segments.length) {
+            setCurrentSegIdx(nextIdx);
+            setUxState("playing");
+            ytPlayerRef.current?.playSegment(nextIdx);
+          } else {
+            setUxState("session_completed");
+            void saveProgress(
+              videoId,
+              nextIdx,
+              selectAccuracy(state),
+              state.totalAttempts,
+              state.sessionId ?? undefined,
+              transcriptId,
+              "completed"
+            );
+          }
         } else {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
