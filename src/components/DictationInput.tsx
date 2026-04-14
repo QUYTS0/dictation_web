@@ -2,12 +2,12 @@
 
 import { useState, useRef, useEffect } from "react";
 import { clsx } from "clsx";
-import type { DiffToken, MatchMode } from "@/lib/types";
+import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
   isEnabled: boolean;
-  matchMode: MatchMode;
-  onMatchModeChange: (mode: MatchMode) => void;
+  /** Number of words the user needs to type (shown as a hint) */
+  wordCount?: number;
   onSubmit: (text: string) => void;
   diff?: DiffToken[];
   isCorrect?: boolean | null;
@@ -18,8 +18,7 @@ interface DictationInputProps {
 
 export default function DictationInput({
   isEnabled,
-  matchMode,
-  onMatchModeChange,
+  wordCount,
   onSubmit,
   diff,
   isCorrect,
@@ -52,28 +51,21 @@ export default function DictationInput({
     setValue("");
   };
 
-  const modes: MatchMode[] = ["exact", "relaxed", "learning"];
-
   return (
     <div className="flex flex-col gap-3">
-      {/* Mode selector */}
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-slate-500 font-medium">Mode:</span>
-        {modes.map((m) => (
-          <button
-            key={m}
-            onClick={() => onMatchModeChange(m)}
-            className={clsx(
-              "px-3 py-1 rounded-full border text-xs font-semibold transition-colors",
-              matchMode === m
-                ? "bg-indigo-600 text-white border-indigo-600"
-                : "bg-white text-slate-600 border-slate-300 hover:border-indigo-400"
-            )}
-          >
-            {m.charAt(0).toUpperCase() + m.slice(1)}
-          </button>
-        ))}
-      </div>
+      {/* Word count hint */}
+      {wordCount !== undefined && wordCount > 0 && (
+        <div className="flex items-center justify-between">
+          <span className="text-slate-700 font-semibold text-sm">
+            Fill in{" "}
+            <span className="inline-block min-w-[2rem] text-center rounded-md bg-indigo-100 text-indigo-800 px-2 py-0.5 font-bold">
+              {wordCount}
+            </span>{" "}
+            word{wordCount !== 1 ? "s" : ""}
+          </span>
+          <span className="text-xs text-slate-400">Case &amp; punctuation: ignored</span>
+        </div>
+      )}
 
       {/* Text area */}
       <div className="relative">

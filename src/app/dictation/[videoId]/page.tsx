@@ -13,6 +13,7 @@ import ProgressBar from "@/components/ProgressBar";
 
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
+import { normalizeText } from "@/lib/utils/text";
 import type {
   TranscriptResponse,
   TranscriptSegment,
@@ -157,7 +158,7 @@ export default function DictationPage({ params }: PageProps) {
           currentSegIdx,
           userText,
           segments[currentSegIdx].text,
-          sessionStore.matchMode,
+          "relaxed",
           sessionStore.sessionId ?? undefined
         );
 
@@ -217,6 +218,12 @@ export default function DictationPage({ params }: PageProps) {
     [currentSegIdx, segments, sessionStore, videoId, transcriptId, wrongAttempts]
   );
 
+  // ---- Start session (seek to segment 0 and play) ----
+  const handleStart = useCallback(() => {
+    setUxState("playing");
+    playSegment(0);
+  }, []);
+
   // ---- Replay current segment ----
   const handleReplay = useCallback(() => {
     playSegment(currentSegIdx);
@@ -271,6 +278,16 @@ export default function DictationPage({ params }: PageProps) {
   }, [transcriptStatus, transcriptId, videoId]);
 
   const currentSegment = segments[currentSegIdx];
+
+  // Precompute word counts for all segments once when segments load
+  const wordCounts = useMemo(
+    () =>
+      segments.map((seg) =>
+        normalizeText(seg.text, "relaxed").split(" ").filter(Boolean).length
+      ),
+    [segments]
+  );
+  const wordCount = wordCounts[currentSegIdx] ?? 0;
 
   // ---- Render ----
   return (
@@ -364,8 +381,14 @@ export default function DictationPage({ params }: PageProps) {
                 ✅ Transcript ready — {segments.length} sentences
               </p>
               <p className="text-sm text-slate-600">
-                Press play on the video to start the first sentence.
+                Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.
               </p>
+              <button
+                onClick={handleStart}
+                className="self-start mt-1 px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
+              >
+                ▶ Start Dictation
+              </button>
             </div>
           )}
 
@@ -398,8 +421,7 @@ export default function DictationPage({ params }: PageProps) {
 
               <DictationInput
                 isEnabled={uxState === "paused_waiting_input"}
-                matchMode={sessionStore.matchMode}
-                onMatchModeChange={(m) => sessionStore.setMatchMode(m)}
+                wordCount={wordCount}
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}

@@ -235,7 +235,8 @@ interface Segment {
   duration: number;
 }
 
-const MAX_SEGMENT_DURATION_SEC = 8;
+const MAX_SEGMENT_DURATION_SEC = 6;
+const SOFT_SPLIT_DURATION_SEC = 3;
 
 // Number of leading cues to sample when detecting offset/duration units.
 const UNIT_DETECT_SAMPLE_SIZE = 10;
@@ -282,9 +283,11 @@ function mergeIntoSentences(cues: CueItem[]): Segment[] {
 
     const sentence = buf.join(" ");
     const duration = end - start;
-    const endsWithPunctuation = /[.!?]$/.test(sentence.trim());
+    const endsWithHardPunctuation = /[.!?]$/.test(sentence.trim());
+    const endsWithSoftPunctuation = /[,;]$/.test(sentence.trim());
 
-    if (endsWithPunctuation || duration >= MAX_SEGMENT_DURATION_SEC) {
+    if (endsWithHardPunctuation || duration >= MAX_SEGMENT_DURATION_SEC ||
+        (endsWithSoftPunctuation && duration >= SOFT_SPLIT_DURATION_SEC)) {
       result.push({ text: sentence.trim(), start, duration });
       buf = [];
     }
