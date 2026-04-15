@@ -73,9 +73,46 @@ export default function DictationInput({
       onSubmit(newTyped.join(" "));
     } else {
       setTypedWords(newTyped);
-      setCurrentInput("");
+      // Pre-populate the next slot if the user had previously typed something there
+      setCurrentInput(newTyped[newIdx] ?? "");
       setCurrentWordIdx(newIdx);
     }
+  };
+
+  /**
+   * Navigate to slot `i` for editing — sets it as the active slot and
+   * restores any previously committed value as the current input.
+   */
+  const navigateToSlot = (i: number) => {
+    if (!isEnabled) return;
+    setCurrentInput(typedWords[i] ?? "");
+    setCurrentWordIdx(i);
+    setTimeout(() => inputRef.current?.focus(), 10);
+  };
+
+  /**
+   * When showing the post-incorrect result (correctSlots mode), clicking a slot
+   * reconstructs the typedWords array from the diff and jumps into edit mode at
+   * that slot — correct words are pre-filled, wrong/missing ones are blank.
+   */
+  const handleCorrectSlotClick = (i: number) => {
+    if (!isEnabled) return;
+    const reconstructed: string[] = [];
+    let expectedIdx = 0;
+    for (const token of diff!) {
+      if (token.status === "correct") {
+        reconstructed[expectedIdx] = token.word;
+        expectedIdx++;
+      } else if (token.status === "missing" || token.status === "wrong") {
+        reconstructed[expectedIdx] = ""; // leave blank so user can re-type
+        expectedIdx++;
+      }
+      // skip "extra" tokens — they have no expected slot
+    }
+    setTypedWords(reconstructed);
+    setCurrentInput(reconstructed[i] ?? "");
+    setCurrentWordIdx(i);
+    setTimeout(() => inputRef.current?.focus(), 10);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -95,13 +132,16 @@ export default function DictationInput({
         }
         onSubmit(finalWords.filter(Boolean).join(" "));
       }
-    // Backspace on empty input navigates back to re-type the previous word
+    // Backspace on empty input navigates back to re-type the previous word.
+    // Also clears the current slot so the deleted word does not reappear.
     } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
+      const newTyped = [...typedWords];
+      newTyped[currentWordIdx] = "";
+      setTypedWords(newTyped);
       const prevIdx = currentWordIdx - 1;
-      const prevWord = typedWords[prevIdx] ?? "";
-      setTypedWords(typedWords.slice(0, prevIdx));
-      setCurrentInput(prevWord);
+      setCurrentInput(newTyped[prevIdx] ?? "");
       setCurrentWordIdx(prevIdx);
+      setTimeout(() => inputRef.current?.focus(), 10);
     }
   };
 
@@ -132,29 +172,26 @@ export default function DictationInput({
   const slots: React.ReactNode[] = [];
   for (let i = 0; i < wordCount; i++) {
     if (correctSlots) {
-      // Post-incorrect result: show correctly matched words, blank the rest
+      // Post-incorrect result: show correctly matched words (green) and blanks for
+      // wrong/missing. All slots are clickable to jump into edit mode at that word.
       const w = correctSlots[i];
       slots.push(
         <span
           key={i}
+          onClick={() => handleCorrectSlotClick(i)}
+          title="Click to edit"
           className={clsx(
-            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2",
-            w
-              ? "border-emerald-400 text-emerald-700 bg-emerald-50"
-              : "border-slate-200 text-slate-300"
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 transition-colors",
+            isEnabled
+              ? w
+                ? "border-emerald-400 text-emerald-700 bg-emerald-50 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
+                : "border-slate-200 text-slate-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
+              : w
+                ? "border-emerald-400 text-emerald-700 bg-emerald-50"
+                : "border-slate-200 text-slate-300"
           )}
         >
           {w ?? "_"}
-        </span>
-      );
-    } else if (i < currentWordIdx) {
-      // Already-committed word
-      slots.push(
-        <span
-          key={i}
-          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-400 text-slate-700 bg-slate-50"
-        >
-          {typedWords[i] ?? "_"}
         </span>
       );
     } else if (i === currentWordIdx && isEnabled) {
@@ -167,12 +204,38 @@ export default function DictationInput({
           {currentInput || <span className="opacity-30 select-none">_</span>}
         </span>
       );
-    } else {
-      // Empty future slot
+    } else if (typedWords[i]) {
+      // Committed word (before cursor) or previously-typed word (after cursor) —
+      // clicking it navigates directly to that slot for editing.
+      const isBeforeCursor = i < currentWordIdx;
       slots.push(
         <span
           key={i}
-          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300"
+          onClick={() => navigateToSlot(i)}
+          title="Click to edit"
+          className={clsx(
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 cursor-pointer transition-colors",
+            isEnabled
+              ? isBeforeCursor
+                ? "border-slate-400 text-slate-700 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
+                : "border-amber-300 text-amber-700 bg-amber-50 hover:border-indigo-400 hover:bg-indigo-50"
+              : "border-slate-400 text-slate-700 bg-slate-50"
+          )}
+        >
+          {typedWords[i]}
+        </span>
+      );
+    } else {
+      // Empty future slot — clickable so the user can jump directly to any position
+      slots.push(
+        <span
+          key={i}
+          onClick={() => isEnabled && navigateToSlot(i)}
+          title={isEnabled ? "Click to type here" : undefined}
+          className={clsx(
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300 transition-colors",
+            isEnabled && "cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
+          )}
         >
           _
         </span>

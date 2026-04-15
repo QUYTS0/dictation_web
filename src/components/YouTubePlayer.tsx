@@ -27,6 +27,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
   function YouTubePlayer({ videoId, segments, onSegmentEnd }, ref) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const playerRef = useRef<any>(null);
+    const playerReadyRef = useRef<boolean>(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const activeSegmentIdxRef = useRef<number>(0);
@@ -86,6 +87,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       if (playerRef.current) {
         playerRef.current.destroy();
       }
+      playerReadyRef.current = false;
 
       playerRef.current = new window.YT.Player(containerRef.current, {
         videoId,
@@ -98,6 +100,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         events: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onReady: (event: any) => {
+            playerReadyRef.current = true;
             setStatus("ready");
             setDuration(event.target.getDuration());
             console.log("[YouTubePlayer] player ready, videoId=", videoId);
@@ -151,7 +154,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     const playSegmentFn = useCallback(
       (segIdx: number) => {
         const seg = segmentsRef.current[segIdx];
-        if (!seg || !playerRef.current) return;
+        if (!seg || !playerRef.current || !playerReadyRef.current) return;
         activeSegmentIdxRef.current = segIdx;
         isPausedRef.current = false;
         playerRef.current.seekTo(seg.start, true);

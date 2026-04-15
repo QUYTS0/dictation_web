@@ -102,10 +102,10 @@ export default function DictationPage({ params }: PageProps) {
   const [dictationKey, setDictationKey] = useState(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
-  // Tracks whether the player is replaying the current segment after a correct
-  // answer (before advancing to the next one).
-  const isReplayingAfterCorrect = useRef(false);
-  const nextSegAfterReplay = useRef(0);
+  // Tracks whether the user manually triggered a replay while already paused
+  // (R key / Replay button while input is visible). In this case we keep the
+  // input and its typed words intact when the segment ends.
+  const isManualReplayWhilePaused = useRef(false);
 
   // ---- Transcript query ----
   const transcriptQuery = useQuery({
@@ -148,32 +148,10 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Segment end handler (called by YouTubePlayer) ----
   const handleSegmentEnd = useCallback((segIdx: number) => {
-    if (isReplayingAfterCorrect.current) {
-      // The player just finished the post-correct replay — advance to next segment.
-      isReplayingAfterCorrect.current = false;
-      const nextIdx = nextSegAfterReplay.current;
-      setCheckResult(null);
-      setWrongAttempts(0);
-      setHintLevel(0);
-      setShowAI(false);
-
-      if (nextIdx < segments.length) {
-        setCurrentSegIdx(nextIdx);
-        ytPlayerRef.current?.playSegment(nextIdx);
-        // uxState stays "playing" until the next segment ends normally
-      } else {
-        setUxState("session_completed");
-        const state = useSessionStore.getState();
-        void saveProgress(
-          videoId,
-          nextIdx,
-          selectAccuracy(state),
-          state.totalAttempts,
-          state.sessionId ?? undefined,
-          transcriptId,
-          "completed"
-        );
-      }
+    // Manual replay triggered while input was already visible — keep everything
+    // intact so the user's typed words are preserved.
+    if (isManualReplayWhilePaused.current) {
+      isManualReplayWhilePaused.current = false;
       return;
     }
 
@@ -184,7 +162,7 @@ export default function DictationPage({ params }: PageProps) {
     setHintLevel(0);
     setShowAI(false);
     setUxState("paused_waiting_input");
-  }, [segments.length, videoId, transcriptId]);
+  }, []);
 
   // ---- Answer submission ----
   const handleAnswerSubmit = useCallback(
@@ -207,19 +185,16 @@ export default function DictationPage({ params }: PageProps) {
         if (result.isCorrect) {
           setWrongAttempts(0);
           setHintLevel(0);
-          setUxState("playing");
+          setCheckResult(null);
+          setShowAI(false);
 
-          // Replay the current sentence so the user hears it again before moving on.
-          // handleSegmentEnd will advance to the next segment when the replay finishes.
-          isReplayingAfterCorrect.current = true;
-          nextSegAfterReplay.current = currentSegIdx + 1;
-          ytPlayerRef.current?.playSegment(currentSegIdx);
+          const nextIdx = currentSegIdx + 1;
 
           // Save progress (fire-and-forget)
           const state = useSessionStore.getState();
           saveProgress(
             videoId,
-            currentSegIdx + 1,
+            nextIdx,
             selectAccuracy(state),
             state.totalAttempts,
             state.sessionId ?? undefined,
@@ -229,6 +204,23 @@ export default function DictationPage({ params }: PageProps) {
               if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
             })
             .catch(() => {});
+
+          if (nextIdx < segments.length) {
+            setCurrentSegIdx(nextIdx);
+            setUxState("playing");
+            ytPlayerRef.current?.playSegment(nextIdx);
+          } else {
+            setUxState("session_completed");
+            void saveProgress(
+              videoId,
+              nextIdx,
+              selectAccuracy(state),
+              state.totalAttempts,
+              state.sessionId ?? undefined,
+              transcriptId,
+              "completed"
+            );
+          }
         } else {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
@@ -251,10 +243,16 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Replay current segment ----
   const handleReplay = useCallback(() => {
+    // If the input is already visible, mark this as a "paused replay" so the
+    // segment-end handler won't reset the input or typed words.
+    const isAlreadyPaused = uxState === "paused_waiting_input";
+    isManualReplayWhilePaused.current = isAlreadyPaused;
+    if (!isAlreadyPaused) {
+      setUxState("playing");
+      setCheckResult(null); // Clear stale check result when replaying from playing state
+    }
     ytPlayerRef.current?.playSegment(currentSegIdx);
-    setUxState("playing");
-    setCheckResult(null);
-  }, [currentSegIdx]);
+  }, [currentSegIdx, uxState]);
 
   // ---- Skip current segment ----
   const handleSkip = useCallback(() => {
@@ -269,6 +267,20 @@ export default function DictationPage({ params }: PageProps) {
       setUxState("playing");
     }
   }, [currentSegIdx, segments.length]);
+
+  // ---- Go to previous segment ----
+  const handlePrevious = useCallback(() => {
+    const prevIdx = currentSegIdx - 1;
+    if (prevIdx >= 0) {
+      setCurrentSegIdx(prevIdx);
+      ytPlayerRef.current?.playSegment(prevIdx);
+      setCheckResult(null);
+      setWrongAttempts(0);
+      setHintLevel(0);
+      setShowAI(false);
+      setUxState("playing");
+    }
+  }, [currentSegIdx]);
 
   // ---- Force-regenerate transcript ----
   const handleRegenerate = useCallback(async () => {
@@ -303,10 +315,12 @@ export default function DictationPage({ params }: PageProps) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "r" || e.key === "R") handleReplay();
       if (e.key === "s" || e.key === "S") handleSkip();
+      if (e.key === "ArrowLeft") { e.preventDefault(); handlePrevious(); }
+      if (e.key === "ArrowRight") { e.preventDefault(); handleSkip(); }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [handleReplay, handleSkip]);
+  }, [handleReplay, handleSkip, handlePrevious]);
 
   // ---- Trigger transcript generation if not ready ----
   useEffect(() => {
@@ -392,6 +406,14 @@ export default function DictationPage({ params }: PageProps) {
           {(uxState === "paused_waiting_input" || uxState === "playing") && (
             <div className="flex gap-2">
               <button
+                onClick={handlePrevious}
+                disabled={currentSegIdx === 0}
+                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Previous sentence (←)"
+              >
+                ⏮ Prev (←)
+              </button>
+              <button
                 onClick={handleReplay}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 transition-colors"
                 title="Replay (R)"
@@ -400,10 +422,11 @@ export default function DictationPage({ params }: PageProps) {
               </button>
               <button
                 onClick={handleSkip}
-                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 transition-colors"
-                title="Skip (S)"
+                disabled={currentSegIdx >= segments.length - 1}
+                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Next sentence (S / →)"
               >
-                ⏭ Skip (S)
+                ⏭ Next (S/→)
               </button>
             </div>
           )}
