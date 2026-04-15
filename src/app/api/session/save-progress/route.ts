@@ -1,0 +1,80 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import type { SaveProgressRequest, SaveProgressResponse } from "@/lib/types";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: SaveProgressRequest = await request.json();
+    const {
+      sessionId,
+      youtubeVideoId,
+      transcriptId,
+      currentSegmentIndex,
+      accuracy,
+      totalAttempts,
+      status = "active",
+    } = body;
+
+    if (!youtubeVideoId) {
+      return NextResponse.json(
+        { error: "youtubeVideoId is required" },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createServiceClient();
+
+    if (sessionId) {
+      // Update existing session
+      const { error } = await supabase
+        .from("learning_sessions")
+        .update({
+          current_segment_index: currentSegmentIndex,
+          accuracy,
+          total_attempts: totalAttempts,
+          status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", sessionId);
+
+      if (error) {
+        console.error("[save-progress] update error:", error);
+        return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
+      }
+
+      console.log(`[save-progress] updated session ${sessionId} segment=${currentSegmentIndex}`);
+      return NextResponse.json<SaveProgressResponse>({
+        sessionId,
+        status,
+      });
+    } else {
+      // Create a new anonymous session
+      const { data, error } = await supabase
+        .from("learning_sessions")
+        .insert({
+          youtube_video_id: youtubeVideoId,
+          transcript_id: transcriptId ?? null,
+          current_segment_index: currentSegmentIndex,
+          accuracy,
+          total_attempts: totalAttempts,
+          status,
+        })
+        .select("id")
+        .single();
+
+      if (error || !data) {
+        console.error("[save-progress] insert error:", error);
+        return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
+      }
+
+      console.log(`[save-progress] created session ${data.id} for video ${youtubeVideoId}`);
+      return NextResponse.json<SaveProgressResponse>({
+        sessionId: data.id,
+        status,
+      });
+    }
+  } catch (err) {
+    console.error("[save-progress] unexpected error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
