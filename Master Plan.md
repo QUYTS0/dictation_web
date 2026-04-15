@@ -615,3 +615,8 @@ Mitigation:
 * bật monitoring sớm
 * ưu tiên small private beta trước
 
+## 14) Open Questions
+* Có nên hỗ trợ video không có transcript không? Nếu có, fallback là gì?
+* Nên dùng AI service nào cho transcript generation và explanation? Gemini có đủ tốt không?
+* Có cần thiết phải phân loại lỗi sai của user không? Nếu có, mức độ chi tiết đến đâu?
+* Có nên cho phép user tua video không? Nếu có, làm sao để sync segment? 
