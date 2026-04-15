@@ -21,7 +21,17 @@ import type {
   MatchMode,
   HintLevel,
   UXState,
+  DiffToken,
 } from "@/lib/types";
+
+// ---- Inline types ----
+
+interface MistakeRecord {
+  segIdx: number;
+  expectedText: string;
+  userText: string;
+  diff: DiffToken[];
+}
 
 // ---- Data fetching ----
 
@@ -100,12 +110,17 @@ export default function DictationPage({ params }: PageProps) {
   // Incremented on each wrong-answer retry to force-remount DictationInput
   // (gives it fresh state without needing setState inside a useEffect).
   const [dictationKey, setDictationKey] = useState(0);
+  // In-memory mistake tracking for the session-review panel at completion
+  const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
   // (R key / Replay button while input is visible). In this case we keep the
   // input and its typed words intact when the segment ends.
   const isManualReplayWhilePaused = useRef(false);
+  // Ref mirror of currentSegIdx — lets handleSegmentEnd guard against stale
+  // callbacks that fire after the user has already submitted early and advanced.
+  const currentSegIdxRef = useRef(0);
 
   // ---- Transcript query ----
   const transcriptQuery = useQuery({
@@ -148,6 +163,10 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Segment end handler (called by YouTubePlayer) ----
   const handleSegmentEnd = useCallback((segIdx: number) => {
+    // Guard: if the user already submitted early and advanced past this segment,
+    // ignore the stale callback from the player's time-polling tick.
+    if (segIdx < currentSegIdxRef.current) return;
+
     // Manual replay triggered while input was already visible — keep everything
     // intact so the user's typed words are preserved.
     if (isManualReplayWhilePaused.current) {
@@ -157,6 +176,7 @@ export default function DictationPage({ params }: PageProps) {
 
     // Normal flow: segment ended while practicing — show the dictation input.
     setCurrentSegIdx(segIdx);
+    currentSegIdxRef.current = segIdx;
     setCheckResult(null);
     setWrongAttempts(0);
     setHintLevel(0);
@@ -206,6 +226,7 @@ export default function DictationPage({ params }: PageProps) {
             .catch(() => {});
 
           if (nextIdx < segments.length) {
+            currentSegIdxRef.current = nextIdx;
             setCurrentSegIdx(nextIdx);
             setUxState("playing");
             ytPlayerRef.current?.playSegment(nextIdx);
@@ -225,6 +246,23 @@ export default function DictationPage({ params }: PageProps) {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
           if (newWrong >= 3) setShowAI(true);
+          // Record first mistake for this segment (deduplicated by segIdx)
+          const segText = segments[currentSegIdx].text;
+          setMistakes((prev) =>
+            prev.some((m) => m.segIdx === currentSegIdx)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    segIdx: currentSegIdx,
+                    expectedText: segText,
+                    userText: result.normalizedUser || userText,
+                    diff: result.diff ?? [],
+                  },
+                ]
+          );
+          // Pause video when the user submits incorrectly during playback
+          ytPlayerRef.current?.pauseVideo();
           setDictationKey((k) => k + 1); // remount DictationInput so state resets cleanly
           setUxState("paused_waiting_input");
         }
@@ -258,6 +296,7 @@ export default function DictationPage({ params }: PageProps) {
   const handleSkip = useCallback(() => {
     const nextIdx = currentSegIdx + 1;
     if (nextIdx < segments.length) {
+      currentSegIdxRef.current = nextIdx;
       setCurrentSegIdx(nextIdx);
       ytPlayerRef.current?.playSegment(nextIdx);
       setCheckResult(null);
@@ -272,6 +311,7 @@ export default function DictationPage({ params }: PageProps) {
   const handlePrevious = useCallback(() => {
     const prevIdx = currentSegIdx - 1;
     if (prevIdx >= 0) {
+      currentSegIdxRef.current = prevIdx;
       setCurrentSegIdx(prevIdx);
       ytPlayerRef.current?.playSegment(prevIdx);
       setCheckResult(null);
@@ -349,6 +389,13 @@ export default function DictationPage({ params }: PageProps) {
     [segments]
   );
   const wordCount = wordCounts[currentSegIdx] ?? 0;
+
+  // Derived flag: show dictation input during playback and while paused/checking
+  const shouldShowInput =
+    (uxState === "paused_waiting_input" ||
+      uxState === "checking_answer" ||
+      uxState === "playing") &&
+    !!currentSegment;
 
   // ---- Render ----
   return (
@@ -495,69 +542,108 @@ export default function DictationPage({ params }: PageProps) {
           )}
 
           {uxState === "session_completed" && (
-            <div className="rounded-xl border border-indigo-300 bg-indigo-50 p-6 flex flex-col gap-3 text-center">
-              <p className="text-3xl">🎉</p>
-              <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
-              <p className="text-slate-600 text-sm">
-                Final accuracy: <span className="font-bold">{accuracy}%</span> over{" "}
-                {sessionStore.totalAttempts} attempts.
-              </p>
+            <div className="rounded-xl border border-indigo-300 bg-indigo-50 p-6 flex flex-col gap-4">
+              <div className="text-center">
+                <p className="text-3xl">🎉</p>
+                <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
+                <p className="text-slate-600 text-sm mt-1">
+                  Final accuracy: <span className="font-bold">{accuracy}%</span> over{" "}
+                  {sessionStore.totalAttempts} attempts.
+                </p>
+              </div>
+
+              {/* Mistakes review */}
+              {mistakes.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-slate-700 font-semibold text-sm">
+                    Mistakes ({mistakes.length} sentence{mistakes.length !== 1 ? "s" : ""}):
+                  </p>
+                  <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
+                    {mistakes.map((m) => (
+                      <div
+                        key={m.segIdx}
+                        className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col gap-1"
+                      >
+                        <span className="text-xs text-slate-400 font-medium">
+                          Sentence {m.segIdx + 1}
+                        </span>
+                        <span className="text-sm text-slate-800">{m.expectedText}</span>
+                        <span className="text-xs text-red-500">
+                          You typed:{" "}
+                          {m.userText || <span className="italic text-slate-400">nothing</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-emerald-600 text-sm font-medium text-center">
+                  🏆 Perfect session — no mistakes!
+                </p>
+              )}
+
               <Link
                 href="/"
-                className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors"
+                className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center"
               >
                 Try another video
               </Link>
             </div>
           )}
 
-          {/* Dictation input area */}
-          {(uxState === "paused_waiting_input" || uxState === "checking_answer") && (
-            <div className="flex flex-col gap-4">
-              {/* Current segment display (blank until answered) */}
-              {currentSegment && (
-                <div className="rounded-xl bg-white border border-slate-200 p-3 text-sm text-slate-400">
-                  Sentence {currentSegIdx + 1} of {segments.length}
+          {/* Dictation input area — shown during playback (typing ahead) and when paused */}
+          {shouldShowInput && (
+              <div className="flex flex-col gap-4">
+                {/* Current segment display */}
+                <div className="rounded-xl bg-white border border-slate-200 p-3 text-sm text-slate-400 flex items-center justify-between">
+                  <span>Sentence {currentSegIdx + 1} of {segments.length}</span>
+                  {uxState === "playing" && (
+                    <span className="text-xs text-emerald-600 font-medium animate-pulse">
+                      ▶ Playing…
+                    </span>
+                  )}
                 </div>
-              )}
 
-              <DictationInput
-                key={`${currentSegIdx}-${dictationKey}`}
-                isEnabled={uxState === "paused_waiting_input"}
-                wordCount={wordCount}
-                onSubmit={handleAnswerSubmit}
-                diff={checkResult?.diff}
-                isCorrect={checkResult?.isCorrect ?? null}
-                wrongAttempts={wrongAttempts}
-              />
-
-              {/* Hint */}
-              {currentSegment && !checkResult?.isCorrect && (
-                <HintDisplay
-                  text={currentSegment.text}
-                  level={hintLevel}
-                  onLevelChange={(l) => setHintLevel(l)}
+                <DictationInput
+                  key={`${currentSegIdx}-${dictationKey}`}
+                  isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
+                  wordCount={wordCount}
+                  onSubmit={handleAnswerSubmit}
+                  diff={checkResult?.diff}
+                  isCorrect={checkResult?.isCorrect ?? null}
+                  wrongAttempts={wrongAttempts}
                 />
-              )}
 
-              {/* AI Tutor */}
-              {showAI && currentSegment && checkResult && !checkResult.isCorrect && (
-                <AIExplainer
-                  expectedText={currentSegment.text}
-                  userText={checkResult.normalizedUser}
-                />
-              )}
+                {/* Hint — only relevant when paused */}
+                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
+                  !checkResult?.isCorrect && (
+                    <HintDisplay
+                      text={currentSegment.text}
+                      level={hintLevel}
+                      onLevelChange={(l) => setHintLevel(l)}
+                    />
+                  )}
 
-              {!showAI && wrongAttempts > 0 && !checkResult?.isCorrect && (
-                <button
-                  onClick={() => setShowAI(true)}
-                  className="text-xs text-violet-600 underline self-end hover:text-violet-800"
-                >
-                  Ask AI to explain
-                </button>
-              )}
-            </div>
-          )}
+                {/* AI Tutor — only relevant when paused */}
+                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
+                  showAI && checkResult && !checkResult.isCorrect && (
+                    <AIExplainer
+                      expectedText={currentSegment.text}
+                      userText={checkResult.normalizedUser}
+                    />
+                  )}
+
+                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
+                  !showAI && wrongAttempts > 0 && !checkResult?.isCorrect && (
+                    <button
+                      onClick={() => setShowAI(true)}
+                      className="text-xs text-violet-600 underline self-end hover:text-violet-800"
+                    >
+                      Ask AI to explain
+                    </button>
+                  )}
+              </div>
+            )}
         </div>
       </main>
     </div>

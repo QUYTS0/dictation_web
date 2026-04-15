@@ -6,6 +6,7 @@ import type { TranscriptSegment } from "@/lib/types";
 
 export interface YouTubePlayerHandle {
   playSegment: (segIdx: number) => void;
+  pauseVideo: () => void;
 }
 
 interface YouTubePlayerProps {
@@ -150,7 +151,12 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [videoId]);
 
-    // Expose playSegment via useImperativeHandle
+    // Expose playSegment + pauseVideo via useImperativeHandle
+    const pauseVideoFn = useCallback(() => {
+      if (!playerRef.current || !playerReadyRef.current) return;
+      playerRef.current.pauseVideo();
+    }, []);
+
     const playSegmentFn = useCallback(
       (segIdx: number) => {
         const seg = segmentsRef.current[segIdx];
@@ -165,6 +171,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
     useImperativeHandle(ref, () => ({
       playSegment: playSegmentFn,
+      pauseVideo: pauseVideoFn,
     }));
 
     return (
