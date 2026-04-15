@@ -10,6 +10,7 @@ import DictationInput from "@/components/DictationInput";
 import HintDisplay from "@/components/HintDisplay";
 import AIExplainer from "@/components/AIExplainer";
 import ProgressBar from "@/components/ProgressBar";
+import UserButton from "@/components/UserButton";
 
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
@@ -420,7 +421,8 @@ export default function DictationPage({ params }: PageProps) {
             {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate"}
           </button>
         )}
-        <span className="text-xs text-slate-400 font-mono">{videoId}</span>
+        <span className="text-xs text-slate-400 font-mono hidden sm:block">{videoId}</span>
+        <UserButton />
       </header>
 
       <main className="flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-5xl mx-auto w-full">
