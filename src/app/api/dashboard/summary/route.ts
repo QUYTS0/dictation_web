@@ -60,6 +60,16 @@ export async function GET() {
       return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
     }
 
+    const { count: vocabularyCount, error: vocabularyCountError } = await supabase
+      .from("vocabulary_items")
+      .select("id", { head: true, count: "exact" })
+      .eq("user_id", user.id);
+
+    if (vocabularyCountError) {
+      console.error("[dashboard] vocabulary count error:", vocabularyCountError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+
     const activeSessions = (sessions ?? [])
       .filter((s) => s.status === "active")
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
@@ -73,7 +83,7 @@ export async function GET() {
       completedVideos,
       avgAccuracy,
       totalPracticeMinutes,
-      vocabularyCount: vocabulary?.length ?? 0,
+      vocabularyCount: vocabularyCount ?? 0,
       recentMistakes: mistakes ?? [],
       recentVocabulary: vocabulary ?? [],
       resumableSessions: activeSessions,
@@ -83,4 +93,3 @@ export async function GET() {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
-

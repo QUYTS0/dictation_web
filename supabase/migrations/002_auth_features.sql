@@ -10,10 +10,8 @@ set
   active_segment_index = current_segment_index,
   attempt_count = total_attempts
 where
-  active_segment_index = 0
-  and current_segment_index <> 0
-  or attempt_count = 0
-  and total_attempts <> 0;
+  (active_segment_index = 0 and current_segment_index <> 0)
+  or (attempt_count = 0 and total_attempts <> 0);
 
 alter table if exists attempt_logs
   add column if not exists normalized_expected_text text,
@@ -58,4 +56,3 @@ create policy "vocabulary_owner_delete"
   on vocabulary_items
   for delete
   using (auth.uid() = user_id);
-
