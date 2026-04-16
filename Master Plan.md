@@ -615,3 +615,20 @@ Mitigation:
 * bật monitoring sớm
 * ưu tiên small private beta trước
 
+## 14) Open Questions
+* Có nên hỗ trợ video không có transcript không? Nếu có, fallback là gì?
+* Nên dùng AI service nào cho transcript generation và explanation? Gemini có đủ tốt không?
+* Có cần thiết phải phân loại lỗi sai của user không? Nếu có, mức độ chi tiết đến đâu?
+* Có nên cho phép user tua video không? Nếu có, làm sao để sync segment? 
+
+
+
+
+
+## 3. Implement a recommendation system for videos and segments
+- Based on the user's performance and progress, recommend videos and segments that are most relevant to their current level of understanding.
+- Use machine learning algorithms to analyze user data and make personalized recommendations.
+- This can help users focus on areas where they need improvement and make their study sessions more efficient.
+- Consider implementing a "Recommended for You" section on the dashboard that dynamically updates based on the user's interactions and performance metrics.
+- This feature can be implemented using collaborative filtering or content-based filtering techniques, depending on the amount of user data available.
+- Ensure that the recommendation system is transparent and allows users to provide feedback on the recommendations to improve its accuracy over time.
