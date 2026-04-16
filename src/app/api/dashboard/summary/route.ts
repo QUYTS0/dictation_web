@@ -35,13 +35,17 @@ export async function GET() {
       ((sessions ?? []).reduce((sum, s) => sum + Number(s.video_current_time ?? 0), 0) || 0) /
         60
     );
+    const sessionIds = (sessions ?? []).map((s) => s.id);
 
-    const { data: mistakes, error: mistakesError } = await supabase
-      .from("attempt_logs")
-      .select("id, expected_text, user_text, error_type, created_at, segment_index, session_id")
-      .eq("is_correct", false)
-      .order("created_at", { ascending: false })
-      .limit(6);
+    const { data: mistakes, error: mistakesError } = sessionIds.length
+      ? await supabase
+          .from("attempt_logs")
+          .select("id, expected_text, user_text, error_type, created_at, segment_index, session_id")
+          .in("session_id", sessionIds)
+          .eq("is_correct", false)
+          .order("created_at", { ascending: false })
+          .limit(6)
+      : { data: [], error: null };
 
     if (mistakesError) {
       console.error("[dashboard] mistakes query error:", mistakesError);

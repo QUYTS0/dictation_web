@@ -116,6 +116,8 @@ interface ResumeState {
   videoCurrentTimeSec: number;
 }
 
+const RESUME_SEEK_DELAY_MS = 150;
+
 export default function DictationPage({ params }: PageProps) {
   const { videoId } = use(params);
   const { user } = useAuth();
@@ -467,7 +469,7 @@ export default function DictationPage({ params }: PageProps) {
     if (resumeState.videoCurrentTimeSec > 0) {
       window.setTimeout(() => {
         ytPlayerRef.current?.seekTo(resumeState.videoCurrentTimeSec, true);
-      }, 150);
+      }, RESUME_SEEK_DELAY_MS);
     }
   }, [resumeState, segments.length, sessionStore]);
 

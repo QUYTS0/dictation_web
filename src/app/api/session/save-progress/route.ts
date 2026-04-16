@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (!data) {
-        return NextResponse.json({ error: "Session not found" }, { status: 404 });
+        return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
       }
 
       console.log(`[save-progress] updated session ${sessionId} segment=${currentSegmentIndex}`);

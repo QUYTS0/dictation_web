@@ -5,6 +5,7 @@ alter table if exists learning_sessions
   add column if not exists video_current_time numeric not null default 0,
   add column if not exists attempt_count integer not null default 0;
 
+-- Backfill from legacy columns for pre-existing rows.
 update learning_sessions
 set
   active_segment_index = current_segment_index,
