@@ -116,6 +116,7 @@ interface ResumeState {
   videoCurrentTimeSec: number;
 }
 
+// Let the embedded player seek after the segment playback command settles.
 const RESUME_SEEK_DELAY_MS = 150;
 
 export default function DictationPage({ params }: PageProps) {

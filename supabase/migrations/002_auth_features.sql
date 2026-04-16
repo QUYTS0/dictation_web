@@ -20,6 +20,7 @@ alter table if exists attempt_logs
 
 create table if not exists vocabulary_items (
   id uuid primary key default gen_random_uuid(),
+  -- Reference public.users (which mirrors auth.users) for consistency with learning_sessions.user_id.
   user_id uuid not null references users(id) on delete cascade,
   video_id text not null,
   segment_index integer not null,

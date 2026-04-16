@@ -9,4 +9,3 @@ describe("normalizeVocabularyTerm", () => {
     expect(normalizeVocabularyTerm("It's fine")).toBe("it's fine");
   });
 });
-
