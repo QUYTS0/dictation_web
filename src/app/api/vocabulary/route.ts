@@ -64,25 +64,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    const { data, error } = await supabase
+    const dedupeFilter = {
+      user_id: user.id,
+      video_id: videoId,
+      segment_index: segmentIndex,
+      normalized_term: normalizedTerm,
+    };
+
+    const { data: existing, error: existingError } = await supabase
       .from("vocabulary_items")
-      .upsert(
-        {
-          user_id: user.id,
-          video_id: videoId,
-          segment_index: segmentIndex,
-          term: term.trim(),
-          normalized_term: normalizedTerm,
-          sentence_context: sentenceContext.trim(),
-          note: note?.trim() || null,
-        },
-        {
-          onConflict: "user_id,video_id,segment_index,normalized_term",
-          ignoreDuplicates: false,
-        }
-      )
-      .select("*")
-      .single();
+      .select("id")
+      .match(dedupeFilter)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error("[vocabulary] dedupe query error:", existingError);
+      return NextResponse.json({ error: "Failed to save vocabulary item" }, { status: 500 });
+    }
+
+    const payload = {
+      ...dedupeFilter,
+      term: term.trim(),
+      sentence_context: sentenceContext.trim(),
+      note: note?.trim() || null,
+    };
+
+    const { data, error } = existing
+      ? await supabase
+          .from("vocabulary_items")
+          .update(payload)
+          .eq("id", existing.id)
+          .select("*")
+          .single()
+      : await supabase.from("vocabulary_items").insert(payload).select("*").single();
 
     if (error || !data) {
       console.error("[vocabulary] save error:", error);

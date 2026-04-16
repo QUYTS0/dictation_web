@@ -467,9 +467,10 @@ export default function DictationPage({ params }: PageProps) {
     setResumeState(null);
     setUxState("playing");
     ytPlayerRef.current?.playSegment(segIdx);
-    if (resumeState.videoCurrentTimeSec > 0) {
+    const resumeTimeSec = resumeState.videoCurrentTimeSec;
+    if (resumeTimeSec > 0) {
       window.setTimeout(() => {
-        ytPlayerRef.current?.seekTo(resumeState.videoCurrentTimeSec, true);
+        ytPlayerRef.current?.seekTo(resumeTimeSec, true);
       }, RESUME_SEEK_DELAY_MS);
     }
   }, [resumeState, segments.length, sessionStore]);
