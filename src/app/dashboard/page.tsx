@@ -86,7 +86,7 @@ export default function DashboardPage() {
               ) : (
                 <ul className="space-y-2">
                   {data.resumableSessions.map((session, index) => (
-                    <li key={`${session.videoId}-${index}`}>
+                    <li key={`${session.videoId}-${session.updatedAt}-${index}`}>
                       <Link
                         href={`/dictation/${session.videoId}`}
                         className="text-sm text-indigo-600 hover:text-indigo-800 underline"

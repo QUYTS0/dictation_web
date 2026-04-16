@@ -89,14 +89,22 @@ export async function POST(request: NextRequest) {
       note: note?.trim() || null,
     };
 
-    const { data, error } = existing
-      ? await supabase
-          .from("vocabulary_items")
-          .update(payload)
-          .eq("id", existing.id)
-          .select("*")
-          .single()
-      : await supabase.from("vocabulary_items").insert(payload).select("*").single();
+    let data;
+    let error;
+    if (existing) {
+      const result = await supabase
+        .from("vocabulary_items")
+        .update(payload)
+        .eq("id", existing.id)
+        .select("*")
+        .single();
+      data = result.data;
+      error = result.error;
+    } else {
+      const result = await supabase.from("vocabulary_items").insert(payload).select("*").single();
+      data = result.data;
+      error = result.error;
+    }
 
     if (error || !data) {
       console.error("[vocabulary] save error:", error);
