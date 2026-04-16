@@ -52,6 +52,8 @@ export async function POST(request: NextRequest) {
           segment_index: segmentIndex,
           expected_text: expectedText,
           user_text: userText,
+          normalized_expected_text: result.normalizedExpected,
+          normalized_user_text: result.normalizedUser,
           is_correct: result.isCorrect,
           error_type: result.errorType === "none" ? null : result.errorType,
         });

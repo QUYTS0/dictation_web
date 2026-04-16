@@ -11,10 +11,12 @@ import HintDisplay from "@/components/HintDisplay";
 import AIExplainer from "@/components/AIExplainer";
 import ProgressBar from "@/components/ProgressBar";
 import UserButton from "@/components/UserButton";
+import VocabularySaveButton from "@/components/VocabularySaveButton";
 
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { normalizeText } from "@/lib/utils/text";
+import { useAuth } from "@/context/auth";
 import type {
   TranscriptResponse,
   TranscriptSegment,
@@ -23,6 +25,7 @@ import type {
   HintLevel,
   UXState,
   DiffToken,
+  ResumeSessionResponse,
 } from "@/lib/types";
 
 // ---- Inline types ----
@@ -61,6 +64,7 @@ async function checkAnswer(
 async function saveProgress(
   videoId: string,
   segmentIndex: number,
+  videoCurrentTimeSec: number,
   accuracy: number,
   totalAttempts: number,
   sessionId?: string,
@@ -75,6 +79,7 @@ async function saveProgress(
       youtubeVideoId: videoId,
       transcriptId,
       currentSegmentIndex: segmentIndex,
+      videoCurrentTimeSec,
       accuracy,
       totalAttempts,
       status,
@@ -84,14 +89,36 @@ async function saveProgress(
   return res.json();
 }
 
+async function fetchResumeSession(videoId: string): Promise<ResumeSessionResponse> {
+  const res = await fetch(`/api/session/resume?videoId=${encodeURIComponent(videoId)}`);
+  if (!res.ok) throw new Error("Failed to fetch resume session");
+  return res.json();
+}
+
+async function restartSession(videoId: string, sessionId?: string): Promise<void> {
+  const res = await fetch("/api/session/restart", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, sessionId }),
+  });
+  if (!res.ok) throw new Error("Failed to restart session");
+}
+
 // ---- Page component ----
 
 interface PageProps {
   params: Promise<{ videoId: string }>;
 }
 
+interface ResumeState {
+  sessionId: string;
+  currentSegmentIndex: number;
+  videoCurrentTimeSec: number;
+}
+
 export default function DictationPage({ params }: PageProps) {
   const { videoId } = use(params);
+  const { user } = useAuth();
 
   // Stores
   const playerStore = usePlayerStore();
@@ -113,6 +140,8 @@ export default function DictationPage({ params }: PageProps) {
   const [dictationKey, setDictationKey] = useState(0);
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
+  const [resumeState, setResumeState] = useState<ResumeState | null>(null);
+  const [resumeLoading, setResumeLoading] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -122,6 +151,12 @@ export default function DictationPage({ params }: PageProps) {
   // Ref mirror of currentSegIdx — lets handleSegmentEnd guard against stale
   // callbacks that fire after the user has already submitted early and advanced.
   const currentSegIdxRef = useRef(0);
+  const resumeLoadedRef = useRef(false);
+
+  useEffect(() => {
+    resumeLoadedRef.current = false;
+    setResumeState(null);
+  }, [videoId, user?.id]);
 
   // ---- Transcript query ----
   const transcriptQuery = useQuery({
@@ -185,6 +220,30 @@ export default function DictationPage({ params }: PageProps) {
     setUxState("paused_waiting_input");
   }, []);
 
+  const triggerAutoSave = useCallback(
+    (segmentIndex: number, status: "active" | "completed" | "abandoned" = "active") => {
+      if (!user) return;
+      const state = useSessionStore.getState();
+      void saveProgress(
+        videoId,
+        segmentIndex,
+        playerStore.currentTimeSec,
+        selectAccuracy(state),
+        state.totalAttempts,
+        state.sessionId ?? undefined,
+        transcriptId,
+        status
+      )
+        .then((r) => {
+          if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
+        })
+        .catch(() => {
+          if (state.sessionId) sessionStore.setSessionId(null);
+        });
+    },
+    [playerStore.currentTimeSec, sessionStore, transcriptId, user, videoId]
+  );
+
   // ---- Answer submission ----
   const handleAnswerSubmit = useCallback(
     async (userText: string) => {
@@ -210,21 +269,7 @@ export default function DictationPage({ params }: PageProps) {
           setShowAI(false);
 
           const nextIdx = currentSegIdx + 1;
-
-          // Save progress (fire-and-forget)
-          const state = useSessionStore.getState();
-          saveProgress(
-            videoId,
-            nextIdx,
-            selectAccuracy(state),
-            state.totalAttempts,
-            state.sessionId ?? undefined,
-            transcriptId
-          )
-            .then((r) => {
-              if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
-            })
-            .catch(() => {});
+          triggerAutoSave(nextIdx, "active");
 
           if (nextIdx < segments.length) {
             currentSegIdxRef.current = nextIdx;
@@ -233,15 +278,7 @@ export default function DictationPage({ params }: PageProps) {
             ytPlayerRef.current?.playSegment(nextIdx);
           } else {
             setUxState("session_completed");
-            void saveProgress(
-              videoId,
-              nextIdx,
-              selectAccuracy(state),
-              state.totalAttempts,
-              state.sessionId ?? undefined,
-              transcriptId,
-              "completed"
-            );
+            triggerAutoSave(nextIdx, "completed");
           }
         } else {
           const newWrong = wrongAttempts + 1;
@@ -271,14 +308,15 @@ export default function DictationPage({ params }: PageProps) {
         setUxState("paused_waiting_input");
       }
     },
-    [currentSegIdx, segments, sessionStore, videoId, transcriptId, wrongAttempts]
+    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts]
   );
 
   // ---- Start session (seek to segment 0 and play) ----
   const handleStart = useCallback(() => {
+    triggerAutoSave(0, "active");
     setUxState("playing");
     ytPlayerRef.current?.playSegment(0);
-  }, []);
+  }, [triggerAutoSave]);
 
   // ---- Replay current segment ----
   const handleReplay = useCallback(() => {
@@ -305,8 +343,9 @@ export default function DictationPage({ params }: PageProps) {
       setHintLevel(0);
       setShowAI(false);
       setUxState("playing");
+      triggerAutoSave(nextIdx, "active");
     }
-  }, [currentSegIdx, segments.length]);
+  }, [currentSegIdx, segments.length, triggerAutoSave]);
 
   // ---- Go to previous segment ----
   const handlePrevious = useCallback(() => {
@@ -320,8 +359,9 @@ export default function DictationPage({ params }: PageProps) {
       setHintLevel(0);
       setShowAI(false);
       setUxState("playing");
+      triggerAutoSave(prevIdx, "active");
     }
-  }, [currentSegIdx]);
+  }, [currentSegIdx, triggerAutoSave]);
 
   // ---- Force-regenerate transcript ----
   const handleRegenerate = useCallback(async () => {
@@ -378,6 +418,68 @@ export default function DictationPage({ params }: PageProps) {
         .catch(() => {});
     }
   }, [transcriptStatus, transcriptId, videoId]);
+
+  // ---- Load resumable session for authenticated users ----
+  useEffect(() => {
+    if (!user || transcriptStatus !== "ready" || resumeLoadedRef.current) return;
+    setResumeLoading(true);
+    fetchResumeSession(videoId)
+      .then((data) => {
+        if (data.session) {
+          setResumeState({
+            sessionId: data.session.sessionId,
+            currentSegmentIndex: data.session.currentSegmentIndex,
+            videoCurrentTimeSec: data.session.videoCurrentTimeSec,
+          });
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        resumeLoadedRef.current = true;
+        setResumeLoading(false);
+      });
+  }, [transcriptStatus, user, videoId]);
+
+  // ---- Autosave when tab is hidden / page is being closed ----
+  useEffect(() => {
+    if (!user) return;
+    const persist = () => triggerAutoSave(currentSegIdxRef.current, "active");
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") persist();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", persist);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", persist);
+    };
+  }, [triggerAutoSave, user]);
+
+  const handleResume = useCallback(() => {
+    if (!resumeState || segments.length === 0) return;
+    const segIdx = Math.min(Math.max(resumeState.currentSegmentIndex, 0), segments.length - 1);
+    sessionStore.setSessionId(resumeState.sessionId);
+    currentSegIdxRef.current = segIdx;
+    setCurrentSegIdx(segIdx);
+    setResumeState(null);
+    setUxState("playing");
+    ytPlayerRef.current?.playSegment(segIdx);
+    if (resumeState.videoCurrentTimeSec > 0) {
+      window.setTimeout(() => {
+        ytPlayerRef.current?.seekTo(resumeState.videoCurrentTimeSec, true);
+      }, 150);
+    }
+  }, [resumeState, segments.length, sessionStore]);
+
+  const handleRestart = useCallback(() => {
+    if (!user) return;
+    void restartSession(videoId, resumeState?.sessionId)
+      .then(() => {
+        setResumeState(null);
+        sessionStore.setSessionId(null);
+      })
+      .catch(() => {});
+  }, [resumeState?.sessionId, sessionStore, user, videoId]);
 
   const currentSegment = segments[currentSegIdx];
 
@@ -524,12 +626,29 @@ export default function DictationPage({ params }: PageProps) {
                 Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.
               </p>
               <div className="flex items-center gap-3 mt-1">
-                <button
-                  onClick={handleStart}
-                  className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
-                >
-                  ▶ Start Dictation
-                </button>
+                {resumeState ? (
+                  <>
+                    <button
+                      onClick={handleResume}
+                      className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
+                    >
+                      ▶ Resume at sentence {resumeState.currentSegmentIndex + 1}
+                    </button>
+                    <button
+                      onClick={handleRestart}
+                      className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors"
+                    >
+                      Restart
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleStart}
+                    className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
+                  >
+                    ▶ Start Dictation
+                  </button>
+                )}
                 <button
                   onClick={handleRegenerate}
                   disabled={isRegenerating}
@@ -540,6 +659,9 @@ export default function DictationPage({ params }: PageProps) {
                   {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate transcript"}
                 </button>
               </div>
+              {resumeLoading && (
+                <p className="text-xs text-slate-500">Checking for saved progress…</p>
+              )}
             </div>
           )}
 
@@ -574,6 +696,11 @@ export default function DictationPage({ params }: PageProps) {
                           You typed:{" "}
                           {m.userText || <span className="italic text-slate-400">nothing</span>}
                         </span>
+                        <VocabularySaveButton
+                          videoId={videoId}
+                          segmentIndex={m.segIdx}
+                          sentenceContext={m.expectedText}
+                        />
                       </div>
                     ))}
                   </div>

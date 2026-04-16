@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import type { SaveProgressRequest, SaveProgressResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+
     const body: SaveProgressRequest = await request.json();
     const {
       sessionId,
       youtubeVideoId,
       transcriptId,
       currentSegmentIndex,
+      videoCurrentTimeSec = 0,
       accuracy,
       totalAttempts,
       status = "active",
@@ -22,24 +32,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createServiceClient();
-
     if (sessionId) {
       // Update existing session
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("learning_sessions")
         .update({
           current_segment_index: currentSegmentIndex,
+          active_segment_index: currentSegmentIndex,
+          video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
+          attempt_count: totalAttempts,
           status,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", sessionId);
+        .eq("id", sessionId)
+        .eq("user_id", user.id)
+        .select("id")
+        .single();
 
       if (error) {
         console.error("[save-progress] update error:", error);
         return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
+      }
+
+      if (!data) {
+        return NextResponse.json({ error: "Session not found" }, { status: 404 });
       }
 
       console.log(`[save-progress] updated session ${sessionId} segment=${currentSegmentIndex}`);
@@ -52,11 +70,15 @@ export async function POST(request: NextRequest) {
       const { data, error } = await supabase
         .from("learning_sessions")
         .insert({
+          user_id: user.id,
           youtube_video_id: youtubeVideoId,
           transcript_id: transcriptId ?? null,
           current_segment_index: currentSegmentIndex,
+          active_segment_index: currentSegmentIndex,
+          video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
+          attempt_count: totalAttempts,
           status,
         })
         .select("id")

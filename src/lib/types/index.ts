@@ -169,6 +169,7 @@ export interface SaveProgressRequest {
   youtubeVideoId: string;
   transcriptId?: string;
   currentSegmentIndex: number;
+  videoCurrentTimeSec?: number;
   accuracy: number;
   totalAttempts: number;
   status?: "active" | "completed" | "abandoned";
@@ -177,4 +178,35 @@ export interface SaveProgressRequest {
 export interface SaveProgressResponse {
   sessionId: string;
   status: string;
+}
+
+export interface ResumeSessionResponse {
+  session: {
+    sessionId: string;
+    currentSegmentIndex: number;
+    videoCurrentTimeSec: number;
+    accuracy: number;
+    totalAttempts: number;
+    updatedAt: string;
+  } | null;
+}
+
+export interface VocabularyItem {
+  id: string;
+  user_id: string;
+  video_id: string;
+  segment_index: number;
+  term: string;
+  normalized_term: string;
+  sentence_context: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface VocabularyRequest {
+  videoId: string;
+  segmentIndex: number;
+  term: string;
+  sentenceContext: string;
+  note?: string;
 }
