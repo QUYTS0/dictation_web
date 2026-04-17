@@ -79,6 +79,7 @@ export async function GET() {
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
       .slice(0, 4)
       .map((s) => ({
+        sessionId: s.id,
         videoId: s.youtube_video_id,
         updatedAt: s.updated_at,
       }));

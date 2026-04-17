@@ -50,7 +50,10 @@ export default function UserButton() {
         )}
         {/* Dropdown */}
         <div className="absolute right-0 top-full mt-1 hidden group-hover:block bg-white border border-slate-200 rounded-xl shadow-lg py-1 min-w-[180px] z-50">
-          <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 truncate">
+          <div
+            className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 truncate"
+            aria-label="User account email"
+          >
             {user.email}
           </div>
           <button

@@ -25,7 +25,7 @@ interface DashboardData {
     sentence_context: string;
     created_at: string;
   }>;
-  resumableSessions: Array<{ videoId: string; updatedAt: string }>;
+  resumableSessions: Array<{ sessionId: string; videoId: string; updatedAt: string }>;
 }
 
 export default function HomePage() {
@@ -87,15 +87,15 @@ export default function HomePage() {
     setDashboardError(null);
     fetch("/api/dashboard/summary")
       .then(async (res) => {
-        if (!res.ok) throw new Error();
+        if (!res.ok) throw new Error("Failed to fetch dashboard summary");
         return res.json();
       })
       .then((data: DashboardData) => setDashboardData(data))
-      .catch(() => setDashboardError("Failed to load your workspace data."))
+      .catch(() => {
+        setDashboardError("Failed to load workspace data. Please refresh and try again.");
+      })
       .finally(() => setDashboardLoading(false));
   }, [user]);
-
-  const isAuthLoading = authLoading;
 
   return (
     <>
@@ -116,7 +116,7 @@ export default function HomePage() {
         </div>
       </nav>
 
-      {isAuthLoading ? (
+      {authLoading ? (
         <main className="max-w-5xl mx-auto w-full p-4 md:p-6">
           <p className="text-sm text-slate-500">Loading…</p>
         </main>
@@ -178,12 +178,12 @@ export default function HomePage() {
               <section className="rounded-xl border border-slate-200 bg-white p-4">
                 <h2 className="font-semibold text-slate-800 mb-2">Quick resume</h2>
                 {dashboardData.resumableSessions.length === 0 ? (
-                  <p className="text-sm text-slate-500">No recent sessions yet.</p>
+                  <p className="text-sm text-slate-500">No sessions to resume yet.</p>
                 ) : (
                   <ul className="space-y-2">
                     {dashboardData.resumableSessions.map((session) => (
                       <li
-                        key={`${session.videoId}-${session.updatedAt}`}
+                        key={session.sessionId}
                         className="flex items-center justify-between gap-2 text-sm"
                       >
                         <Link
