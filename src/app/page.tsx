@@ -12,20 +12,22 @@ interface DashboardData {
   avgAccuracy: number;
   totalPracticeMinutes: number;
   vocabularyCount: number;
-  recentMistakes: Array<{
-    id: string;
-    expected_text: string;
-    user_text: string;
-    error_type: string | null;
-    created_at: string;
-  }>;
   recentVocabulary: Array<{
     id: string;
     term: string;
     sentence_context: string;
     created_at: string;
   }>;
-  resumableSessions: Array<{ sessionId: string; videoId: string; updatedAt: string }>;
+  resumableSessions: Array<{
+    sessionId: string;
+    videoId: string;
+    videoTitle: string | null;
+    updatedAt: string;
+    accuracy: number;
+    currentSegmentIndex: number;
+    totalAttempts: number;
+    mistakesCount: number;
+  }>;
 }
 
 export default function HomePage() {
@@ -176,41 +178,47 @@ export default function HomePage() {
               </section>
 
               <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h2 className="font-semibold text-slate-800 mb-2">Quick resume</h2>
+                <h2 className="font-semibold text-slate-800 mb-2">Continue learning</h2>
                 {dashboardData.resumableSessions.length === 0 ? (
-                  <p className="text-sm text-slate-500">No sessions to resume yet.</p>
+                  <p className="text-sm text-slate-500">No recent lessons to continue yet.</p>
                 ) : (
-                  <ul className="space-y-2">
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {dashboardData.resumableSessions.map((session) => (
-                      <li
-                        key={session.sessionId}
-                        className="flex items-center justify-between gap-2 text-sm"
-                      >
-                        <Link
-                          href={`/dictation/${session.videoId}`}
-                          className="text-indigo-600 hover:text-indigo-800 underline"
-                        >
-                          Resume {session.videoId}
-                        </Link>
-                        <span className="text-xs text-slate-500 whitespace-nowrap">
-                          {new Date(session.updatedAt).toLocaleString()}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h2 className="font-semibold text-slate-800 mb-2">Recent mistakes</h2>
-                {dashboardData.recentMistakes.length === 0 ? (
-                  <p className="text-sm text-slate-500">No mistakes logged yet.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {dashboardData.recentMistakes.map((mistake) => (
-                      <li key={mistake.id} className="text-sm">
-                        <p className="text-slate-800">{mistake.expected_text}</p>
-                        <p className="text-red-500 text-xs">You typed: {mistake.user_text || "—"}</p>
+                      <li key={session.sessionId} className="rounded-xl border border-slate-200 overflow-hidden">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`https://img.youtube.com/vi/${session.videoId}/hqdefault.jpg`}
+                          alt={session.videoTitle ?? `Thumbnail for lesson video ${session.videoId}`}
+                          className="w-full aspect-video object-cover bg-slate-100"
+                          loading="lazy"
+                        />
+                        <div className="p-3 flex flex-col gap-2">
+                          <p className="font-semibold text-slate-900 line-clamp-2">
+                            {session.videoTitle ?? `Video ${session.videoId}`}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Last practiced {new Date(session.updatedAt).toLocaleString()}
+                          </p>
+                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                            <p>Accuracy: {session.accuracy}%</p>
+                            <p>Segment: {session.currentSegmentIndex + 1}</p>
+                            <p>Attempts: {session.totalAttempts}</p>
+                            <p>Mistakes: {session.mistakesCount}</p>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 pt-1">
+                            <p className="text-xs text-slate-500">
+                              {session.mistakesCount > 0
+                                ? "Review mistakes in this lesson."
+                                : "Continue this lesson from where you left off."}
+                            </p>
+                            <Link
+                              href={`/dictation/${session.videoId}`}
+                              className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
+                            >
+                              Resume
+                            </Link>
+                          </div>
+                        </div>
                       </li>
                     ))}
                   </ul>

@@ -14,7 +14,9 @@ export async function GET() {
 
     const { data: sessions, error: sessionsError } = await supabase
       .from("learning_sessions")
-      .select("id, youtube_video_id, status, accuracy, video_current_time, updated_at")
+      .select(
+        "id, youtube_video_id, status, accuracy, video_current_time, updated_at, current_segment_index, total_attempts"
+      )
       .eq("user_id", user.id);
 
     if (sessionsError) {
@@ -35,23 +37,6 @@ export async function GET() {
       ((sessions ?? []).reduce((sum, s) => sum + Number(s.video_current_time ?? 0), 0) || 0) /
         60
     );
-    const sessionIds = (sessions ?? []).map((s) => s.id);
-
-    const { data: mistakes, error: mistakesError } = sessionIds.length
-      ? await supabase
-          .from("attempt_logs")
-          .select("id, expected_text, user_text, error_type, created_at, segment_index, session_id")
-          .in("session_id", sessionIds)
-          .eq("is_correct", false)
-          .order("created_at", { ascending: false })
-          .limit(6)
-      : { data: [], error: null };
-
-    if (mistakesError) {
-      console.error("[dashboard] mistakes query error:", mistakesError);
-      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
-    }
-
     const { data: vocabulary, error: vocabularyError } = await supabase
       .from("vocabulary_items")
       .select("id, term, sentence_context, created_at")
@@ -76,22 +61,65 @@ export async function GET() {
 
     const activeSessions = (sessions ?? [])
       .filter((s) => s.status === "active")
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-      .slice(0, 4)
-      .map((s) => ({
-        sessionId: s.id,
-        videoId: s.youtube_video_id,
-        updatedAt: s.updated_at,
-      }));
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+    const recentSessions = activeSessions.slice(0, 4);
+    const recentVideoIds = [...new Set(recentSessions.map((s) => s.youtube_video_id))];
+    const recentSessionIds = recentSessions.map((s) => s.id);
+
+    const { data: recentVideos, error: recentVideosError } = recentVideoIds.length
+      ? await supabase
+          .from("videos")
+          .select("youtube_video_id, title")
+          .in("youtube_video_id", recentVideoIds)
+      : { data: [], error: null };
+
+    if (recentVideosError) {
+      console.error("[dashboard] recent videos query error:", recentVideosError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+
+    const { data: recentMistakeAttempts, error: recentMistakeAttemptsError } = recentSessionIds.length
+      ? await supabase
+          .from("attempt_logs")
+          .select("session_id")
+          .in("session_id", recentSessionIds)
+          .eq("is_correct", false)
+      : { data: [], error: null };
+
+    if (recentMistakeAttemptsError) {
+      console.error("[dashboard] recent mistakes count query error:", recentMistakeAttemptsError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+
+    const titleByVideoId = new Map(
+      (recentVideos ?? []).map((video) => [video.youtube_video_id, video.title])
+    );
+    const mistakeCountBySessionId = (recentMistakeAttempts ?? []).reduce<Record<string, number>>(
+      (acc, attempt) => {
+        acc[attempt.session_id] = (acc[attempt.session_id] ?? 0) + 1;
+        return acc;
+      },
+      {}
+    );
+
+    const resumableSessions = recentSessions.map((session) => ({
+      sessionId: session.id,
+      videoId: session.youtube_video_id,
+      videoTitle: titleByVideoId.get(session.youtube_video_id) ?? null,
+      updatedAt: session.updated_at,
+      accuracy: Number(session.accuracy ?? 0),
+      currentSegmentIndex: Number(session.current_segment_index ?? 0),
+      totalAttempts: Number(session.total_attempts ?? 0),
+      mistakesCount: mistakeCountBySessionId[session.id] ?? 0,
+    }));
 
     return NextResponse.json({
       completedVideos,
       avgAccuracy,
       totalPracticeMinutes,
       vocabularyCount: vocabularyCount ?? 0,
-      recentMistakes: mistakes ?? [],
       recentVocabulary: vocabulary ?? [],
-      resumableSessions: activeSessions,
+      resumableSessions,
     });
   } catch (err) {
     console.error("[dashboard] unexpected error:", err);
