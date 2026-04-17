@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { clsx } from "clsx";
 import type { DiffToken } from "@/lib/types";
 
@@ -13,6 +13,8 @@ interface DictationInputProps {
   isCorrect?: boolean | null;
   /** Number of wrong attempts for this segment */
   wrongAttempts?: number;
+  /** Increment to request focus from keyboard shortcuts (e.g. "/") */
+  focusSignal?: number;
 }
 
 /**
@@ -21,18 +23,29 @@ interface DictationInputProps {
  * word string (if correct at that expected position) or null (missing/wrong).
  * "extra" tokens (user-only) are skipped — they have no expected slot.
  */
-function buildCorrectSlots(diff: DiffToken[]): (string | null)[] {
-  const result: (string | null)[] = [];
+type ExpectedSlot = {
+  value: string;
+  isLocked: boolean;
+};
+
+function buildExpectedSlots(diff: DiffToken[]): ExpectedSlot[] {
+  const result: ExpectedSlot[] = [];
   for (const token of diff) {
     if (token.status === "correct") {
-      result.push(token.word);
+      result.push({ value: token.word, isLocked: true });
     } else if (token.status === "missing" || token.status === "wrong") {
-      result.push(null); // expected slot that wasn't correctly matched
+      result.push({
+        value: token.status === "wrong" ? token.word : "",
+        isLocked: false,
+      });
     }
     // skip "extra" tokens — they are user-only tokens with no expected slot
   }
   return result;
 }
+
+const INITIAL_FOCUS_DELAY_MS = 50;
+const FOCUS_DELAY_MS = 10;
 
 export default function DictationInput({
   isEnabled,
@@ -41,18 +54,83 @@ export default function DictationInput({
   diff,
   isCorrect,
   wrongAttempts = 0,
+  focusSignal = 0,
 }: DictationInputProps) {
   const [typedWords, setTypedWords] = useState<string[]>([]);
   const [currentInput, setCurrentInput] = useState("");
   const [currentWordIdx, setCurrentWordIdx] = useState(0);
+  const [lockedSlots, setLockedSlots] = useState<boolean[]>([]);
+  const [editableIndices, setEditableIndices] = useState<number[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isCorrectionMode = isCorrect === false && editableIndices.length > 0;
+  const editableIndexPositionMap = useMemo(() => {
+    const indexMap = new Map<number, number>();
+    editableIndices.forEach((slotIdx, pos) => {
+      indexMap.set(slotIdx, pos);
+    });
+    return indexMap;
+  }, [editableIndices]);
+
+  const focusInput = useCallback(
+    (delay = FOCUS_DELAY_MS) => window.setTimeout(() => inputRef.current?.focus(), delay),
+    []
+  );
+
+  const getRelativeEditableIndex = (idx: number, step: -1 | 1) => {
+    const pos = editableIndexPositionMap.get(idx);
+    if (pos === undefined) return null;
+    return editableIndices[pos + step] ?? null;
+  };
+
+  const getNextEditableIndex = (idx: number) => getRelativeEditableIndex(idx, 1);
+
+  const getPreviousEditableIndex = (idx: number) => {
+    return getRelativeEditableIndex(idx, -1);
+  };
 
   // Reset state and focus the input on mount (component is remounted for each
   // new segment and after each wrong-answer retry via the `key` prop in page.tsx).
   useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 50);
-    return () => clearTimeout(t);
-  }, []);
+    const t = focusInput(INITIAL_FOCUS_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [focusInput]);
+
+  useEffect(() => {
+    if (!isEnabled) return;
+    const t = focusInput();
+    return () => window.clearTimeout(t);
+  }, [focusInput, focusSignal, isEnabled]);
+
+  useEffect(() => {
+    if (diff && isCorrect === false) {
+      const expectedSlots = buildExpectedSlots(diff);
+      const reconstructed: string[] = [];
+      const locked: boolean[] = [];
+      const editable: number[] = [];
+      for (let i = 0; i < wordCount; i++) {
+        const slot = expectedSlots[i];
+        const isLocked = slot?.isLocked ?? false;
+        reconstructed.push(slot?.value ?? "");
+        locked.push(isLocked);
+        if (!isLocked) editable.push(i);
+      }
+
+      setTypedWords(reconstructed);
+      setLockedSlots(locked);
+      setEditableIndices(editable);
+
+      if (editable.length > 0) {
+        const firstWrongIdx = editable[0];
+        setCurrentWordIdx(firstWrongIdx);
+        setCurrentInput(reconstructed[firstWrongIdx] ?? "");
+        const t = focusInput();
+        return () => window.clearTimeout(t);
+      }
+    } else {
+      setLockedSlots(Array.from({ length: wordCount }, () => false));
+      setEditableIndices(Array.from({ length: wordCount }, (_, i) => i));
+    }
+  }, [diff, focusInput, isCorrect, wordCount]);
 
   /**
    * Commits `input` as the word at slot `idx`, advances the pointer,
@@ -61,21 +139,35 @@ export default function DictationInput({
   const commitWord = (input: string, typed: string[], idx: number) => {
     const word = input.trim();
     if (!word) return;
+    if (lockedSlots[idx]) return;
     const newTyped = [...typed];
     newTyped[idx] = word;
-    const newIdx = idx + 1;
 
-    if (newIdx >= wordCount) {
-      // All slots filled — auto-submit immediately
+    if (isCorrectionMode) {
+      const nextEditableIdx = getNextEditableIndex(idx);
       setTypedWords(newTyped);
-      setCurrentInput("");
-      setCurrentWordIdx(newIdx);
-      onSubmit(newTyped.join(" "));
+      if (nextEditableIdx === null) {
+        setCurrentInput("");
+        setCurrentWordIdx(wordCount);
+        onSubmit(newTyped.join(" "));
+      } else {
+        setCurrentInput(newTyped[nextEditableIdx] ?? "");
+        setCurrentWordIdx(nextEditableIdx);
+      }
     } else {
-      setTypedWords(newTyped);
-      // Pre-populate the next slot if the user had previously typed something there
-      setCurrentInput(newTyped[newIdx] ?? "");
-      setCurrentWordIdx(newIdx);
+      const newIdx = idx + 1;
+      if (newIdx >= wordCount) {
+        // All slots filled — auto-submit immediately
+        setTypedWords(newTyped);
+        setCurrentInput("");
+        setCurrentWordIdx(newIdx);
+        onSubmit(newTyped.join(" "));
+      } else {
+        setTypedWords(newTyped);
+        // Pre-populate the next slot if the user had previously typed something there
+        setCurrentInput(newTyped[newIdx] ?? "");
+        setCurrentWordIdx(newIdx);
+      }
     }
   };
 
@@ -85,34 +177,10 @@ export default function DictationInput({
    */
   const navigateToSlot = (i: number) => {
     if (!isEnabled) return;
+    if (lockedSlots[i]) return;
     setCurrentInput(typedWords[i] ?? "");
     setCurrentWordIdx(i);
-    setTimeout(() => inputRef.current?.focus(), 10);
-  };
-
-  /**
-   * When showing the post-incorrect result (correctSlots mode), clicking a slot
-   * reconstructs the typedWords array from the diff and jumps into edit mode at
-   * that slot — correct words are pre-filled, wrong/missing ones are blank.
-   */
-  const handleCorrectSlotClick = (i: number) => {
-    if (!isEnabled) return;
-    const reconstructed: string[] = [];
-    let expectedIdx = 0;
-    for (const token of diff!) {
-      if (token.status === "correct") {
-        reconstructed[expectedIdx] = token.word;
-        expectedIdx++;
-      } else if (token.status === "missing" || token.status === "wrong") {
-        reconstructed[expectedIdx] = ""; // leave blank so user can re-type
-        expectedIdx++;
-      }
-      // skip "extra" tokens — they have no expected slot
-    }
-    setTypedWords(reconstructed);
-    setCurrentInput(reconstructed[i] ?? "");
-    setCurrentWordIdx(i);
-    setTimeout(() => inputRef.current?.focus(), 10);
+    focusInput();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -136,12 +204,18 @@ export default function DictationInput({
     // Also clears the current slot so the deleted word does not reappear.
     } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
       const newTyped = [...typedWords];
-      newTyped[currentWordIdx] = "";
-      setTypedWords(newTyped);
-      const prevIdx = currentWordIdx - 1;
-      setCurrentInput(newTyped[prevIdx] ?? "");
-      setCurrentWordIdx(prevIdx);
-      setTimeout(() => inputRef.current?.focus(), 10);
+      if (!lockedSlots[currentWordIdx]) newTyped[currentWordIdx] = "";
+      const prevIdx: number | null = isCorrectionMode
+        ? getPreviousEditableIndex(currentWordIdx)
+        : currentWordIdx > 0
+        ? currentWordIdx - 1
+        : null;
+      if (prevIdx !== null && prevIdx >= 0) {
+        setTypedWords(newTyped);
+        setCurrentInput(newTyped[prevIdx] ?? "");
+        setCurrentWordIdx(prevIdx);
+        focusInput();
+      }
     }
   };
 
@@ -156,42 +230,21 @@ export default function DictationInput({
     }
   };
 
-  // After an incorrect result: show which positions were correct (green) and
-  // which were wrong (blank). Disappears once the user starts typing again.
-  const showCorrectSlots =
-    diff &&
-    diff.length > 0 &&
-    isCorrect === false &&
-    currentWordIdx === 0 &&
-    typedWords.length === 0 &&
-    currentInput === "";
-
-  const correctSlots = showCorrectSlots ? buildCorrectSlots(diff!) : null;
-
   // ---- Build word-slot nodes ----
   const slots: React.ReactNode[] = [];
+  const currentEditablePosition =
+    editableIndexPositionMap.get(currentWordIdx) ?? -1;
   for (let i = 0; i < wordCount; i++) {
-    if (correctSlots) {
-      // Post-incorrect result: show correctly matched words (green) and blanks for
-      // wrong/missing. All slots are clickable to jump into edit mode at that word.
-      const w = correctSlots[i];
+    if (lockedSlots[i]) {
       slots.push(
         <span
           key={i}
-          onClick={() => handleCorrectSlotClick(i)}
-          title="Click to edit"
           className={clsx(
-            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 transition-colors",
-            isEnabled
-              ? w
-                ? "border-emerald-400 text-emerald-700 bg-emerald-50 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
-                : "border-slate-200 text-slate-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
-              : w
-                ? "border-emerald-400 text-emerald-700 bg-emerald-50"
-                : "border-slate-200 text-slate-300"
+            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2",
+            "border-emerald-400 text-emerald-700 bg-emerald-50"
           )}
         >
-          {w ?? "_"}
+          {typedWords[i]}
         </span>
       );
     } else if (i === currentWordIdx && isEnabled) {
@@ -216,7 +269,9 @@ export default function DictationInput({
           className={clsx(
             "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 cursor-pointer transition-colors",
             isEnabled
-              ? isBeforeCursor
+              ? isCorrectionMode
+                ? "border-amber-300 text-amber-700 bg-amber-50 hover:border-indigo-400 hover:bg-indigo-50"
+                : isBeforeCursor
                 ? "border-slate-400 text-slate-700 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
                 : "border-amber-300 text-amber-700 bg-amber-50 hover:border-indigo-400 hover:bg-indigo-50"
               : "border-slate-400 text-slate-700 bg-slate-50"
@@ -248,7 +303,9 @@ export default function DictationInput({
       {/* Header row */}
       <div className="flex items-center justify-between">
         <span className="text-slate-500 text-xs">
-          {isEnabled && currentWordIdx < wordCount
+          {isCorrectionMode && isEnabled && currentWordIdx < wordCount
+            ? `Correct word ${currentEditablePosition + 1} of ${editableIndices.length} — press Space`
+            : isEnabled && currentWordIdx < wordCount
             ? `Word ${currentWordIdx + 1} of ${wordCount} — type then press Space`
             : `Fill in ${wordCount} word${wordCount !== 1 ? "s" : ""}`}
         </span>
@@ -268,7 +325,11 @@ export default function DictationInput({
           value={currentInput}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder={`Type word ${currentWordIdx + 1}…`}
+          placeholder={
+            isCorrectionMode
+              ? `Correct word ${currentEditablePosition + 1}…`
+              : `Type word ${currentWordIdx + 1}…`
+          }
           className="w-full rounded-xl border border-indigo-300 px-4 py-2 text-base font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
           autoComplete="off"
           autoCorrect="off"

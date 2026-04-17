@@ -145,10 +145,11 @@ export default function DictationPage({ params }: PageProps) {
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
+  const [inputFocusSignal, setInputFocusSignal] = useState(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
-  // (R key / Replay button while input is visible). In this case we keep the
+  // (keyboard shortcut / Replay button while input is visible). In this case we keep the
   // input and its typed words intact when the segment ends.
   const isManualReplayWhilePaused = useRef(false);
   // Ref mirror of currentSegIdx — lets handleSegmentEnd guard against stale
@@ -396,11 +397,34 @@ export default function DictationPage({ params }: PageProps) {
   // ---- Keyboard shortcuts ----
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "r" || e.key === "R") handleReplay();
-      if (e.key === "s" || e.key === "S") handleSkip();
-      if (e.key === "ArrowLeft") { e.preventDefault(); handlePrevious(); }
-      if (e.key === "ArrowRight") { e.preventDefault(); handleSkip(); }
+      const target = e.target;
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+
+      if (!isTypingTarget && e.key === "/") {
+        e.preventDefault();
+        setInputFocusSignal((v) => v + 1);
+        return;
+      }
+
+      if (isTypingTarget) return;
+
+      if (e.shiftKey && e.code === "Space") {
+        e.preventDefault();
+        handleReplay();
+      }
+
+      if (e.ctrlKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        handlePrevious();
+      }
+
+      if (e.ctrlKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        handleSkip();
+      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -564,24 +588,24 @@ export default function DictationPage({ params }: PageProps) {
                 onClick={handlePrevious}
                 disabled={currentSegIdx === 0}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Previous sentence (←)"
+                title="Previous sentence (Ctrl+←)"
               >
-                ⏮ Prev (←)
+                ⏮ Prev (Ctrl+←)
               </button>
               <button
                 onClick={handleReplay}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 transition-colors"
-                title="Replay (R)"
+                title="Replay (Shift+Space)"
               >
-                🔁 Replay (R)
+                🔁 Replay (Shift+Space)
               </button>
               <button
                 onClick={handleSkip}
                 disabled={currentSegIdx >= segments.length - 1}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Next sentence (S / →)"
+                title="Next sentence (Ctrl+→)"
               >
-                ⏭ Next (S/→)
+                ⏭ Next (Ctrl+→)
               </button>
             </div>
           )}
@@ -745,6 +769,7 @@ export default function DictationPage({ params }: PageProps) {
                   diff={checkResult?.diff}
                   isCorrect={checkResult?.isCorrect ?? null}
                   wrongAttempts={wrongAttempts}
+                  focusSignal={inputFocusSignal}
                 />
 
                 {/* Hint — only relevant when paused */}
