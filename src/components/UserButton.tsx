@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useAuth } from "@/context/auth";
 
 /**
@@ -50,19 +49,10 @@ export default function UserButton() {
           </div>
         )}
         {/* Dropdown */}
-        <div className="absolute right-0 top-full mt-1 hidden group-hover:block bg-white border border-slate-200 rounded-xl shadow-lg py-1 min-w-[120px] z-50">
-          <Link
-            href="/dashboard"
-            className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-          >
-            Dashboard
-          </Link>
-          <Link
-            href="/vocabulary"
-            className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-          >
-            Vocabulary
-          </Link>
+        <div className="absolute right-0 top-full mt-1 hidden group-hover:block bg-white border border-slate-200 rounded-xl shadow-lg py-1 min-w-[180px] z-50">
+          <div className="px-4 py-2 text-xs text-slate-500 border-b border-slate-100 truncate">
+            {user.email}
+          </div>
           <button
             onClick={signOut}
             className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
