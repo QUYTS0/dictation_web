@@ -10,6 +10,7 @@ interface AIExplainerProps {
   attemptId?: string;
   /** Pre-loaded explanation (e.g., from cache) */
   explanation?: AIExplainResponse | null;
+  buttonLabel?: string;
 }
 
 export default function AIExplainer({
@@ -17,6 +18,7 @@ export default function AIExplainer({
   userText,
   attemptId,
   explanation: initialExplanation = null,
+  buttonLabel = "Explain my mistake",
 }: AIExplainerProps) {
   const [explanation, setExplanation] = useState<AIExplainResponse | null>(
     initialExplanation
@@ -67,7 +69,7 @@ export default function AIExplainer({
                 : "bg-violet-200 text-violet-800 hover:bg-violet-300"
             )}
           >
-            {loading ? "Thinking…" : "Explain my mistake"}
+            {loading ? "Thinking…" : buttonLabel}
           </button>
         )}
       </div>
