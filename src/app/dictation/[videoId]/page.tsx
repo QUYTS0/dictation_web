@@ -40,15 +40,12 @@ interface MistakeRecord {
 
 type LessonItemType = "word" | "phrase" | "sentence";
 
-interface LessonSavedItem {
-  id: string;
-  text: string;
-  type: LessonItemType;
-  sourceSentence: string;
-  videoId: string;
-  segmentIndex: number;
-  note: string;
-  createdAt: string;
+type LessonSavedItem = VocabularyItem & { type: LessonItemType };
+
+function getSelectedType(wordCount: number): LessonItemType | null {
+  if (wordCount <= 0) return null;
+  if (wordCount === 1) return "word";
+  return "phrase";
 }
 
 // ---- Data fetching ----
@@ -133,6 +130,32 @@ interface ResumeState {
 // Let the embedded player seek after the segment playback command settles.
 const RESUME_SEEK_DELAY_MS = 150;
 
+function buildAiExplainPayload({
+  selectedType,
+  selectedText,
+  sentenceText,
+  userText,
+}: {
+  selectedType: LessonItemType | null;
+  selectedText: string;
+  sentenceText: string;
+  userText: string;
+}) {
+  if (selectedType && selectedText) {
+    return {
+      buttonLabel: `Explain selected ${selectedType}`,
+      expectedText: `Explain this ${selectedType} from a dictation lesson: "${selectedText}". Source sentence: "${sentenceText}"`,
+      userText: selectedText,
+    };
+  }
+
+  return {
+    buttonLabel: "Explain this sentence",
+    expectedText: sentenceText,
+    userText,
+  };
+}
+
 export default function DictationPage({ params }: PageProps) {
   const { videoId } = use(params);
   const { user } = useAuth();
@@ -167,6 +190,7 @@ export default function DictationPage({ params }: PageProps) {
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [showLearningPanel, setShowLearningPanel] = useState(true);
+  const [aiExplanationReady, setAiExplanationReady] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   const learningNoteInputRef = useRef<HTMLInputElement>(null);
@@ -568,37 +592,34 @@ export default function DictationPage({ params }: PageProps) {
   }, [currentSentenceWords, normalizedSelection]);
 
   const selectedText = selectedWords.join(" ");
-  const selectedType: LessonItemType | null = selectedWords.length === 0
-    ? null
-    : selectedWords.length === 1
-      ? "word"
-      : "phrase";
+  const selectedType = getSelectedType(selectedWords.length);
 
   const lessonSavedInCurrentVideo = useMemo(
-    () => learningItems.filter((item) => item.videoId === videoId),
+    () => learningItems.filter((item) => item.video_id === videoId),
     [learningItems, videoId]
   );
 
-  const aiButtonLabel = selectedType
-    ? `Explain selected ${selectedType}`
-    : "Explain this sentence";
-
-  const aiExpectedText = selectedType
-    ? `Explain this ${selectedType} from a dictation lesson: "${selectedText}". Source sentence: "${currentSegment?.text ?? ""}"`
-    : currentSegment?.text ?? "";
-
-  const aiUserText = selectedType
-    ? selectedText
-    : checkResult?.normalizedUser || currentSegment?.text || "";
+  const aiExplainPayload = buildAiExplainPayload({
+    selectedType,
+    selectedText,
+    sentenceText: currentSegment?.text ?? "",
+    userText: checkResult?.normalizedUser || currentSegment?.text || "",
+  });
+  const shouldShowAiExplainButton =
+    !showAI && (selectedType !== null || (wrongAttempts > 0 && !checkResult?.isCorrect));
 
   const toggleSelection = useCallback(
     (idx: number) => {
       setSelectionRange((prev) => {
+        // 1) no selection -> start with one selected token
         if (!prev) return { start: idx, end: idx };
+        // 2) same token clicked again while single-select -> clear selection
         if (prev.start === prev.end) {
           if (prev.start === idx) return null;
+          // 3) different token clicked while single-select -> create a contiguous range
           return { start: prev.start, end: idx };
         }
+        // 4) when a range already exists -> reset to new single-select anchor
         return { start: idx, end: idx };
       });
     },
@@ -626,28 +647,32 @@ export default function DictationPage({ params }: PageProps) {
           }),
         })
           .then(async (res) => {
-            if (!res.ok) throw new Error();
+            if (!res.ok) throw new Error("Failed to save vocabulary item");
             const data = (await res.json()) as { item: VocabularyItem };
             const item: LessonSavedItem = {
-              id: data.item.id,
-              text: data.item.term,
+              ...data.item,
               type,
-              sourceSentence: data.item.sentence_context,
-              videoId: data.item.video_id,
-              segmentIndex: data.item.segment_index,
               note: data.item.note ?? "",
-              createdAt: data.item.created_at,
             };
             setLearningItems((prev) => {
-              const withoutCurrent = prev.filter((existing) => existing.id !== item.id);
-              return [item, ...withoutCurrent];
+              // API can return an existing row (upsert-like behavior), so we update in place.
+              // New items are prepended so the latest additions stay easy to scan.
+              const existingIndex = prev.findIndex((existing) => existing.id === item.id);
+              if (existingIndex === -1) return [item, ...prev];
+              const next = [...prev];
+              next[existingIndex] = item;
+              return next;
             });
             setLearningNote("");
             setShowLearningPanel(true);
             if (type !== "sentence") setSelectionRange(null);
           })
-          .catch(() => {
-            setLearningError("Failed to save learning item.");
+          .catch((err: unknown) => {
+            const message =
+              err instanceof Error && err.message
+                ? err.message
+                : "Failed to save learning item. Please try again.";
+            setLearningError(message);
           })
           .finally(() => {
             setLearningSaving(false);
@@ -659,7 +684,12 @@ export default function DictationPage({ params }: PageProps) {
 
   useEffect(() => {
     setSelectionRange(null);
+    setLearningNote("");
   }, [currentSegIdx, currentSegment?.text]);
+
+  useEffect(() => {
+    if (!showAI) setAiExplanationReady(false);
+  }, [showAI]);
 
   // ---- Render ----
   return (
@@ -879,21 +909,7 @@ export default function DictationPage({ params }: PageProps) {
                 {lessonSavedInCurrentVideo.length === 0 ? (
                   <p className="text-xs text-slate-500">No words, phrases, or sentences saved in this lesson yet.</p>
                 ) : (
-                  <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-1">
-                    {lessonSavedInCurrentVideo.map((item) => (
-                      <div key={item.id} className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col gap-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm text-slate-800">{item.text}</span>
-                          <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
-                            {item.type}
-                          </span>
-                        </div>
-                        <span className="text-xs text-slate-500">Sentence {item.segmentIndex + 1}</span>
-                        <span className="text-xs text-slate-600">{item.sourceSentence}</span>
-                        {item.note && <span className="text-xs text-slate-700">📝 {item.note}</span>}
-                      </div>
-                    ))}
-                  </div>
+                  <LessonSavedItemsList items={lessonSavedInCurrentVideo} />
                 )}
               </div>
 
@@ -919,30 +935,12 @@ export default function DictationPage({ params }: PageProps) {
                       </span>
                     )}
                   </div>
-                  <div className="text-sm text-slate-700 leading-relaxed flex flex-wrap gap-2">
-                    {currentSentenceWords.map((word, idx) => {
-                      const inSelection =
-                        normalizedSelection !== null &&
-                        idx >= normalizedSelection.start &&
-                        idx <= normalizedSelection.end;
-                      return (
-                        <button
-                          key={`${idx}-${word}`}
-                          onClick={() => toggleSelection(idx)}
-                          onDoubleClick={() => saveLessonCapture(word, "word")}
-                          className={clsx(
-                            "rounded-full border px-2 py-1 text-xs font-medium transition-colors",
-                            inSelection
-                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
-                          )}
-                          title="Click to select. Double-click to save this word."
-                        >
-                          {word}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <SentenceTokenSelector
+                    words={currentSentenceWords}
+                    selection={normalizedSelection}
+                    onToggleSelection={toggleSelection}
+                    onSaveWord={(word) => saveLessonCapture(word, "word")}
+                  />
                   <p className="text-xs text-slate-500">
                     Click tokens to select a word/phrase, double-click a token to save a word instantly.
                   </p>
@@ -1012,26 +1010,12 @@ export default function DictationPage({ params }: PageProps) {
                     <p className="text-xs text-red-600">{learningError}</p>
                   )}
 
-                  {showLearningPanel && (
+                      {showLearningPanel && (
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 max-h-56 overflow-y-auto flex flex-col gap-2">
                       {lessonSavedInCurrentVideo.length === 0 ? (
                         <p className="text-xs text-slate-500">No saved items yet for this lesson.</p>
                       ) : (
-                        lessonSavedInCurrentVideo.map((item) => (
-                          <div key={item.id} className="rounded-md border border-slate-200 bg-white p-2 flex flex-col gap-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-xs font-semibold text-slate-800">{item.text}</span>
-                              <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
-                                {item.type}
-                              </span>
-                            </div>
-                            <span className="text-[11px] text-slate-500">Sentence {item.segmentIndex + 1}</span>
-                            <span className="text-[11px] text-slate-600 line-clamp-2">{item.sourceSentence}</span>
-                            {item.note && (
-                              <span className="text-[11px] text-slate-700">📝 {item.note}</span>
-                            )}
-                          </div>
-                        ))
+                        <LessonSavedItemsList items={lessonSavedInCurrentVideo} compact />
                       )}
                     </div>
                   )}
@@ -1051,18 +1035,20 @@ export default function DictationPage({ params }: PageProps) {
                 {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
                   showAI && currentSegment && (
                     <AIExplainer
-                      expectedText={aiExpectedText}
-                      userText={aiUserText}
-                      buttonLabel={aiButtonLabel}
+                      expectedText={aiExplainPayload.expectedText}
+                      userText={aiExplainPayload.userText}
+                      buttonLabel={aiExplainPayload.buttonLabel}
+                      onExplanationReady={setAiExplanationReady}
                     />
                   )}
 
                 {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  showAI && currentSegment && (
+                  showAI && currentSegment && aiExplanationReady && (
                     <div className="flex flex-wrap gap-2">
                       {selectedText && selectedType && (
                         <button
                           onClick={() => saveLessonCapture(selectedText, selectedType)}
+                          disabled={!selectedType}
                           className="text-xs px-3 py-1 rounded-full border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                         >
                           Save {selectedType}
@@ -1084,7 +1070,7 @@ export default function DictationPage({ params }: PageProps) {
                   )}
 
                 {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  !showAI && (
+                  shouldShowAiExplainButton && (
                     <button
                       onClick={() => setShowAI(true)}
                       className="text-xs text-violet-600 underline self-end hover:text-violet-800"
@@ -1127,6 +1113,83 @@ function StatusCard({
       <p className={clsx("text-2xl", pulse && "animate-pulse")}>{icon}</p>
       <p className="font-semibold text-slate-800">{title}</p>
       <p className="text-sm text-slate-500">{description}</p>
+    </div>
+  );
+}
+
+function SentenceTokenSelector({
+  words,
+  selection,
+  onToggleSelection,
+  onSaveWord,
+}: {
+  words: string[];
+  selection: { start: number; end: number } | null;
+  onToggleSelection: (index: number) => void;
+  onSaveWord: (word: string) => void;
+}) {
+  return (
+    <div className="text-sm text-slate-700 leading-relaxed flex flex-wrap gap-2">
+      {words.map((word, idx) => {
+        const inSelection =
+          selection !== null &&
+          idx >= selection.start &&
+          idx <= selection.end;
+        return (
+          <button
+            key={idx}
+            onClick={() => onToggleSelection(idx)}
+            onDoubleClick={() => onSaveWord(word)}
+            className={clsx(
+              "rounded-full border px-2 py-1 text-xs font-medium transition-colors",
+              inSelection
+                ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                : "border-slate-200 bg-slate-50 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
+            )}
+            title="Click to select. Double-click to save this word."
+          >
+            {word}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LessonSavedItemsList({
+  items,
+  compact = false,
+}: {
+  items: LessonSavedItem[];
+  compact?: boolean;
+}) {
+  return (
+    <div className={clsx("flex flex-col gap-2 max-h-52 overflow-y-auto pr-1", compact && "pr-0")}>
+      {items.map((item) => (
+        <div
+          key={item.id}
+          className={clsx(
+            "rounded-lg border border-slate-200 bg-white p-3 flex flex-col gap-1",
+            compact && "p-2 rounded-md"
+          )}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>{item.term}</span>
+            <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
+              {item.type}
+            </span>
+          </div>
+          <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>
+            Sentence {item.segment_index + 1}
+          </span>
+          <span className={clsx("text-xs text-slate-600", compact && "text-[11px] line-clamp-2")}>
+            {item.sentence_context}
+          </span>
+          {item.note && (
+            <span className={clsx("text-xs text-slate-700", compact && "text-[11px]")}>📝 {item.note}</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
