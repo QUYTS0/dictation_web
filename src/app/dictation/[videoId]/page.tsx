@@ -48,6 +48,10 @@ function getSelectedType(wordCount: number): LessonItemType | null {
   return "phrase";
 }
 
+function formatCountWithNoun(count: number, noun: string) {
+  return `${count} ${noun}${count !== 1 ? "s" : ""}`;
+}
+
 // ---- Data fetching ----
 
 async function fetchTranscript(videoId: string): Promise<TranscriptResponse> {
@@ -190,6 +194,7 @@ export default function DictationPage({ params }: PageProps) {
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [showLearningPanel, setShowLearningPanel] = useState(true);
+  const [showVideo, setShowVideo] = useState(true);
   const [aiExplanationReady, setAiExplanationReady] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
@@ -606,7 +611,29 @@ export default function DictationPage({ params }: PageProps) {
     userText: checkResult?.normalizedUser || currentSegment?.text || "",
   });
   const shouldShowAiExplainButton =
-    !showAI && (selectedType !== null || (wrongAttempts > 0 && !checkResult?.isCorrect));
+    !showAI &&
+    !!checkResult &&
+    (selectedType !== null || (wrongAttempts > 0 && !checkResult.isCorrect));
+  const shouldShowPostCheckReview =
+    !!checkResult && (uxState === "paused_waiting_input" || uxState === "checking_answer");
+  const shouldRenderVideoPlayer =
+    uxState !== "loading_transcript" &&
+    uxState !== "transcript_processing" &&
+    uxState !== "transcript_failed";
+  const videoBlock = !showVideo ? (
+    <div className="aspect-video rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500">
+      Video hidden - use “Show video” to display it again.
+    </div>
+  ) : (
+    shouldRenderVideoPlayer && (
+      <YouTubePlayer
+        ref={ytPlayerRef}
+        videoId={videoId}
+        segments={segments}
+        onSegmentEnd={handleSegmentEnd}
+      />
+    )
+  );
 
   const toggleSelection = useCallback(
     (idx: number) => {
@@ -718,21 +745,22 @@ export default function DictationPage({ params }: PageProps) {
         <UserButton />
       </header>
 
-      <main className="flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-5xl mx-auto w-full">
-        {/* Left column: player + progress */}
-        <div className="flex flex-col gap-4 lg:w-1/2">
+      <main className="flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-7xl mx-auto w-full">
+        {/* Primary lesson column */}
+        <div className="flex flex-col gap-4 lg:w-2/3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-slate-700">Video</p>
+            <button
+              onClick={() => setShowVideo((v) => !v)}
+              className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+            >
+              {showVideo ? "Hide video" : "Show video"}
+            </button>
+          </div>
+
           {/* YouTube Player */}
           <div className="w-full">
-            {uxState !== "loading_transcript" &&
-              uxState !== "transcript_processing" &&
-              uxState !== "transcript_failed" && (
-                <YouTubePlayer
-                  ref={ytPlayerRef}
-                  videoId={videoId}
-                  segments={segments}
-                  onSegmentEnd={handleSegmentEnd}
-                />
-              )}
+            {videoBlock}
           </div>
 
           {/* Progress bar */}
@@ -772,10 +800,7 @@ export default function DictationPage({ params }: PageProps) {
               </button>
             </div>
           )}
-        </div>
 
-        {/* Right column: dictation controls */}
-        <div className="flex flex-col gap-4 lg:w-1/2">
           {/* UX State indicators */}
           {uxState === "loading_transcript" && (
             <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
@@ -902,17 +927,6 @@ export default function DictationPage({ params }: PageProps) {
                 </p>
               )}
 
-              <div className="flex flex-col gap-2">
-                <p className="text-slate-700 font-semibold text-sm">
-                  Saved learning items ({lessonSavedInCurrentVideo.length})
-                </p>
-                {lessonSavedInCurrentVideo.length === 0 ? (
-                  <p className="text-xs text-slate-500">No words, phrases, or sentences saved in this lesson yet.</p>
-                ) : (
-                  <LessonSavedItemsList items={lessonSavedInCurrentVideo} />
-                )}
-              </div>
-
               <Link
                 href="/"
                 className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center"
@@ -922,52 +936,41 @@ export default function DictationPage({ params }: PageProps) {
             </div>
           )}
 
-          {/* Dictation input area — shown during playback (typing ahead) and when paused */}
+          {/* Dictation input area — below video and controls */}
           {shouldShowInput && (
-              <div className="flex flex-col gap-4">
-                {/* Current segment display */}
-                <div className="rounded-xl bg-white border border-slate-200 p-3 flex flex-col gap-3">
-                  <div className="text-sm text-slate-400 flex items-center justify-between">
-                    <span>Sentence {currentSegIdx + 1} of {segments.length}</span>
-                    {uxState === "playing" && (
-                      <span className="text-xs text-emerald-600 font-medium animate-pulse">
-                        ▶ Playing…
-                      </span>
-                    )}
-                  </div>
+            <div className="flex flex-col gap-4">
+              <div className="rounded-xl bg-white border border-slate-200 p-3 text-sm text-slate-400 flex items-center justify-between">
+                <span>Sentence {currentSegIdx + 1} of {segments.length}</span>
+                {uxState === "playing" && (
+                  <span className="text-xs text-emerald-600 font-medium animate-pulse">
+                    ▶ Playing…
+                  </span>
+                )}
+              </div>
+
+              <DictationInput
+                key={`${currentSegIdx}-${dictationKey}`}
+                isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
+                wordCount={wordCount}
+                onSubmit={handleAnswerSubmit}
+                diff={checkResult?.diff}
+                isCorrect={checkResult?.isCorrect ?? null}
+                wrongAttempts={wrongAttempts}
+                focusSignal={inputFocusSignal}
+              />
+
+              {/* Review current sentence only after user has checked/submitted */}
+              {shouldShowPostCheckReview && currentSegment && (
+                <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-3">
+                  <p className="text-sm font-semibold text-slate-700">
+                    Review current sentence
+                  </p>
                   <SentenceTokenSelector
                     words={currentSentenceWords}
                     selection={normalizedSelection}
                     onToggleSelection={toggleSelection}
                     onSaveWord={(word) => saveLessonCapture(word, "word")}
                   />
-                  <p className="text-xs text-slate-500">
-                    Click tokens to select a word/phrase, double-click a token to save a word instantly.
-                  </p>
-                </div>
-
-                <DictationInput
-                  key={`${currentSegIdx}-${dictationKey}`}
-                  isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
-                  wordCount={wordCount}
-                  onSubmit={handleAnswerSubmit}
-                  diff={checkResult?.diff}
-                  isCorrect={checkResult?.isCorrect ?? null}
-                  wrongAttempts={wrongAttempts}
-                  focusSignal={inputFocusSignal}
-                />
-
-                <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-slate-700">Learning capture</p>
-                    <button
-                      onClick={() => setShowLearningPanel((v) => !v)}
-                      className="text-xs text-indigo-600 hover:text-indigo-800 underline"
-                    >
-                      {showLearningPanel ? "Hide saved items" : `Show saved items (${lessonSavedInCurrentVideo.length})`}
-                    </button>
-                  </div>
-
                   <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => selectedText && selectedType && saveLessonCapture(selectedText, selectedType)}
@@ -1006,81 +1009,101 @@ export default function DictationPage({ params }: PageProps) {
                       Selected {selectedType}: <span className="font-medium text-slate-800">{selectedText}</span>
                     </p>
                   )}
+
                   {learningError && (
                     <p className="text-xs text-red-600">{learningError}</p>
                   )}
-
-                      {showLearningPanel && (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 max-h-56 overflow-y-auto flex flex-col gap-2">
-                      {lessonSavedInCurrentVideo.length === 0 ? (
-                        <p className="text-xs text-slate-500">No saved items yet for this lesson.</p>
-                      ) : (
-                        <LessonSavedItemsList items={lessonSavedInCurrentVideo} compact />
-                      )}
-                    </div>
-                  )}
                 </div>
+              )}
 
-                {/* Hint — only relevant when paused */}
-                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  !checkResult?.isCorrect && (
-                    <HintDisplay
-                      text={currentSegment.text}
-                      level={hintLevel}
-                      onLevelChange={(l) => setHintLevel(l)}
-                    />
-                  )}
+              {/* Hint — only relevant when paused */}
+              {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
+                !checkResult?.isCorrect && (
+                  <HintDisplay
+                    text={currentSegment.text}
+                    level={hintLevel}
+                    onLevelChange={(l) => setHintLevel(l)}
+                  />
+                )}
 
-                {/* AI Tutor */}
-                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  showAI && currentSegment && (
-                    <AIExplainer
-                      expectedText={aiExplainPayload.expectedText}
-                      userText={aiExplainPayload.userText}
-                      buttonLabel={aiExplainPayload.buttonLabel}
-                      onExplanationReady={setAiExplanationReady}
-                    />
-                  )}
+              {/* AI Tutor — available in review state */}
+              {shouldShowPostCheckReview && showAI && currentSegment && (
+                <AIExplainer
+                  expectedText={aiExplainPayload.expectedText}
+                  userText={aiExplainPayload.userText}
+                  buttonLabel={aiExplainPayload.buttonLabel}
+                  onExplanationReady={setAiExplanationReady}
+                />
+              )}
 
-                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  showAI && currentSegment && aiExplanationReady && (
-                    <div className="flex flex-wrap gap-2">
-                      {selectedText && selectedType && (
-                        <button
-                          onClick={() => saveLessonCapture(selectedText, selectedType)}
-                          disabled={!selectedType}
-                          className="text-xs px-3 py-1 rounded-full border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
-                        >
-                          Save {selectedType}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => saveLessonCapture(currentSegment.text, "sentence")}
-                        className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 bg-slate-50 hover:bg-slate-100"
-                      >
-                        Save sentence
-                      </button>
-                      <button
-                        onClick={() => learningNoteInputRef.current?.focus()}
-                        className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 hover:bg-slate-50"
-                      >
-                        Add note
-                      </button>
-                    </div>
-                  )}
-
-                {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                  shouldShowAiExplainButton && (
+              {shouldShowPostCheckReview && showAI && currentSegment && aiExplanationReady && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedText && selectedType && (
                     <button
-                      onClick={() => setShowAI(true)}
-                      className="text-xs text-violet-600 underline self-end hover:text-violet-800"
+                      onClick={() => saveLessonCapture(selectedText, selectedType)}
+                      disabled={!selectedType}
+                      className="text-xs px-3 py-1 rounded-full border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                     >
-                      Ask AI to explain {selectedType ? `this ${selectedType}` : "this sentence"}
+                      Save {selectedType}
                     </button>
                   )}
-              </div>
-            )}
+                  <button
+                    onClick={() => currentSegment && saveLessonCapture(currentSegment.text, "sentence")}
+                    className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 bg-slate-50 hover:bg-slate-100"
+                  >
+                    Save sentence
+                  </button>
+                  <button
+                    onClick={() => learningNoteInputRef.current?.focus()}
+                    className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  >
+                    Add note
+                  </button>
+                </div>
+              )}
+
+              {shouldShowPostCheckReview && shouldShowAiExplainButton && (
+                <button
+                  onClick={() => setShowAI(true)}
+                  className="text-xs text-violet-600 underline self-end hover:text-violet-800"
+                >
+                  Ask AI to explain {selectedType ? `this ${selectedType}` : "this sentence"}
+                </button>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Secondary saved-items panel */}
+        <aside className="lg:w-1/3">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-col gap-3 lg:sticky lg:top-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-slate-700">
+                Saved items ({lessonSavedInCurrentVideo.length})
+              </p>
+              <button
+                onClick={() => setShowLearningPanel((v) => !v)}
+                className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+              >
+                {showLearningPanel ? "Collapse" : "Expand"}
+              </button>
+            </div>
+
+            {showLearningPanel ? (
+              lessonSavedInCurrentVideo.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  No saved words, phrases, or sentences yet.
+                </p>
+              ) : (
+                <LessonSavedItemsList items={lessonSavedInCurrentVideo} compact />
+              )
+            ) : (
+              <p className="text-xs text-slate-500">
+                Collapsed: {formatCountWithNoun(lessonSavedInCurrentVideo.length, "saved item")}.
+              </p>
+            )}
+          </div>
+        </aside>
       </main>
     </div>
   );
