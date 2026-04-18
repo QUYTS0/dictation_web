@@ -39,6 +39,8 @@ interface MistakeRecord {
 }
 
 type LessonItemType = "word" | "phrase" | "sentence";
+type SavedFilter = "all" | LessonItemType;
+type RightPanelTab = "saved" | "script";
 
 type LessonSavedItem = VocabularyItem & { type: LessonItemType };
 
@@ -48,8 +50,33 @@ function getSelectedType(wordCount: number): LessonItemType | null {
   return "phrase";
 }
 
-function formatCountWithNoun(count: number, noun: string) {
-  return `${count} ${noun}${count !== 1 ? "s" : ""}`;
+function getSavedFilterLabel(filter: SavedFilter) {
+  if (filter === "all") return "All";
+  if (filter === "word") return "Words";
+  if (filter === "phrase") return "Phrases";
+  return "Sentences";
+}
+
+function splitSentenceIntoWords(sentence: string) {
+  return sentence.trim().split(/\s+/).filter(Boolean);
+}
+
+function normalizeRange(start: number, end: number, maxLength: number) {
+  const normalizedStart = Math.max(0, Math.min(start, end));
+  const normalizedEnd = Math.min(maxLength - 1, Math.max(start, end));
+  return { start: normalizedStart, end: normalizedEnd };
+}
+
+function areSelectionsEqual(
+  prev: { segmentIndex: number; start: number; end: number } | null,
+  next: { segmentIndex: number; start: number; end: number }
+) {
+  return (
+    !!prev &&
+    prev.segmentIndex === next.segmentIndex &&
+    prev.start === next.start &&
+    prev.end === next.end
+  );
 }
 
 // ---- Data fetching ----
@@ -194,6 +221,17 @@ export default function DictationPage({ params }: PageProps) {
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [showLearningPanel, setShowLearningPanel] = useState(true);
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("saved");
+  const [savedFilter, setSavedFilter] = useState<SavedFilter>("all");
+  const [scriptSelection, setScriptSelection] = useState<{
+    segmentIndex: number;
+    start: number;
+    end: number;
+  } | null>(null);
+  const [scriptSelectionAnchor, setScriptSelectionAnchor] = useState<{
+    segmentIndex: number;
+    index: number;
+  } | null>(null);
   const [showVideo, setShowVideo] = useState(true);
   const [aiExplanationReady, setAiExplanationReady] = useState(false);
 
@@ -580,8 +618,8 @@ export default function DictationPage({ params }: PageProps) {
     !!currentSegment;
 
   const currentSentenceWords = useMemo(
-    () => currentSegment?.text.trim().split(/\s+/).filter(Boolean) ?? [],
-    [currentSegment?.text]
+    () => (currentSegment ? splitSentenceIntoWords(currentSegment.text) : []),
+    [currentSegment]
   );
 
   const normalizedSelection = useMemo(() => {
@@ -603,6 +641,35 @@ export default function DictationPage({ params }: PageProps) {
     () => learningItems.filter((item) => item.video_id === videoId),
     [learningItems, videoId]
   );
+  const filteredSavedItems = useMemo(() => {
+    if (savedFilter === "all") return lessonSavedInCurrentVideo;
+    return lessonSavedInCurrentVideo.filter((item) => item.type === savedFilter);
+  }, [lessonSavedInCurrentVideo, savedFilter]);
+  const scriptWordsBySegment = useMemo(
+    () => segments.map((segment) => splitSentenceIntoWords(segment.text)),
+    [segments]
+  );
+  const scriptSelectionSegmentIndex = scriptSelection?.segmentIndex ?? null;
+  const scriptSelectionStart = scriptSelection?.start ?? null;
+  const scriptSelectionEnd = scriptSelection?.end ?? null;
+  const scriptSelectedWords = useMemo(() => {
+    if (
+      scriptSelectionSegmentIndex === null ||
+      scriptSelectionStart === null ||
+      scriptSelectionEnd === null
+    ) {
+      return [];
+    }
+    const words = scriptWordsBySegment[scriptSelectionSegmentIndex] ?? [];
+    if (words.length === 0) return [];
+    const { start, end } = normalizeRange(scriptSelectionStart, scriptSelectionEnd, words.length);
+    return words.slice(start, end + 1);
+  }, [scriptSelectionEnd, scriptSelectionSegmentIndex, scriptSelectionStart, scriptWordsBySegment]);
+  const scriptSelectedText = scriptSelectedWords.join(" ");
+  const scriptSelectedType = getSelectedType(scriptSelectedWords.length);
+  const scriptSelectedSegment = scriptSelection
+    ? segments[scriptSelection.segmentIndex] ?? null
+    : null;
 
   const aiExplainPayload = buildAiExplainPayload({
     selectedType,
@@ -653,10 +720,10 @@ export default function DictationPage({ params }: PageProps) {
     []
   );
 
-  const saveLessonCapture = useCallback(
-    (text: string, type: LessonItemType) => {
+  const saveLessonCaptureAtSegment = useCallback(
+    (text: string, type: LessonItemType, segmentIndex: number, sentenceContext: string) => {
       const trimmedText = text.trim();
-      if (!currentSegment || !trimmedText) return;
+      if (!trimmedText) return;
 
       const saveNote = learningNote.trim();
       requireAuth(() => {
@@ -667,9 +734,9 @@ export default function DictationPage({ params }: PageProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             videoId,
-            segmentIndex: currentSegIdx,
+            segmentIndex,
             term: trimmedText,
-            sentenceContext: currentSegment.text,
+            sentenceContext,
             note: saveNote || undefined,
           }),
         })
@@ -692,7 +759,11 @@ export default function DictationPage({ params }: PageProps) {
             });
             setLearningNote("");
             setShowLearningPanel(true);
-            if (type !== "sentence") setSelectionRange(null);
+            if (type !== "sentence") {
+              setSelectionRange(null);
+              setScriptSelection(null);
+              setScriptSelectionAnchor(null);
+            }
           })
           .catch((err: unknown) => {
             const message =
@@ -706,13 +777,81 @@ export default function DictationPage({ params }: PageProps) {
           });
       });
     },
-    [currentSegIdx, currentSegment, learningNote, requireAuth, videoId]
+    [learningNote, requireAuth, videoId]
   );
+
+  const saveLessonCapture = useCallback(
+    (text: string, type: LessonItemType) => {
+      if (!currentSegment) return;
+      saveLessonCaptureAtSegment(text, type, currentSegIdx, currentSegment.text);
+    },
+    [currentSegIdx, currentSegment, saveLessonCaptureAtSegment]
+  );
+
+  const handleScriptWordClick = useCallback(
+    (segmentIndex: number, wordIndex: number, word: string, shiftKey: boolean) => {
+      const sentence = segments[segmentIndex];
+      if (!sentence) return;
+
+      if (!shiftKey) {
+        setScriptSelectionAnchor({ segmentIndex, index: wordIndex });
+        setScriptSelection(null);
+        saveLessonCaptureAtSegment(word, "word", sentence.segmentIndex, sentence.text);
+        return;
+      }
+
+      setScriptSelection((prev) => {
+        if (!scriptSelectionAnchor || scriptSelectionAnchor.segmentIndex !== segmentIndex) {
+          setScriptSelectionAnchor({ segmentIndex, index: wordIndex });
+          return { segmentIndex, start: wordIndex, end: wordIndex };
+        }
+        const next = {
+          segmentIndex,
+          start: scriptSelectionAnchor.index,
+          end: wordIndex,
+        };
+        if (areSelectionsEqual(prev, next)) {
+          return null;
+        }
+        return next;
+      });
+    },
+    [saveLessonCaptureAtSegment, scriptSelectionAnchor, segments]
+  );
+
+  const handleSaveScriptSelection = useCallback(() => {
+    if (
+      !scriptSelection ||
+      !scriptSelectedText ||
+      !scriptSelectedType ||
+      scriptSelectedType !== "phrase" ||
+      !scriptSelectedSegment
+    ) {
+      return;
+    }
+    saveLessonCaptureAtSegment(
+      scriptSelectedText,
+      scriptSelectedType,
+      scriptSelectedSegment.segmentIndex,
+      scriptSelectedSegment.text
+    );
+  }, [
+    saveLessonCaptureAtSegment,
+    scriptSelectedSegment,
+    scriptSelectedText,
+    scriptSelectedType,
+    scriptSelection,
+  ]);
 
   useEffect(() => {
     setSelectionRange(null);
     setLearningNote("");
   }, [currentSegIdx, currentSegment?.text]);
+
+  useEffect(() => {
+    setScriptSelection(null);
+    setScriptSelectionAnchor(null);
+  }, [videoId]);
 
   useEffect(() => {
     if (!showAI) setAiExplanationReady(false);
@@ -745,9 +884,19 @@ export default function DictationPage({ params }: PageProps) {
         <UserButton />
       </header>
 
-      <main className="flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-7xl mx-auto w-full">
+      <main
+        className={clsx(
+          "flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-7xl mx-auto w-full transition-all duration-300",
+          !showLearningPanel && "lg:justify-center"
+        )}
+      >
         {/* Primary lesson column */}
-        <div className="flex flex-col gap-4 lg:w-2/3">
+        <div
+          className={clsx(
+            "flex flex-col gap-4 transition-all duration-300",
+            showLearningPanel ? "lg:w-2/3" : "lg:w-3/4 xl:w-2/3"
+          )}
+        >
           <div className="flex items-center justify-between">
             <p className="text-sm font-semibold text-slate-700">Video</p>
             <button
@@ -1074,33 +1223,211 @@ export default function DictationPage({ params }: PageProps) {
           )}
         </div>
 
-        {/* Secondary saved-items panel */}
-        <aside className="lg:w-1/3">
-          <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-col gap-3 lg:sticky lg:top-4">
+        {/* Secondary right panel */}
+        <aside
+          className={clsx(
+            "transition-all duration-300",
+            showLearningPanel ? "lg:w-1/3" : "lg:w-14"
+          )}
+        >
+          <div
+            className={clsx(
+              "rounded-xl border border-slate-200 bg-white lg:sticky lg:top-4 transition-all duration-300",
+              showLearningPanel ? "p-4" : "p-2"
+            )}
+          >
             <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-slate-700">
-                Saved items ({lessonSavedInCurrentVideo.length})
-              </p>
+              {showLearningPanel ? (
+                <p className="text-sm font-semibold text-slate-700">Lesson panel</p>
+              ) : (
+                <span className="sr-only">Lesson panel collapsed. Press button to expand.</span>
+              )}
               <button
                 onClick={() => setShowLearningPanel((v) => !v)}
-                className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                className="h-8 w-8 shrink-0 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors"
+                aria-label={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
+                title={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
               >
-                {showLearningPanel ? "Collapse" : "Expand"}
+                <svg
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  aria-hidden="true"
+                  className={clsx("h-4 w-4 mx-auto transition-transform", !showLearningPanel && "rotate-180")}
+                >
+                  <path d="M12.5 4.5L7.5 10l5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
             </div>
 
-            {showLearningPanel ? (
-              lessonSavedInCurrentVideo.length === 0 ? (
-                <p className="text-xs text-slate-500">
-                  No saved words, phrases, or sentences yet.
-                </p>
-              ) : (
-                <LessonSavedItemsList items={lessonSavedInCurrentVideo} compact />
-              )
-            ) : (
-              <p className="text-xs text-slate-500">
-                Collapsed: {formatCountWithNoun(lessonSavedInCurrentVideo.length, "saved item")}.
-              </p>
+            {showLearningPanel && (
+              <div className="mt-3 flex flex-col gap-3">
+                <div className="rounded-lg bg-slate-100 p-1 grid grid-cols-2 gap-1">
+                  <button
+                    onClick={() => setRightPanelTab("saved")}
+                    className={clsx(
+                      "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
+                      rightPanelTab === "saved"
+                        ? "bg-white text-slate-800 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    Saved
+                  </button>
+                  <button
+                    onClick={() => setRightPanelTab("script")}
+                    className={clsx(
+                      "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
+                      rightPanelTab === "script"
+                        ? "bg-white text-slate-800 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    Script
+                  </button>
+                </div>
+
+                {rightPanelTab === "saved" ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-slate-700">
+                        Saved items ({lessonSavedInCurrentVideo.length})
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(["all", "word", "phrase", "sentence"] as SavedFilter[]).map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => setSavedFilter(filter)}
+                          className={clsx(
+                            "px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors",
+                            savedFilter === filter
+                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                              : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                          )}
+                        >
+                          {getSavedFilterLabel(filter)}
+                        </button>
+                      ))}
+                    </div>
+                    {filteredSavedItems.length === 0 ? (
+                      <p className="text-xs text-slate-500">
+                        {savedFilter === "all"
+                          ? "No saved items yet."
+                          : `No ${getSavedFilterLabel(savedFilter).toLowerCase()} saved yet.`}
+                      </p>
+                    ) : (
+                      <LessonSavedItemsList items={filteredSavedItems} compact />
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Viewing the script may reveal answers.
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Click a word to save it instantly. Shift+click words in the same sentence to select and save a phrase.
+                    </p>
+
+                    {segments.length === 0 ? (
+                      <p className="text-xs text-slate-500">Script is not available yet.</p>
+                    ) : (
+                      <div className="max-h-[60vh] overflow-y-auto pr-1 flex flex-col gap-3">
+                        {segments.map((segment, segIdx) => {
+                          const words = scriptWordsBySegment[segIdx] ?? [];
+                          const hasSelection = scriptSelection?.segmentIndex === segIdx;
+                          const normalizedScriptRange = hasSelection
+                            ? normalizeRange(scriptSelection.start, scriptSelection.end, words.length)
+                            : null;
+                          const selectedStart = normalizedScriptRange?.start ?? -1;
+                          const selectedEnd = normalizedScriptRange?.end ?? -1;
+                          return (
+                            <div key={segment.segmentIndex} className="rounded-lg border border-slate-200 p-3 bg-slate-50">
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <p className="text-xs font-semibold text-slate-600">
+                                  Sentence {segment.segmentIndex + 1}
+                                </p>
+                                <button
+                                  onClick={() =>
+                                    saveLessonCaptureAtSegment(
+                                      segment.text,
+                                      "sentence",
+                                      segment.segmentIndex,
+                                      segment.text
+                                    )
+                                  }
+                                  disabled={learningSaving}
+                                  className="text-[11px] px-2 py-1 rounded-md border border-slate-300 text-slate-700 hover:bg-white disabled:opacity-40"
+                                >
+                                  Save sentence
+                                </button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {words.map((word, wordIdx) => {
+                                  const selected = hasSelection && wordIdx >= selectedStart && wordIdx <= selectedEnd;
+                                  return (
+                                    <button
+                                      key={`${segment.segmentIndex}-${wordIdx}`}
+                                      onClick={(e) => handleScriptWordClick(segIdx, wordIdx, word, e.shiftKey)}
+                                      className={clsx(
+                                        "rounded-full border px-2 py-1 text-[11px] transition-colors",
+                                        selected
+                                          ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                          : "border-slate-300 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
+                                      )}
+                                    >
+                                      {word}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 flex flex-col gap-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={handleSaveScriptSelection}
+                          disabled={
+                            learningSaving ||
+                            !scriptSelection ||
+                            !scriptSelectedText ||
+                            !scriptSelectedSegment ||
+                            scriptSelectedType !== "phrase"
+                          }
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          Save phrase
+                        </button>
+                        <button
+                          onClick={() => {
+                            setScriptSelection(null);
+                            setScriptSelectionAnchor(null);
+                          }}
+                          disabled={!scriptSelection}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          Clear selection
+                        </button>
+                      </div>
+                      <input
+                        value={learningNote}
+                        onChange={(e) => setLearningNote(e.target.value)}
+                        placeholder="Optional note for your next saved item"
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
+                      />
+                      {scriptSelectedText && (
+                        <p className="text-xs text-slate-600">
+                          Selected from script: <span className="font-medium text-slate-800">{scriptSelectedText}</span>
+                        </p>
+                      )}
+                      {learningError && <p className="text-xs text-red-600">{learningError}</p>}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </aside>
