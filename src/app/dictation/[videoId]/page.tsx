@@ -47,7 +47,7 @@ type LessonSavedItem = VocabularyItem & { type: LessonItemType };
 interface CompletedSentenceReview {
   segmentIndex: number;
   expectedText: string;
-  userText: string;
+  firstUserText: string;
   diff: DiffToken[];
 }
 
@@ -219,7 +219,6 @@ export default function DictationPage({ params }: PageProps) {
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
-  const [selectionRange, setSelectionRange] = useState<{ start: number; end: number } | null>(null);
   const [learningItems, setLearningItems] = useState<LessonSavedItem[]>([]);
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
@@ -231,17 +230,15 @@ export default function DictationPage({ params }: PageProps) {
   const [scriptPopover, setScriptPopover] = useState<ScriptSelectionPopoverState | null>(null);
   const [scriptShowAI, setScriptShowAI] = useState(false);
   const [scriptAiReady, setScriptAiReady] = useState(false);
+  const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
-  const [reviewShowAI, setReviewShowAI] = useState(false);
-  const [reviewAiReady, setReviewAiReady] = useState(false);
   const [showVideo, setShowVideo] = useState(true);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Keep lesson note draft in a ref (not state) so typing in note inputs
   // does not trigger full-page rerenders and input lag on heavy lesson UI.
   const learningNoteDraftRef = useRef("");
-  const learningNoteInputRef = useRef<HTMLInputElement>(null);
-  const scriptNoteInputRef = useRef<HTMLInputElement>(null);
+  const scriptPopoverNoteInputRef = useRef<HTMLInputElement>(null);
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -253,6 +250,7 @@ export default function DictationPage({ params }: PageProps) {
   const currentSegIdxRef = useRef(0);
   const resumeLoadedRef = useRef(false);
   const previousShowVideoRef = useRef(showVideo);
+  const firstAttemptBySegmentRef = useRef<Record<number, string>>({});
 
   useEffect(() => {
     resumeLoadedRef.current = false;
@@ -348,6 +346,9 @@ export default function DictationPage({ params }: PageProps) {
   const handleAnswerSubmit = useCallback(
     async (userText: string) => {
       if (!segments[currentSegIdx]) return;
+      if (firstAttemptBySegmentRef.current[currentSegIdx] === undefined) {
+        firstAttemptBySegmentRef.current[currentSegIdx] = userText;
+      }
       setUxState("checking_answer");
 
       try {
@@ -366,15 +367,14 @@ export default function DictationPage({ params }: PageProps) {
           setPreviousReview({
             segmentIndex: currentSegIdx,
             expectedText: segments[currentSegIdx].text,
-            userText: result.normalizedUser || userText,
+            firstUserText:
+              firstAttemptBySegmentRef.current[currentSegIdx] ??
+              (result.normalizedUser || userText),
             diff: result.diff ?? [],
           });
           setWrongAttempts(0);
           setHintLevel(0);
           setCheckResult(null);
-          setSelectionRange(null);
-          setReviewShowAI(false);
-          setReviewAiReady(false);
 
           const nextIdx = currentSegIdx + 1;
           triggerAutoSave(nextIdx, "active");
@@ -620,26 +620,6 @@ export default function DictationPage({ params }: PageProps) {
       uxState === "playing") &&
     !!currentSegment;
 
-  const previousReviewWords = useMemo(
-    () => (previousReview ? splitSentenceIntoWords(previousReview.expectedText) : []),
-    [previousReview]
-  );
-
-  const normalizedSelection = useMemo(() => {
-    if (!selectionRange || previousReviewWords.length === 0) return null;
-    const start = Math.max(0, Math.min(selectionRange.start, selectionRange.end));
-    const end = Math.min(previousReviewWords.length - 1, Math.max(selectionRange.start, selectionRange.end));
-    return { start, end };
-  }, [previousReviewWords.length, selectionRange]);
-
-  const selectedWords = useMemo(() => {
-    if (!normalizedSelection) return [];
-    return previousReviewWords.slice(normalizedSelection.start, normalizedSelection.end + 1);
-  }, [previousReviewWords, normalizedSelection]);
-
-  const selectedText = selectedWords.join(" ");
-  const selectedType = getSelectedType(selectedWords.length);
-
   const lessonSavedInCurrentVideo = useMemo(
     () => learningItems.filter((item) => item.video_id === videoId),
     [learningItems, videoId]
@@ -652,12 +632,6 @@ export default function DictationPage({ params }: PageProps) {
     !!previousReview &&
     previousReview.segmentIndex === currentSegIdx - 1 &&
     uxState !== "session_completed";
-  const reviewAiPayload = buildAiExplainPayload({
-    selectedType,
-    selectedText,
-    sentenceText: previousReview?.expectedText ?? "",
-    userText: previousReview?.userText ?? "",
-  });
   const scriptSelectedType = getSelectedType(scriptPopover?.selectedWordCount ?? 0);
   const scriptAiPayload = buildAiExplainPayload({
     selectedType: scriptSelectedType,
@@ -665,6 +639,19 @@ export default function DictationPage({ params }: PageProps) {
     sentenceText: scriptPopover?.sentenceText ?? "",
     userText: scriptPopover?.selectedText ?? "",
   });
+  const segmentsByIndex = useMemo(
+    () => new Map(segments.map((segment) => [segment.segmentIndex, segment])),
+    [segments]
+  );
+  const scriptContextSegments = useMemo(
+    () =>
+      segments.filter(
+        (segment) =>
+          segment.segmentIndex >= currentSegIdx &&
+          segment.segmentIndex <= currentSegIdx + 2
+      ),
+    [currentSegIdx, segments]
+  );
   const shouldRenderVideoPlayer =
     uxState !== "loading_transcript" &&
     uxState !== "transcript_processing" &&
@@ -716,24 +703,6 @@ export default function DictationPage({ params }: PageProps) {
     currentCard?.scrollIntoView({ block: "nearest" });
   }, [currentSegIdx, rightPanelTab, showLearningPanel]);
 
-  const toggleSelection = useCallback(
-    (idx: number) => {
-      setSelectionRange((prev) => {
-        // 1) no selection -> start with one selected token
-        if (!prev) return { start: idx, end: idx };
-        // 2) same token clicked again while single-select -> clear selection
-        if (prev.start === prev.end) {
-          if (prev.start === idx) return null;
-          // 3) different token clicked while single-select -> create a contiguous range
-          return { start: prev.start, end: idx };
-        }
-        // 4) when a range already exists -> reset to new single-select anchor
-        return { start: idx, end: idx };
-      });
-    },
-    []
-  );
-
   const clearScriptSelection = useCallback(() => {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) selection.removeAllRanges();
@@ -748,11 +717,7 @@ export default function DictationPage({ params }: PageProps) {
 
   const clearLearningNoteInputs = useCallback(() => {
     learningNoteDraftRef.current = "";
-    // Keep these in sync with every lesson note input that writes to learningNoteDraftRef.
-    // Maintenance warning: when adding a new lesson note input, search for
-    // "learningNoteDraftRef" and add that input ref here so resets stay consistent.
-    if (learningNoteInputRef.current) learningNoteInputRef.current.value = "";
-    if (scriptNoteInputRef.current) scriptNoteInputRef.current.value = "";
+    if (scriptPopoverNoteInputRef.current) scriptPopoverNoteInputRef.current.value = "";
   }, []);
 
   const saveLessonCaptureAtSegment = useCallback(
@@ -795,7 +760,6 @@ export default function DictationPage({ params }: PageProps) {
             clearLearningNoteInputs();
             setShowLearningPanel(true);
             if (type !== "sentence") {
-              setSelectionRange(null);
               clearScriptSelection();
             }
           })
@@ -844,37 +808,6 @@ export default function DictationPage({ params }: PageProps) {
     [requireAuth]
   );
 
-  const savePreviousReviewCapture = useCallback(
-    (text: string, type: LessonItemType) => {
-      if (!previousReview) return;
-      saveLessonCaptureAtSegment(
-        text,
-        type,
-        previousReview.segmentIndex,
-        previousReview.expectedText
-      );
-    },
-    [previousReview, saveLessonCaptureAtSegment]
-  );
-
-  const handleScriptWordSave = useCallback(
-    (segment: TranscriptSegment, word: string) => {
-      if (typeof window === "undefined") return;
-      const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0 && selection.toString().trim()) {
-        const inScriptSelection = scriptTextContainerRef.current?.contains(
-          selection.getRangeAt(0).commonAncestorContainer
-        );
-        if (inScriptSelection) return;
-        selection.removeAllRanges();
-      }
-      setScriptShowAI(false);
-      setScriptAiReady(false);
-      void saveLessonCaptureAtSegment(word, "word", segment.segmentIndex, segment.text);
-    },
-    [saveLessonCaptureAtSegment]
-  );
-
   const handleScriptMouseUp = useCallback(() => {
     if (typeof window === "undefined") return;
     if (!scriptTextContainerRef.current) return;
@@ -899,11 +832,11 @@ export default function DictationPage({ params }: PageProps) {
       range.commonAncestorContainer instanceof HTMLElement
         ? range.commonAncestorContainer
         : range.commonAncestorContainer.parentElement;
-    const segmentElement = anchorElement?.closest<HTMLElement>("[data-script-array-index]");
+    const segmentElement = anchorElement?.closest<HTMLElement>("[data-script-segment-index]");
     if (!segmentElement) return;
 
-    const segmentIndex = parseInt(segmentElement.dataset.scriptArrayIndex ?? "", 10);
-    const segment = segments[segmentIndex];
+    const segmentIndex = parseInt(segmentElement.dataset.scriptSegmentIndex ?? "", 10);
+    const segment = segmentsByIndex.get(segmentIndex);
     if (!Number.isFinite(segmentIndex) || !segment) return;
 
     const selectedWordCount = splitSentenceIntoWords(selectedText).length;
@@ -920,6 +853,7 @@ export default function DictationPage({ params }: PageProps) {
 
     setScriptShowAI(false);
     setScriptAiReady(false);
+    setScriptPopoverNoteMode(false);
     setScriptPopover({
       segmentIndex,
       selectedText,
@@ -928,37 +862,37 @@ export default function DictationPage({ params }: PageProps) {
       x,
       y,
     });
-  }, [segments]);
+  }, [segmentsByIndex]);
 
   const handleScriptPopoverAction = useCallback(
     (type: "word" | "phrase" | "sentence" | "explain" | "note") => {
       if (!scriptPopover) return;
-      const segment = segments[scriptPopover.segmentIndex];
+      const segment = segmentsByIndex.get(scriptPopover.segmentIndex);
       if (!segment) return;
 
       if (type === "explain") {
+        setScriptPopoverNoteMode(false);
         setScriptShowAI(true);
         return;
       }
       if (type === "note") {
-        scriptNoteInputRef.current?.focus();
+        setScriptPopoverNoteMode(true);
+        window.setTimeout(() => scriptPopoverNoteInputRef.current?.focus(), 10);
         return;
       }
 
+      setScriptPopoverNoteMode(false);
       const textToSave =
         type === "sentence" ? segment.text : scriptPopover.selectedText;
       void saveLessonCaptureAtSegment(textToSave, type, segment.segmentIndex, segment.text);
       clearScriptSelection();
       setScriptShowAI(false);
     },
-    [clearScriptSelection, saveLessonCaptureAtSegment, scriptPopover, segments]
+    [clearScriptSelection, saveLessonCaptureAtSegment, scriptPopover, segmentsByIndex]
   );
 
   useEffect(() => {
-    setSelectionRange(null);
     clearLearningNoteInputs();
-    setReviewShowAI(false);
-    setReviewAiReady(false);
   }, [clearLearningNoteInputs, currentSegIdx, currentSegment?.text]);
 
   useEffect(() => {
@@ -978,6 +912,7 @@ export default function DictationPage({ params }: PageProps) {
     clearScriptSelection();
     setScriptShowAI(false);
     setScriptAiReady(false);
+    setScriptPopoverNoteMode(false);
   }, [clearScriptSelection, videoId]);
 
   useEffect(() => {
@@ -991,6 +926,7 @@ export default function DictationPage({ params }: PageProps) {
         e.preventDefault();
         e.stopPropagation();
         clearScriptSelection();
+        setScriptPopoverNoteMode(false);
       }
     };
     window.addEventListener("keydown", handleEscape);
@@ -1000,7 +936,9 @@ export default function DictationPage({ params }: PageProps) {
   useEffect(() => {
     if (scriptPopover) {
       scriptPopoverRef.current?.focus();
+      return;
     }
+    setScriptPopoverNoteMode(false);
   }, [scriptPopover]);
 
   // ---- Render ----
@@ -1289,80 +1227,13 @@ export default function DictationPage({ params }: PageProps) {
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
                     <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
-                    <p className="mt-0.5 text-sm text-slate-800">{previousReview.expectedText}</p>
+                    <p className="mt-0.5 text-sm text-slate-900">{previousReview.expectedText}</p>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">
+                  <div className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700">
                     <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
-                    <p className="mt-0.5 text-sm text-slate-700">{previousReview.userText || "—"}</p>
+                    <p className="mt-0.5 text-sm text-slate-800">{previousReview.firstUserText || "—"}</p>
                   </div>
-                  <DiffTokenChips diff={previousReview.diff} />
-                  <SentenceTokenSelector
-                    words={previousReviewWords}
-                    selection={normalizedSelection}
-                    onToggleSelection={toggleSelection}
-                    onSaveWord={(word) => savePreviousReviewCapture(word, "word")}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() =>
-                        selectedText &&
-                        selectedType &&
-                        savePreviousReviewCapture(selectedText, selectedType)
-                      }
-                      disabled={learningSaving || !selectedText || !selectedType}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Save {selectedType ?? "selection"}
-                    </button>
-                    <button
-                      onClick={() =>
-                        saveLessonCaptureAtSegment(
-                          previousReview.expectedText,
-                          "sentence",
-                          previousReview.segmentIndex,
-                          previousReview.expectedText
-                        )
-                      }
-                      disabled={learningSaving}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 text-slate-700 bg-slate-50 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      Save full sentence
-                    </button>
-                    {normalizedSelection && (
-                      <button
-                        onClick={() => setSelectionRange(null)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 text-slate-600 hover:bg-slate-50"
-                      >
-                        Clear selection
-                      </button>
-                    )}
-                  </div>
-
-                  <input
-                    ref={learningNoteInputRef}
-                    onChange={handleLearningNoteChange}
-                    placeholder="Optional note for your next saved item"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
-                  />
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => setReviewShowAI(true)}
-                      className="text-xs px-3 py-1 rounded-full border border-violet-300 text-violet-700 bg-violet-50 hover:bg-violet-100"
-                    >
-                      Explain
-                    </button>
-                    <button
-                      onClick={() => learningNoteInputRef.current?.focus()}
-                      className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 hover:bg-slate-50"
-                    >
-                      Add note
-                    </button>
-                  </div>
-
-                  {learningError && (
-                    <p className="text-xs text-red-600">{learningError}</p>
-                  )}
+                  <DiffTokenChips diff={previousReview.diff} strong />
                 </div>
               )}
 
@@ -1376,48 +1247,6 @@ export default function DictationPage({ params }: PageProps) {
                   />
                 )}
 
-              {/* AI Tutor — available in previous-sentence review */}
-              {shouldShowPreviousReview && previousReview && reviewShowAI && (
-                <AIExplainer
-                  expectedText={reviewAiPayload.expectedText}
-                  userText={reviewAiPayload.userText}
-                  buttonLabel={reviewAiPayload.buttonLabel}
-                  onExplanationReady={setReviewAiReady}
-                />
-              )}
-
-              {shouldShowPreviousReview && previousReview && reviewShowAI && reviewAiReady && (
-                <div className="flex flex-wrap gap-2">
-                  {selectedText && selectedType && (
-                    <button
-                      onClick={() => savePreviousReviewCapture(selectedText, selectedType)}
-                      disabled={!selectedType}
-                      className="text-xs px-3 py-1 rounded-full border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
-                    >
-                      Save {selectedType}
-                    </button>
-                  )}
-                  <button
-                    onClick={() =>
-                      saveLessonCaptureAtSegment(
-                        previousReview.expectedText,
-                        "sentence",
-                        previousReview.segmentIndex,
-                        previousReview.expectedText
-                      )
-                    }
-                    className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 bg-slate-50 hover:bg-slate-100"
-                  >
-                    Save sentence
-                  </button>
-                  <button
-                    onClick={() => learningNoteInputRef.current?.focus()}
-                    className="text-xs px-3 py-1 rounded-full border border-slate-300 text-slate-700 hover:bg-slate-50"
-                  >
-                    Add note
-                  </button>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1529,10 +1358,10 @@ export default function DictationPage({ params }: PageProps) {
                       Viewing the script may reveal answers.
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      Click a word to save it, or select text to open quick actions.
+                      Select text to save a word, phrase, or sentence from the current or upcoming sentences.
                     </p>
 
-                    {segments.length === 0 ? (
+                    {scriptContextSegments.length === 0 ? (
                       <p className="text-xs text-slate-500">Script is not available yet.</p>
                     ) : (
                       <div
@@ -1540,10 +1369,12 @@ export default function DictationPage({ params }: PageProps) {
                         onMouseUp={handleScriptMouseUp}
                         className="relative max-h-[60vh] overflow-y-auto pr-1 flex flex-col gap-3"
                       >
-                        {segments.map((segment, segIdx) => {
-                          const words = splitSentenceIntoWords(segment.text);
+                        {scriptContextSegments.map((segment) => {
                           const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
-                          const isPreviousScriptSentence = segment.segmentIndex === currentSegIdx - 1;
+                          const isNextScriptSentence = segment.segmentIndex === currentSegIdx + 1;
+                          const isUpcomingScriptSentence =
+                            segment.segmentIndex > currentSegIdx &&
+                            segment.segmentIndex <= currentSegIdx + 2;
                           return (
                             <div
                               key={segment.segmentIndex}
@@ -1552,8 +1383,8 @@ export default function DictationPage({ params }: PageProps) {
                                 "rounded-lg border p-3 transition-colors",
                                 isCurrentScriptSentence
                                   ? "border-indigo-300 bg-indigo-50"
-                                  : isPreviousScriptSentence
-                                  ? "border-emerald-200 bg-emerald-50/70"
+                                  : isUpcomingScriptSentence
+                                  ? "border-slate-200 bg-slate-50"
                                   : "border-slate-200 bg-slate-50"
                               )}
                             >
@@ -1565,28 +1396,15 @@ export default function DictationPage({ params }: PageProps) {
                               >
                                 {isCurrentScriptSentence
                                   ? `Current sentence · #${segment.segmentIndex + 1}`
-                                  : `Sentence ${segment.segmentIndex + 1}`}
+                                  : isNextScriptSentence
+                                  ? `Next sentence · #${segment.segmentIndex + 1}`
+                                  : `Upcoming sentence · #${segment.segmentIndex + 1}`}
                               </p>
-                              <div data-script-array-index={segIdx} className="text-sm leading-7 text-slate-700">
-                                {words.map((word, wordIdx) => (
-                                  <span
-                                    key={`${segment.segmentIndex}-${wordIdx}`}
-                                    onClick={() => handleScriptWordSave(segment, word)}
-                                    onKeyDown={(e) => {
-                                      if (e.currentTarget !== e.target) return;
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        handleScriptWordSave(segment, word);
-                                      }
-                                    }}
-                                    role="button"
-                                    tabIndex={0}
-                                    className="cursor-pointer hover:text-indigo-700"
-                                  >
-                                    {word}
-                                    {wordIdx < words.length - 1 ? " " : ""}
-                                  </span>
-                                ))}
+                              <div
+                                data-script-segment-index={segment.segmentIndex}
+                                className="text-sm leading-7 text-slate-700 select-text"
+                              >
+                                {segment.text}
                               </div>
                             </div>
                           );
@@ -1594,12 +1412,6 @@ export default function DictationPage({ params }: PageProps) {
                       </div>
                     )}
 
-                    <input
-                      ref={scriptNoteInputRef}
-                      onChange={handleLearningNoteChange}
-                      placeholder="Optional note for your next saved item"
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
-                    />
                     {learningError && <p className="text-xs text-red-600">{learningError}</p>}
 
                     {scriptPopover && (
@@ -1646,6 +1458,22 @@ export default function DictationPage({ params }: PageProps) {
                         >
                           Add note
                         </button>
+                        {scriptPopoverNoteMode && (
+                          <div className="w-full pt-1 flex items-center gap-1.5">
+                            <input
+                              ref={scriptPopoverNoteInputRef}
+                              onChange={handleLearningNoteChange}
+                              placeholder="Optional note"
+                              className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            />
+                            <button
+                              onClick={() => setScriptPopoverNoteMode(false)}
+                              className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
+                            >
+                              Done
+                            </button>
+                          </div>
+                        )}
                         <span id="script-selection-actions-help" className="sr-only">
                           Actions for selected script text: save word, phrase, sentence, explain, or add note.
                         </span>
@@ -1707,7 +1535,13 @@ function StatusCard({
   );
 }
 
-function DiffTokenChips({ diff }: { diff: DiffToken[] | undefined }) {
+function DiffTokenChips({
+  diff,
+  strong = false,
+}: {
+  diff: DiffToken[] | undefined;
+  strong?: boolean;
+}) {
   if (!diff || diff.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -1716,54 +1550,16 @@ function DiffTokenChips({ diff }: { diff: DiffToken[] | undefined }) {
           key={`${token.word}-${idx}`}
           className={clsx(
             "px-2 py-0.5 rounded-full text-[11px] border",
+            strong && "px-2.5 py-1 text-xs font-semibold",
             token.status === "correct" && "border-emerald-200 bg-emerald-50 text-emerald-700",
-            token.status === "wrong" && "border-red-200 bg-red-50 text-red-700",
-            token.status === "missing" && "border-amber-200 bg-amber-50 text-amber-700",
+            token.status === "wrong" && "border-red-300 bg-red-100 text-red-800",
+            token.status === "missing" && "border-amber-300 bg-amber-100 text-amber-800",
             token.status === "extra" && "border-slate-300 bg-slate-100 text-slate-700"
           )}
         >
           {token.word}
         </span>
       ))}
-    </div>
-  );
-}
-
-function SentenceTokenSelector({
-  words,
-  selection,
-  onToggleSelection,
-  onSaveWord,
-}: {
-  words: string[];
-  selection: { start: number; end: number } | null;
-  onToggleSelection: (index: number) => void;
-  onSaveWord: (word: string) => void;
-}) {
-  return (
-    <div className="text-sm text-slate-700 leading-relaxed flex flex-wrap gap-2">
-      {words.map((word, idx) => {
-        const inSelection =
-          selection !== null &&
-          idx >= selection.start &&
-          idx <= selection.end;
-        return (
-          <button
-            key={idx}
-            onClick={() => onToggleSelection(idx)}
-            onDoubleClick={() => onSaveWord(word)}
-            className={clsx(
-              "rounded-full border px-2 py-1 text-xs font-medium transition-colors",
-              inSelection
-                ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                : "border-slate-200 bg-slate-50 text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
-            )}
-            title="Click to select. Double-click to save this word."
-          >
-            {word}
-          </button>
-        );
-      })}
     </div>
   );
 }

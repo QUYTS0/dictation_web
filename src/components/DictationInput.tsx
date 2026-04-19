@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { clsx } from "clsx";
 import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
@@ -26,6 +27,41 @@ function buildMaskedResult(diff: DiffToken[] | undefined) {
     .join(" ");
 }
 
+function buildResultState(diff: DiffToken[] | undefined, isCorrect?: boolean | null) {
+  if (isCorrect === true) {
+    return {
+      icon: "✅",
+      title: "Good job",
+      description: "You got this sentence right.",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    };
+  }
+
+  if (!diff || diff.length === 0) return null;
+
+  const comparableTokens = diff.filter((token) => token.status !== "extra");
+  if (comparableTokens.length === 0) return null;
+
+  const correctCount = comparableTokens.filter((token) => token.status === "correct").length;
+  const correctnessRatio = correctCount / comparableTokens.length;
+
+  if (correctnessRatio >= 0.7) {
+    return {
+      icon: "🟡",
+      title: "That’s almost right.",
+      description: "You’re close. Fix the highlighted parts and check again.",
+      className: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+
+  return {
+    icon: "🔁",
+    title: "Try again",
+    description: "Listen once more and revise your sentence.",
+    className: "border-rose-200 bg-rose-50 text-rose-800",
+  };
+}
+
 const INITIAL_FOCUS_DELAY_MS = 50;
 const FOCUS_DELAY_MS = 10;
 
@@ -41,6 +77,7 @@ export default function DictationInput({
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const maskedResult = useMemo(() => buildMaskedResult(diff), [diff]);
+  const resultState = useMemo(() => buildResultState(diff, isCorrect), [diff, isCorrect]);
 
   const focusInput = useCallback(
     (delay = FOCUS_DELAY_MS) => window.setTimeout(() => inputRef.current?.focus(), delay),
@@ -109,12 +146,25 @@ export default function DictationInput({
           <button
             onClick={submitCurrentInput}
             disabled={!isEnabled || !inputText.trim()}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Check
           </button>
         </div>
       </div>
+
+      {resultState && (
+        <div
+          className={clsx("rounded-xl border p-3", resultState.className)}
+          role="status"
+          aria-live="polite"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide">
+            {resultState.icon} {resultState.title}
+          </p>
+          <p className="mt-0.5 text-xs">{resultState.description}</p>
+        </div>
+      )}
 
       {isCorrect === false && maskedResult && (
         <div
