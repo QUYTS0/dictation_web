@@ -163,18 +163,22 @@ export default function VocabularyPage() {
                       onChange={(e) => setEditingTerm(e.target.value)}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs"
                       placeholder="Saved text"
+                      aria-label="Edit saved text"
+                      autoFocus
                     />
                     <input
                       value={editingSentenceContext}
                       onChange={(e) => setEditingSentenceContext(e.target.value)}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs"
                       placeholder="Sentence context"
+                      aria-label="Edit sentence context"
                     />
                     <input
                       value={editingNote}
                       onChange={(e) => setEditingNote(e.target.value)}
                       className="rounded-md border border-slate-300 px-2 py-1 text-xs"
                       placeholder="Optional note"
+                      aria-label="Edit note"
                     />
                     <div className="flex items-center gap-1.5">
                       <button

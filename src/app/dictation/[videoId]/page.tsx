@@ -1911,18 +1911,22 @@ function LessonSavedItemsList({
                 onChange={(e) => setEditingTerm(e.target.value)}
                 className="rounded border border-slate-300 px-2 py-1 text-[11px]"
                 placeholder="Saved text"
+                aria-label="Edit saved text"
+                autoFocus
               />
               <input
                 value={editingSentenceContext}
                 onChange={(e) => setEditingSentenceContext(e.target.value)}
                 className="rounded border border-slate-300 px-2 py-1 text-[11px]"
                 placeholder="Sentence context"
+                aria-label="Edit sentence context"
               />
               <input
                 value={editingNote}
                 onChange={(e) => setEditingNote(e.target.value)}
                 className="rounded border border-slate-300 px-2 py-1 text-[11px]"
                 placeholder="Optional note"
+                aria-label="Edit note"
               />
               <div className="flex items-center gap-1.5">
                 <button
@@ -1932,7 +1936,6 @@ function LessonSavedItemsList({
                       sentenceContext: editingSentenceContext,
                       note: editingNote,
                     });
-                    cancelEdit();
                   }}
                   disabled={updatingId === item.id}
                   className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-40"
