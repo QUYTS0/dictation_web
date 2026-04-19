@@ -1848,6 +1848,7 @@ function LessonSavedItemsList({
                   disabled={updatingId === item.id || deletingId === item.id}
                   className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
                   title="Edit saved word"
+                  aria-label={`Edit saved word ${item.term}`}
                 >
                   Edit
                 </button>

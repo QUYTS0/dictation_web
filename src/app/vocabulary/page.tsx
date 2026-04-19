@@ -138,6 +138,7 @@ export default function VocabularyPage() {
                       onClick={() => beginEdit(item)}
                       disabled={deletingId === item.id || updatingId === item.id}
                       className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
+                      aria-label={`Edit vocabulary ${item.term}`}
                     >
                       Edit
                     </button>
