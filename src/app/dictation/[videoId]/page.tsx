@@ -73,6 +73,23 @@ function getSavedFilterLabel(filter: SavedFilter) {
   return "Sentences";
 }
 
+function getScriptSentenceLabel({
+  isPreviousScriptSentence,
+  isCurrentScriptSentence,
+  isNextScriptSentence,
+  segmentIndex,
+}: {
+  isPreviousScriptSentence: boolean;
+  isCurrentScriptSentence: boolean;
+  isNextScriptSentence: boolean;
+  segmentIndex: number;
+}) {
+  if (isPreviousScriptSentence) return `Previous sentence · #${segmentIndex + 1}`;
+  if (isCurrentScriptSentence) return `Current sentence · #${segmentIndex + 1}`;
+  if (isNextScriptSentence) return `Next sentence · #${segmentIndex + 1}`;
+  return `Upcoming sentence · #${segmentIndex + 1}`;
+}
+
 function splitSentenceIntoWords(sentence: string) {
   return sentence.trim().split(/\s+/).filter(Boolean);
 }
@@ -164,6 +181,7 @@ const SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR = 0.2;
 const SCRIPT_POPOVER_VERTICAL_OFFSET_PX = 12;
 const SCRIPT_POPOVER_MAX_WIDTH_PX = 320;
 const SCRIPT_CONTEXT_NEXT_COUNT = 2;
+const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   standard: "max-w-lg",
@@ -233,6 +251,7 @@ export default function DictationPage({ params }: PageProps) {
   const [scriptAiReady, setScriptAiReady] = useState(false);
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
+  const [showPreviousScriptContext, setShowPreviousScriptContext] = useState(false);
   const [showVideo, setShowVideo] = useState(true);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
@@ -241,6 +260,7 @@ export default function DictationPage({ params }: PageProps) {
   const learningNoteDraftRef = useRef("");
   const scriptPopoverNoteInputRef = useRef<HTMLInputElement>(null);
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
+  const reviewTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user manually triggered a replay while already paused
   // (keyboard shortcut / Replay button while input is visible). In this case we keep the
@@ -644,14 +664,17 @@ export default function DictationPage({ params }: PageProps) {
     () => new Map(segments.map((segment) => [segment.segmentIndex, segment])),
     [segments]
   );
+  const scriptContextStartIndex = showPreviousScriptContext
+    ? Math.max(0, currentSegIdx - SCRIPT_CONTEXT_PREVIOUS_COUNT)
+    : currentSegIdx;
   const scriptContextSegments = useMemo(
     () =>
       segments.filter(
         (segment) =>
-          segment.segmentIndex >= currentSegIdx &&
+          segment.segmentIndex >= scriptContextStartIndex &&
           segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT
       ),
-    [currentSegIdx, segments]
+    [currentSegIdx, scriptContextStartIndex, segments]
   );
   const shouldRenderVideoPlayer =
     uxState !== "loading_transcript" &&
@@ -809,9 +832,9 @@ export default function DictationPage({ params }: PageProps) {
     [requireAuth]
   );
 
-  const handleScriptMouseUp = useCallback(() => {
+  const handleSelectionMouseUp = useCallback((container: HTMLDivElement | null) => {
     if (typeof window === "undefined") return;
-    if (!scriptTextContainerRef.current) return;
+    if (!container) return;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
       setScriptPopover(null);
@@ -825,7 +848,7 @@ export default function DictationPage({ params }: PageProps) {
     }
 
     const range = selection.getRangeAt(0);
-    if (!scriptTextContainerRef.current.contains(range.commonAncestorContainer)) {
+    if (!container.contains(range.commonAncestorContainer)) {
       return;
     }
 
@@ -841,6 +864,7 @@ export default function DictationPage({ params }: PageProps) {
     const segmentIndex = parseInt(segmentIndexValue, 10);
     const segment = segmentsByIndex.get(segmentIndex);
     if (!Number.isFinite(segmentIndex) || !segment) return;
+    const sentenceText = segmentElement.dataset.selectionSentenceText?.trim() || segment.text;
 
     const selectedWordCount = splitSentenceIntoWords(selectedText).length;
     const rect = range.getBoundingClientRect();
@@ -861,11 +885,19 @@ export default function DictationPage({ params }: PageProps) {
       segmentIndex,
       selectedText,
       selectedWordCount,
-      sentenceText: segment.text,
+      sentenceText,
       x,
       y,
     });
   }, [segmentsByIndex]);
+
+  const handleScriptMouseUp = useCallback(() => {
+    handleSelectionMouseUp(scriptTextContainerRef.current);
+  }, [handleSelectionMouseUp]);
+
+  const handleReviewMouseUp = useCallback(() => {
+    handleSelectionMouseUp(reviewTextContainerRef.current);
+  }, [handleSelectionMouseUp]);
 
   const handleScriptPopoverAction = useCallback(
     (type: "word" | "phrase" | "sentence" | "explain" | "note") => {
@@ -916,6 +948,7 @@ export default function DictationPage({ params }: PageProps) {
     setScriptShowAI(false);
     setScriptAiReady(false);
     setScriptPopoverNoteMode(false);
+    setShowPreviousScriptContext(false);
   }, [clearScriptSelection, videoId]);
 
   useEffect(() => {
@@ -1204,6 +1237,7 @@ export default function DictationPage({ params }: PageProps) {
               <DictationInput
                 key={`${currentSegIdx}`}
                 isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
+                isChecking={uxState === "checking_answer"}
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}
@@ -1219,7 +1253,11 @@ export default function DictationPage({ params }: PageProps) {
 
               {/* Review previous completed sentence only after advancing */}
               {shouldShowPreviousReview && previousReview && (
-                <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2.5">
+                <div
+                  ref={reviewTextContainerRef}
+                  onMouseUp={handleReviewMouseUp}
+                  className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2"
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                       Review previous sentence
@@ -1228,15 +1266,28 @@ export default function DictationPage({ params }: PageProps) {
                       #{previousReview.segmentIndex + 1}
                     </span>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                  <div
+                    // Enables shared selection popover actions for review text (word/phrase/sentence/note/explain).
+                    data-script-segment-index={previousReview.segmentIndex}
+                    data-selection-sentence-text={previousReview.expectedText}
+                    className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700"
+                  >
                     <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
-                    <p className="mt-0.5 text-sm text-slate-900">{previousReview.expectedText}</p>
+                    <p className="mt-0.5 text-sm text-slate-900 select-text cursor-text hover:bg-emerald-100/60 focus:bg-emerald-100/60 rounded px-1 -mx-1">
+                      {previousReview.expectedText}
+                    </p>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700">
+                  <div
+                    // Enables shared selection popover actions for review text (word/phrase/sentence/note/explain).
+                    data-script-segment-index={previousReview.segmentIndex}
+                    data-selection-sentence-text={previousReview.expectedText}
+                    className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700"
+                  >
                     <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
-                    <p className="mt-0.5 text-sm text-slate-800">{previousReview.firstUserText || "—"}</p>
+                    <p className="mt-0.5 text-sm text-slate-800 select-text cursor-text hover:bg-slate-200/70 focus:bg-slate-200/70 rounded px-1 -mx-1">
+                      {previousReview.firstUserText || "(No answer provided)"}
+                    </p>
                   </div>
-                  <DiffTokenChips diff={previousReview.diff} strong />
                 </div>
               )}
 
@@ -1361,9 +1412,18 @@ export default function DictationPage({ params }: PageProps) {
                       Viewing the script may reveal answers.
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      Select text to save a word, phrase, or sentence from the current and next{" "}
-                      {SCRIPT_CONTEXT_NEXT_COUNT} sentences.
+                      Select text to save a word, phrase, or sentence.
                     </p>
+                    {currentSegIdx > 0 && (
+                      <button
+                        onClick={() => setShowPreviousScriptContext((prev) => !prev)}
+                        className="self-start rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        {showPreviousScriptContext
+                          ? "Hide previous context"
+                          : `Show previous ${SCRIPT_CONTEXT_PREVIOUS_COUNT} sentences`}
+                      </button>
+                    )}
 
                     {scriptContextSegments.length === 0 ? (
                       <p className="text-xs text-slate-500">Script is not available yet.</p>
@@ -1375,10 +1435,17 @@ export default function DictationPage({ params }: PageProps) {
                       >
                         {scriptContextSegments.map((segment) => {
                           const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
+                          const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
                           const isNextScriptSentence = segment.segmentIndex === currentSegIdx + 1;
                           const isUpcomingScriptSentence =
                             segment.segmentIndex > currentSegIdx &&
                             segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT;
+                          const sentenceLabel = getScriptSentenceLabel({
+                            isPreviousScriptSentence,
+                            isCurrentScriptSentence,
+                            isNextScriptSentence,
+                            segmentIndex: segment.segmentIndex,
+                          });
                           return (
                             <div
                               key={segment.segmentIndex}
@@ -1387,6 +1454,10 @@ export default function DictationPage({ params }: PageProps) {
                                 "rounded-lg border p-3 transition-colors",
                                 isCurrentScriptSentence
                                   ? "border-indigo-300 bg-indigo-50"
+                                  : isPreviousScriptSentence
+                                  ? "border-slate-200 bg-slate-50/40"
+                                  : isNextScriptSentence
+                                  ? "border-sky-200 bg-sky-50/70"
                                   : isUpcomingScriptSentence
                                   ? "border-slate-200 bg-slate-50"
                                   : "border-slate-200 bg-slate-50"
@@ -1395,14 +1466,16 @@ export default function DictationPage({ params }: PageProps) {
                               <p
                                 className={clsx(
                                   "text-xs font-semibold mb-1",
-                                  isCurrentScriptSentence ? "text-indigo-700" : "text-slate-500"
+                                  isCurrentScriptSentence
+                                    ? "text-indigo-700"
+                                    : isPreviousScriptSentence
+                                    ? "text-slate-400"
+                                    : isNextScriptSentence
+                                    ? "text-sky-700"
+                                    : "text-slate-500"
                                 )}
                               >
-                                {isCurrentScriptSentence
-                                  ? `Current sentence · #${segment.segmentIndex + 1}`
-                                  : isNextScriptSentence
-                                  ? `Next sentence · #${segment.segmentIndex + 1}`
-                                  : `Upcoming sentence · #${segment.segmentIndex + 1}`}
+                                {sentenceLabel}
                               </p>
                               <div
                                 data-script-segment-index={segment.segmentIndex}
@@ -1535,35 +1608,6 @@ function StatusCard({
       <p className={clsx("text-2xl", pulse && "animate-pulse")}>{icon}</p>
       <p className="font-semibold text-slate-800">{title}</p>
       <p className="text-sm text-slate-500">{description}</p>
-    </div>
-  );
-}
-
-function DiffTokenChips({
-  diff,
-  strong = false,
-}: {
-  diff: DiffToken[] | undefined;
-  strong?: boolean;
-}) {
-  if (!diff || diff.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {diff.map((token, idx) => (
-        <span
-          key={`${token.word}-${idx}`}
-          className={clsx(
-            "px-2 py-0.5 rounded-full text-[11px] border",
-            strong && "px-2.5 py-1 text-xs font-semibold",
-            token.status === "correct" && "border-emerald-200 bg-emerald-50 text-emerald-700",
-            token.status === "wrong" && "border-red-300 bg-red-100 text-red-800",
-            token.status === "missing" && "border-amber-300 bg-amber-100 text-amber-800",
-            token.status === "extra" && "border-slate-300 bg-slate-100 text-slate-700"
-          )}
-        >
-          {token.word}
-        </span>
-      ))}
     </div>
   );
 }

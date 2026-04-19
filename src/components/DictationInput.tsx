@@ -14,6 +14,7 @@ import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
   isEnabled: boolean;
+  isChecking?: boolean;
   onSubmit: (text: string) => void;
   diff?: DiffToken[];
   isCorrect?: boolean | null;
@@ -258,6 +259,7 @@ const FOCUS_DELAY_MS = 10;
 
 export default function DictationInput({
   isEnabled,
+  isChecking = false,
   onSubmit,
   diff,
   isCorrect,
@@ -300,6 +302,10 @@ export default function DictationInput({
     }
   };
 
+  const isEmpty = !inputText.trim();
+  const isButtonDisabled = !isEnabled || isEmpty || isChecking;
+  const hasResult = !isChecking && (isCorrect === true || isCorrect === false);
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
@@ -332,14 +338,25 @@ export default function DictationInput({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            disabled={!isEnabled}
+            disabled={!isEnabled || isChecking}
           />
           <button
             onClick={submitCurrentInput}
-            disabled={!isEnabled || !inputText.trim()}
-            className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={isButtonDisabled}
+            aria-busy={isChecking}
+            className={clsx(
+              "rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1",
+              isChecking
+                ? "bg-indigo-500 text-white focus:ring-indigo-300"
+                : hasResult
+                ? "bg-emerald-600 text-white focus:ring-emerald-300"
+                : isEmpty
+                ? "bg-slate-300 text-slate-600"
+                : "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-md focus:ring-indigo-300",
+              isButtonDisabled && "cursor-not-allowed"
+            )}
           >
-            Check
+            {isChecking ? "Checking..." : hasResult ? "Checked" : "Check"}
           </button>
         </div>
       </div>
