@@ -18,6 +18,7 @@ interface DictationInputProps {
 
 // Compact mask keeps feedback non-spoiling while still showing where errors exist.
 const MASKED_WORD_PLACEHOLDER = "***";
+const ALMOST_RIGHT_THRESHOLD = 0.7;
 
 function buildMaskedResult(diff: DiffToken[] | undefined) {
   if (!diff || diff.length === 0) return "";
@@ -45,7 +46,7 @@ function buildResultState(diff: DiffToken[] | undefined, isCorrect?: boolean | n
   const correctCount = comparableTokens.filter((token) => token.status === "correct").length;
   const correctnessRatio = correctCount / comparableTokens.length;
 
-  if (correctnessRatio >= 0.7) {
+  if (correctnessRatio >= ALMOST_RIGHT_THRESHOLD) {
     return {
       icon: "🟡",
       title: "That’s almost right.",

@@ -163,6 +163,7 @@ const SCRIPT_POPOVER_MIN_SIDE_MARGIN_PX = 24;
 const SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR = 0.2;
 const SCRIPT_POPOVER_VERTICAL_OFFSET_PX = 12;
 const SCRIPT_POPOVER_MAX_WIDTH_PX = 320;
+const SCRIPT_CONTEXT_NEXT_COUNT = 2;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   standard: "max-w-lg",
@@ -648,7 +649,7 @@ export default function DictationPage({ params }: PageProps) {
       segments.filter(
         (segment) =>
           segment.segmentIndex >= currentSegIdx &&
-          segment.segmentIndex <= currentSegIdx + 2
+          segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT
       ),
     [currentSegIdx, segments]
   );
@@ -835,7 +836,9 @@ export default function DictationPage({ params }: PageProps) {
     const segmentElement = anchorElement?.closest<HTMLElement>("[data-script-segment-index]");
     if (!segmentElement) return;
 
-    const segmentIndex = parseInt(segmentElement.dataset.scriptSegmentIndex ?? "", 10);
+    const segmentIndexValue = segmentElement.dataset.scriptSegmentIndex;
+    if (!segmentIndexValue || segmentIndexValue.trim() === "") return;
+    const segmentIndex = parseInt(segmentIndexValue, 10);
     const segment = segmentsByIndex.get(segmentIndex);
     if (!Number.isFinite(segmentIndex) || !segment) return;
 
@@ -1358,7 +1361,8 @@ export default function DictationPage({ params }: PageProps) {
                       Viewing the script may reveal answers.
                     </div>
                     <p className="text-[11px] text-slate-500">
-                      Select text to save a word, phrase, or sentence from the current or upcoming sentences.
+                      Select text to save a word, phrase, or sentence from the current and next{" "}
+                      {SCRIPT_CONTEXT_NEXT_COUNT} sentences.
                     </p>
 
                     {scriptContextSegments.length === 0 ? (
@@ -1374,7 +1378,7 @@ export default function DictationPage({ params }: PageProps) {
                           const isNextScriptSentence = segment.segmentIndex === currentSegIdx + 1;
                           const isUpcomingScriptSentence =
                             segment.segmentIndex > currentSegIdx &&
-                            segment.segmentIndex <= currentSegIdx + 2;
+                            segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT;
                           return (
                             <div
                               key={segment.segmentIndex}
