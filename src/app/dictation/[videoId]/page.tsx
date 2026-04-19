@@ -182,6 +182,7 @@ const SCRIPT_POPOVER_VERTICAL_OFFSET_PX = 12;
 const SCRIPT_POPOVER_MAX_WIDTH_PX = 320;
 const SCRIPT_CONTEXT_NEXT_COUNT = 2;
 const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
+const CORRECT_RESULT_VISIBILITY_DELAY_MS = 650;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   standard: "max-w-lg",
@@ -395,20 +396,21 @@ export default function DictationPage({ params }: PageProps) {
           });
           setWrongAttempts(0);
           setHintLevel(0);
-          setCheckResult(null);
 
           const nextIdx = currentSegIdx + 1;
           triggerAutoSave(nextIdx, "active");
-
-          if (nextIdx < segments.length) {
-            currentSegIdxRef.current = nextIdx;
-            setCurrentSegIdx(nextIdx);
-            setUxState("playing");
-            ytPlayerRef.current?.playSegment(nextIdx);
-          } else {
-            setUxState("session_completed");
-            triggerAutoSave(nextIdx, "completed");
-          }
+          window.setTimeout(() => {
+            setCheckResult(null);
+            if (nextIdx < segments.length) {
+              currentSegIdxRef.current = nextIdx;
+              setCurrentSegIdx(nextIdx);
+              setUxState("playing");
+              ytPlayerRef.current?.playSegment(nextIdx);
+            } else {
+              setUxState("session_completed");
+              triggerAutoSave(nextIdx, "completed");
+            }
+          }, CORRECT_RESULT_VISIBILITY_DELAY_MS);
         } else {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
@@ -1237,7 +1239,7 @@ export default function DictationPage({ params }: PageProps) {
               <DictationInput
                 key={`${currentSegIdx}`}
                 isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
-                isChecking={uxState === "checking_answer"}
+                isChecking={uxState === "checking_answer" && checkResult === null}
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}
