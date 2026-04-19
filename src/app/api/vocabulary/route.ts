@@ -156,3 +156,87 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = (await request.json()) as {
+      id?: string;
+      term?: string;
+      sentenceContext?: string;
+      note?: string | null;
+    };
+    const { id, term, sentenceContext, note } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: "id is required" }, { status: 400 });
+    }
+
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+
+    const { data: existing, error: existingError } = await supabase
+      .from("vocabulary_items")
+      .select("*")
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error("[vocabulary] PATCH existing query error:", existingError);
+      return NextResponse.json({ error: "Failed to update vocabulary item" }, { status: 500 });
+    }
+
+    if (!existing) {
+      return NextResponse.json({ error: "Vocabulary item not found" }, { status: 404 });
+    }
+
+    const nextTerm = (term ?? existing.term).trim();
+    const nextSentenceContext = (sentenceContext ?? existing.sentence_context).trim();
+    const normalizedTerm = normalizeVocabularyTerm(nextTerm);
+    if (!normalizedTerm) {
+      return NextResponse.json({ error: "term cannot be empty" }, { status: 400 });
+    }
+    if (!nextSentenceContext) {
+      return NextResponse.json({ error: "sentenceContext cannot be empty" }, { status: 400 });
+    }
+
+    const payload = {
+      term: nextTerm,
+      normalized_term: normalizedTerm,
+      sentence_context: nextSentenceContext,
+      note:
+        note === undefined
+          ? existing.note
+          : typeof note === "string"
+          ? note.trim() || null
+          : null,
+    };
+
+    const { data, error } = await supabase
+      .from("vocabulary_items")
+      .update(payload)
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .select("*")
+      .single();
+
+    if (error || !data) {
+      console.error("[vocabulary] PATCH update error:", error);
+      if (error?.code === "23505") {
+        return NextResponse.json({ error: "A matching vocabulary item already exists." }, { status: 409 });
+      }
+      return NextResponse.json({ error: "Failed to update vocabulary item" }, { status: 500 });
+    }
+
+    return NextResponse.json({ item: data as VocabularyItem });
+  } catch (err) {
+    console.error("[vocabulary] unexpected PATCH error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}

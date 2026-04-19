@@ -12,6 +12,11 @@ export default function VocabularyPage() {
   const [loadingItems, setLoadingItems] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTerm, setEditingTerm] = useState("");
+  const [editingSentenceContext, setEditingSentenceContext] = useState("");
+  const [editingNote, setEditingNote] = useState("");
 
   useEffect(() => {
     if (!user) return;
@@ -43,6 +48,50 @@ export default function VocabularyPage() {
       setError(message);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const beginEdit = (item: VocabularyItem) => {
+    setEditingId(item.id);
+    setEditingTerm(item.term);
+    setEditingSentenceContext(item.sentence_context);
+    setEditingNote(item.note ?? "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingTerm("");
+    setEditingSentenceContext("");
+    setEditingNote("");
+  };
+
+  const handleUpdate = async () => {
+    if (!editingId) return;
+    setUpdatingId(editingId);
+    setError(null);
+    try {
+      const res = await fetch("/api/vocabulary", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingId,
+          term: editingTerm,
+          sentenceContext: editingSentenceContext,
+          note: editingNote,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; item?: VocabularyItem };
+      if (!res.ok || !data.item) {
+        throw new Error(data.error || "Failed to update vocabulary item.");
+      }
+      setItems((prev) => prev.map((item) => (item.id === editingId ? data.item! : item)));
+      cancelEdit();
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message ? err.message : "Failed to update vocabulary item.";
+      setError(message);
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -84,21 +133,71 @@ export default function VocabularyPage() {
               <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <p className="font-semibold text-slate-800">{item.term}</p>
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    disabled={deletingId === item.id}
-                    className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 hover:text-red-600 hover:border-red-300 disabled:opacity-40"
-                    aria-label={
-                      deletingId === item.id
-                        ? `Removing vocabulary ${item.term}`
-                        : `Remove vocabulary ${item.term}`
-                    }
-                  >
-                    {deletingId === item.id ? "Removing…" : "Remove"}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => beginEdit(item)}
+                      disabled={deletingId === item.id || updatingId === item.id}
+                      className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item.id)}
+                      disabled={deletingId === item.id || updatingId === item.id}
+                      className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 hover:text-red-600 hover:border-red-300 disabled:opacity-40"
+                      aria-label={
+                        deletingId === item.id
+                          ? `Removing vocabulary ${item.term}`
+                          : `Remove vocabulary ${item.term}`
+                      }
+                    >
+                      {deletingId === item.id ? "Removing…" : "Remove"}
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">{item.sentence_context}</p>
-                {item.note && <p className="text-xs text-indigo-600 mt-1">Note: {item.note}</p>}
+                {editingId === item.id ? (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <input
+                      value={editingTerm}
+                      onChange={(e) => setEditingTerm(e.target.value)}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Saved text"
+                    />
+                    <input
+                      value={editingSentenceContext}
+                      onChange={(e) => setEditingSentenceContext(e.target.value)}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Sentence context"
+                    />
+                    <input
+                      value={editingNote}
+                      onChange={(e) => setEditingNote(e.target.value)}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                      placeholder="Optional note"
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={handleUpdate}
+                        disabled={updatingId === item.id}
+                        className="h-7 px-2 rounded-md bg-indigo-600 text-white text-xs disabled:opacity-40"
+                      >
+                        {updatingId === item.id ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        onClick={cancelEdit}
+                        disabled={updatingId === item.id}
+                        className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 disabled:opacity-40"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-xs text-slate-500 mt-1">{item.sentence_context}</p>
+                    {item.note && <p className="text-xs text-indigo-600 mt-1">Note: {item.note}</p>}
+                  </>
+                )}
                 <Link
                   href={`/dictation/${item.video_id}`}
                   className="inline-block mt-2 text-xs text-indigo-600 hover:text-indigo-800 underline"

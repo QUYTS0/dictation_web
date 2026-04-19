@@ -60,6 +60,13 @@ interface ScriptSelectionPopoverState {
   y: number;
 }
 
+type ComparedTokenStatus = "correct" | "missing" | "wrong" | "extra" | "neutral";
+
+interface ComparedToken {
+  word: string;
+  status: ComparedTokenStatus;
+}
+
 function getSelectedType(wordCount: number): LessonItemType | null {
   if (wordCount <= 0) return null;
   if (wordCount === 1) return "word";
@@ -92,6 +99,63 @@ function getScriptSentenceLabel({
 
 function splitSentenceIntoWords(sentence: string) {
   return sentence.trim().split(/\s+/).filter(Boolean);
+}
+
+function summarizeDiff(diff: DiffToken[]) {
+  return {
+    wrong: diff.filter((token) => token.status === "wrong").length,
+    missing: diff.filter((token) => token.status === "missing").length,
+    extra: diff.filter((token) => token.status === "extra").length,
+  };
+}
+
+function buildComparedTokens({
+  diff,
+  expectedText,
+  userText,
+}: {
+  diff: DiffToken[];
+  expectedText: string;
+  userText: string;
+}) {
+  const expectedTokens: ComparedToken[] = [];
+  const userTokens: ComparedToken[] = [];
+
+  for (const token of diff) {
+    if (token.status === "correct") {
+      expectedTokens.push({ word: token.word, status: "correct" });
+      userTokens.push({ word: token.word, status: "correct" });
+      continue;
+    }
+    if (token.status === "missing") {
+      expectedTokens.push({ word: token.word, status: "missing" });
+      continue;
+    }
+    if (token.status === "wrong") {
+      userTokens.push({ word: token.word, status: "wrong" });
+      continue;
+    }
+    userTokens.push({ word: token.word, status: "extra" });
+  }
+
+  if (expectedTokens.length === 0) {
+    expectedTokens.push(
+      ...splitSentenceIntoWords(expectedText).map((word) => ({
+        word,
+        status: "neutral" as const,
+      }))
+    );
+  }
+  if (userTokens.length === 0) {
+    userTokens.push(
+      ...splitSentenceIntoWords(userText).map((word) => ({
+        word,
+        status: "neutral" as const,
+      }))
+    );
+  }
+
+  return { expectedTokens, userTokens };
 }
 
 // ---- Data fetching ----
@@ -243,6 +307,7 @@ export default function DictationPage({ params }: PageProps) {
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [learningDeletingId, setLearningDeletingId] = useState<string | null>(null);
+  const [learningUpdatingId, setLearningUpdatingId] = useState<string | null>(null);
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("saved");
   const [savedFilter, setSavedFilter] = useState<SavedFilter>("all");
@@ -253,6 +318,7 @@ export default function DictationPage({ params }: PageProps) {
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
   const [showPreviousScriptContext, setShowPreviousScriptContext] = useState(false);
+  const [showScriptContext, setShowScriptContext] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
@@ -735,6 +801,14 @@ export default function DictationPage({ params }: PageProps) {
     setScriptPopover(null);
   }, []);
 
+  useEffect(() => {
+    if (showScriptContext) return;
+    clearScriptSelection();
+    setScriptPopoverNoteMode(false);
+    setScriptShowAI(false);
+    setScriptAiReady(false);
+  }, [clearScriptSelection, showScriptContext]);
+
   // Intentionally ref-only updates: keep typing smooth without rerendering
   // the entire lesson screen on every note keystroke.
   const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -828,6 +902,59 @@ export default function DictationPage({ params }: PageProps) {
           })
           .finally(() => {
             setLearningDeletingId(null);
+          });
+      });
+    },
+    [requireAuth]
+  );
+
+  const updateLessonCapture = useCallback(
+    (itemId: string, values: { term: string; sentenceContext: string; note: string }) => {
+      const nextTerm = values.term.trim();
+      const nextSentenceContext = values.sentenceContext.trim();
+      requireAuth(() => {
+        setLearningUpdatingId(itemId);
+        setLearningError(null);
+        void fetch("/api/vocabulary", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: itemId,
+            term: nextTerm,
+            sentenceContext: nextSentenceContext,
+            note: values.note,
+          }),
+        })
+          .then(async (res) => {
+            const data = (await res.json().catch(() => ({}))) as {
+              error?: string;
+              item?: VocabularyItem;
+            };
+            if (!res.ok || !data.item) {
+              throw new Error(data.error || "Failed to update saved item");
+            }
+            const updatedItem = data.item;
+            setLearningItems((prev) =>
+              prev.map((item) =>
+                item.id === itemId
+                  ? {
+                      ...item,
+                      ...updatedItem,
+                      note: updatedItem.note ?? "",
+                    }
+                  : item
+              )
+            );
+          })
+          .catch((err: unknown) => {
+            const message =
+              err instanceof Error && err.message
+                ? err.message
+                : "Failed to update saved item. Please try again.";
+            setLearningError(message);
+          })
+          .finally(() => {
+            setLearningUpdatingId(null);
           });
       });
     },
@@ -951,6 +1078,7 @@ export default function DictationPage({ params }: PageProps) {
     setScriptAiReady(false);
     setScriptPopoverNoteMode(false);
     setShowPreviousScriptContext(false);
+    setShowScriptContext(true);
   }, [clearScriptSelection, videoId]);
 
   useEffect(() => {
@@ -1271,9 +1399,14 @@ export default function DictationPage({ params }: PageProps) {
                     className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700"
                   >
                     <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
-                    <p className="mt-0.5 text-sm text-slate-900 select-text cursor-text hover:bg-emerald-100/60 focus:bg-emerald-100/60 rounded px-1 -mx-1">
-                      {previousReview.expectedText}
-                    </p>
+                    <ComparedSentenceText
+                      tokens={buildComparedTokens({
+                        diff: previousReview.diff,
+                        expectedText: previousReview.expectedText,
+                        userText: previousReview.firstUserText,
+                      }).expectedTokens}
+                      tone="expected"
+                    />
                   </div>
                   <div
                     // Enables shared selection popover actions for review text (word/phrase/sentence/note/explain).
@@ -1282,10 +1415,45 @@ export default function DictationPage({ params }: PageProps) {
                     className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700"
                   >
                     <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
-                    <p className="mt-0.5 text-sm text-slate-800 select-text cursor-text hover:bg-slate-200/70 focus:bg-slate-200/70 rounded px-1 -mx-1">
-                      {previousReview.firstUserText || "(No answer provided)"}
-                    </p>
+                    <ComparedSentenceText
+                      tokens={buildComparedTokens({
+                        diff: previousReview.diff,
+                        expectedText: previousReview.expectedText,
+                        userText: previousReview.firstUserText,
+                      }).userTokens}
+                      tone="user"
+                      emptyFallback="(No answer provided)"
+                    />
                   </div>
+                  {(() => {
+                    const diffSummary = summarizeDiff(previousReview.diff);
+                    if (
+                      diffSummary.missing === 0 &&
+                      diffSummary.wrong === 0 &&
+                      diffSummary.extra === 0
+                    ) {
+                      return null;
+                    }
+                    return (
+                      <div className="flex flex-wrap gap-1">
+                        {diffSummary.missing > 0 && (
+                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700">
+                            Missing {diffSummary.missing}
+                          </span>
+                        )}
+                        {diffSummary.wrong > 0 && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                            Wrong {diffSummary.wrong}
+                          </span>
+                        )}
+                        {diffSummary.extra > 0 && (
+                          <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                            Extra {diffSummary.extra}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1400,7 +1568,9 @@ export default function DictationPage({ params }: PageProps) {
                         items={filteredSavedItems}
                         compact
                         deletingId={learningDeletingId}
+                        updatingId={learningUpdatingId}
                         onDelete={deleteLessonCapture}
+                        onUpdate={updateLessonCapture}
                       />
                     )}
                   </div>
@@ -1412,6 +1582,12 @@ export default function DictationPage({ params }: PageProps) {
                     <p className="text-[11px] text-slate-500">
                       Select text to save a word, phrase, or sentence.
                     </p>
+                    <button
+                      onClick={() => setShowScriptContext((prev) => !prev)}
+                      className="self-start rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      {showScriptContext ? "Hide script context" : "Show script context"}
+                    </button>
                     {currentSegIdx > 0 && (
                       <button
                         onClick={() => setShowPreviousScriptContext((prev) => !prev)}
@@ -1425,6 +1601,10 @@ export default function DictationPage({ params }: PageProps) {
 
                     {scriptContextSegments.length === 0 ? (
                       <p className="text-xs text-slate-500">Script is not available yet.</p>
+                    ) : !showScriptContext ? (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                        Script context is hidden. Use “Show script context” when you want to reveal it.
+                      </div>
                     ) : (
                       <div
                         ref={scriptTextContainerRef}
@@ -1614,13 +1794,36 @@ function LessonSavedItemsList({
   items,
   compact = false,
   deletingId,
+  updatingId,
   onDelete,
+  onUpdate,
 }: {
   items: LessonSavedItem[];
   compact?: boolean;
   deletingId: string | null;
+  updatingId: string | null;
   onDelete: (itemId: string) => void;
+  onUpdate: (itemId: string, values: { term: string; sentenceContext: string; note: string }) => void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTerm, setEditingTerm] = useState("");
+  const [editingSentenceContext, setEditingSentenceContext] = useState("");
+  const [editingNote, setEditingNote] = useState("");
+
+  const beginEdit = (item: LessonSavedItem) => {
+    setEditingId(item.id);
+    setEditingTerm(item.term);
+    setEditingSentenceContext(item.sentence_context);
+    setEditingNote(item.note ?? "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingTerm("");
+    setEditingSentenceContext("");
+    setEditingNote("");
+  };
+
   return (
     <div className={clsx("flex flex-col gap-2 max-h-52 overflow-y-auto pr-1", compact && "pr-0")}>
       {items.map((item) => (
@@ -1632,15 +1835,25 @@ function LessonSavedItemsList({
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>{item.term}</span>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
-                {item.type}
-              </span>
-              <button
-                onClick={() => onDelete(item.id)}
-                disabled={deletingId === item.id}
-                className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
+              <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>{item.term}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
+                  {item.type}
+                </span>
+                {item.type === "word" && (
+                  <button
+                    onClick={() => beginEdit(item)}
+                    disabled={updatingId === item.id || deletingId === item.id}
+                    className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
+                    title="Edit saved word"
+                  >
+                    Edit
+                  </button>
+                )}
+                <button
+                  onClick={() => onDelete(item.id)}
+                  disabled={deletingId === item.id || updatingId === item.id}
+                  className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
                 aria-label={
                   deletingId === item.id
                     ? `Removing saved item ${item.term}`
@@ -1688,8 +1901,92 @@ function LessonSavedItemsList({
           {item.note && (
             <span className={clsx("text-xs text-slate-700", compact && "text-[11px]")}>📝 {item.note}</span>
           )}
+          {editingId === item.id && (
+            <div className="mt-1 flex flex-col gap-1.5">
+              <input
+                value={editingTerm}
+                onChange={(e) => setEditingTerm(e.target.value)}
+                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
+                placeholder="Saved word"
+              />
+              <input
+                value={editingSentenceContext}
+                onChange={(e) => setEditingSentenceContext(e.target.value)}
+                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
+                placeholder="Sentence context"
+              />
+              <input
+                value={editingNote}
+                onChange={(e) => setEditingNote(e.target.value)}
+                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
+                placeholder="Optional note"
+              />
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    onUpdate(item.id, {
+                      term: editingTerm,
+                      sentenceContext: editingSentenceContext,
+                      note: editingNote,
+                    });
+                    cancelEdit();
+                  }}
+                  disabled={updatingId === item.id}
+                  className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-40"
+                >
+                  {updatingId === item.id ? "Saving…" : "Save"}
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  disabled={updatingId === item.id}
+                  className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </div>
+  );
+}
+
+function ComparedSentenceText({
+  tokens,
+  tone,
+  emptyFallback,
+}: {
+  tokens: ComparedToken[];
+  tone: "expected" | "user";
+  emptyFallback?: string;
+}) {
+  if (tokens.length === 0) {
+    return <p className="mt-0.5 text-sm text-slate-500">{emptyFallback ?? ""}</p>;
+  }
+
+  return (
+    <p
+      className={clsx(
+        "mt-0.5 text-sm select-text cursor-text rounded px-1 -mx-1",
+        tone === "expected"
+          ? "text-slate-900 hover:bg-emerald-100/60 focus:bg-emerald-100/60"
+          : "text-slate-800 hover:bg-slate-200/70 focus:bg-slate-200/70"
+      )}
+    >
+      {tokens.map((token, index) => (
+        <span
+          key={`${token.word}-${index}`}
+          className={clsx(
+            token.status === "missing" && "rounded bg-rose-100 px-0.5 text-rose-700",
+            token.status === "wrong" && "rounded bg-amber-100 px-0.5 text-amber-700",
+            token.status === "extra" && "rounded bg-violet-100 px-0.5 text-violet-700"
+          )}
+        >
+          {token.word}
+          {index < tokens.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </p>
   );
 }

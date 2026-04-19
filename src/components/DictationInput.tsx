@@ -254,6 +254,18 @@ function evaluateAnswerStatus(
   return ANSWER_RESULT_STATUS_CONFIG.try_again;
 }
 
+function summarizeDiff(diff: DiffToken[] | undefined) {
+  if (!diff || diff.length === 0) {
+    return { wrong: 0, missing: 0, extra: 0, extraWords: [] as string[] };
+  }
+  return {
+    wrong: diff.filter((token) => token.status === "wrong").length,
+    missing: diff.filter((token) => token.status === "missing").length,
+    extra: diff.filter((token) => token.status === "extra").length,
+    extraWords: diff.filter((token) => token.status === "extra").map((token) => token.word),
+  };
+}
+
 const INITIAL_FOCUS_DELAY_MS = 50;
 const FOCUS_DELAY_MS = 10;
 
@@ -271,6 +283,7 @@ export default function DictationInput({
   const inputRef = useRef<HTMLInputElement>(null);
   const maskedResult = useMemo(() => buildMaskedResult(diff), [diff]);
   const resultState = useMemo(() => evaluateAnswerStatus(diff, isCorrect), [diff, isCorrect]);
+  const diffSummary = useMemo(() => summarizeDiff(diff), [diff]);
 
   const focusInput = useCallback(
     (delay = FOCUS_DELAY_MS) => window.setTimeout(() => inputRef.current?.focus(), delay),
@@ -393,6 +406,40 @@ export default function DictationInput({
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Answer comparison</p>
           <p className="mt-1 text-sm font-medium text-amber-900">{maskedResult}</p>
+          {(diffSummary.missing > 0 || diffSummary.wrong > 0 || diffSummary.extra > 0) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {diffSummary.missing > 0 && (
+                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700">
+                  Missing {diffSummary.missing}
+                </span>
+              )}
+              {diffSummary.wrong > 0 && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                  Wrong {diffSummary.wrong}
+                </span>
+              )}
+              {diffSummary.extra > 0 && (
+                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                  Extra {diffSummary.extra}
+                </span>
+              )}
+            </div>
+          )}
+          {diffSummary.extraWords.length > 0 && (
+            <div className="mt-2">
+              <p className="text-[11px] font-medium text-violet-700">Extra words in your answer:</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {diffSummary.extraWords.map((word, index) => (
+                  <span
+                    key={`${word}-${index}`}
+                    className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700"
+                  >
+                    {word}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
