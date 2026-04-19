@@ -166,7 +166,7 @@ const SCRIPT_POPOVER_VERTICAL_OFFSET_PX = 12;
 const SCRIPT_POPOVER_MAX_WIDTH_PX = 320;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
-  standard: "max-w-3xl",
+  standard: "max-w-lg",
   large: "max-w-5xl",
 };
 
@@ -228,6 +228,7 @@ export default function DictationPage({ params }: PageProps) {
   const [learningNote, setLearningNote] = useState("");
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
+  const [learningDeletingId, setLearningDeletingId] = useState<string | null>(null);
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("saved");
   const [savedFilter, setSavedFilter] = useState<SavedFilter>("all");
@@ -503,6 +504,24 @@ export default function DictationPage({ params }: PageProps) {
         target instanceof HTMLTextAreaElement ||
         (target instanceof HTMLElement && target.isContentEditable);
 
+      if (e.shiftKey && e.code === "Space") {
+        e.preventDefault();
+        handleReplay();
+        return;
+      }
+
+      if (e.ctrlKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        handlePrevious();
+        return;
+      }
+
+      if (e.ctrlKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        handleSkip();
+        return;
+      }
+
       if (!isTypingTarget && e.key === "/") {
         e.preventDefault();
         setInputFocusSignal((v) => v + 1);
@@ -510,21 +529,6 @@ export default function DictationPage({ params }: PageProps) {
       }
 
       if (isTypingTarget) return;
-
-      if (e.shiftKey && e.code === "Space") {
-        e.preventDefault();
-        handleReplay();
-      }
-
-      if (e.ctrlKey && e.key === "ArrowLeft") {
-        e.preventDefault();
-        handlePrevious();
-      }
-
-      if (e.ctrlKey && e.key === "ArrowRight") {
-        e.preventDefault();
-        handleSkip();
-      }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -783,6 +787,36 @@ export default function DictationPage({ params }: PageProps) {
       saveLessonCaptureAtSegment(text, type, currentSegIdx, currentSegment.text);
     },
     [currentSegIdx, currentSegment, saveLessonCaptureAtSegment]
+  );
+
+  const deleteLessonCapture = useCallback(
+    (itemId: string) => {
+      requireAuth(() => {
+        setLearningDeletingId(itemId);
+        setLearningError(null);
+        void fetch(`/api/vocabulary?id=${encodeURIComponent(itemId)}`, {
+          method: "DELETE",
+        })
+          .then(async (res) => {
+            if (!res.ok) {
+              const data = (await res.json().catch(() => ({}))) as { error?: string };
+              throw new Error(data.error || "Failed to delete saved item");
+            }
+            setLearningItems((prev) => prev.filter((item) => item.id !== itemId));
+          })
+          .catch((err: unknown) => {
+            const message =
+              err instanceof Error && err.message
+                ? err.message
+                : "Failed to delete saved item. Please try again.";
+            setLearningError(message);
+          })
+          .finally(() => {
+            setLearningDeletingId(null);
+          });
+      });
+    },
+    [requireAuth]
   );
 
   const handleScriptWordSave = useCallback(
@@ -1197,7 +1231,13 @@ export default function DictationPage({ params }: PageProps) {
                 isCorrect={checkResult?.isCorrect ?? null}
                 wrongAttempts={wrongAttempts}
                 focusSignal={inputFocusSignal}
+                inputAriaDescribedBy="dictation-shortcuts-hint"
               />
+              <p id="dictation-shortcuts-hint" className="text-[11px] text-slate-500">
+                Shortcuts: Replay <span className="font-medium">Shift+Space</span>, Previous{" "}
+                <span className="font-medium">Ctrl+←</span>, Next{" "}
+                <span className="font-medium">Ctrl+→</span> (available while typing).
+              </p>
 
               {/* Review previous completed sentence only after advancing */}
               {shouldShowPreviousReview && previousReview && (
@@ -1426,7 +1466,12 @@ export default function DictationPage({ params }: PageProps) {
                           : `No ${getSavedFilterLabel(savedFilter).toLowerCase()} saved yet.`}
                       </p>
                     ) : (
-                      <LessonSavedItemsList items={filteredSavedItems} compact />
+                      <LessonSavedItemsList
+                        items={filteredSavedItems}
+                        compact
+                        deletingId={learningDeletingId}
+                        onDelete={deleteLessonCapture}
+                      />
                     )}
                   </div>
                 ) : (
@@ -1656,9 +1701,13 @@ function SentenceTokenSelector({
 function LessonSavedItemsList({
   items,
   compact = false,
+  deletingId,
+  onDelete,
 }: {
   items: LessonSavedItem[];
   compact?: boolean;
+  deletingId: string | null;
+  onDelete: (itemId: string) => void;
 }) {
   return (
     <div className={clsx("flex flex-col gap-2 max-h-52 overflow-y-auto pr-1", compact && "pr-0")}>
@@ -1672,9 +1721,51 @@ function LessonSavedItemsList({
         >
           <div className="flex items-center justify-between gap-2">
             <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>{item.term}</span>
-            <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
-              {item.type}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
+                {item.type}
+              </span>
+              <button
+                onClick={() => onDelete(item.id)}
+                disabled={deletingId === item.id}
+                className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
+                aria-label={
+                  deletingId === item.id
+                    ? `Removing saved item ${item.term}`
+                    : `Remove saved item ${item.term}`
+                }
+                aria-live="polite"
+                title="Remove saved item"
+              >
+                {deletingId === item.id ? (
+                  <svg
+                    viewBox="0 0 20 20"
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 mx-auto animate-spin"
+                  >
+                    <circle
+                      cx="10"
+                      cy="10"
+                      r="7"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeOpacity="0.25"
+                      strokeWidth="2"
+                    />
+                    <path d="M10 3a7 7 0 0 1 7 7" fill="none" stroke="currentColor" strokeWidth="2" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 20 20" aria-hidden="true" className="h-3.5 w-3.5 mx-auto">
+                    <path
+                      d="M6 6l8 8M14 6l-8 8"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
           <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>
             Sentence {item.segment_index + 1}

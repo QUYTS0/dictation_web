@@ -15,6 +15,7 @@ interface DictationInputProps {
   wrongAttempts?: number;
   /** Increment to request focus from keyboard shortcuts (e.g. "/") */
   focusSignal?: number;
+  inputAriaDescribedBy?: string;
 }
 
 /**
@@ -55,6 +56,7 @@ export default function DictationInput({
   isCorrect,
   wrongAttempts = 0,
   focusSignal = 0,
+  inputAriaDescribedBy,
 }: DictationInputProps) {
   const [typedWords, setTypedWords] = useState<string[]>([]);
   const [currentInput, setCurrentInput] = useState("");
@@ -331,6 +333,7 @@ export default function DictationInput({
               : `Type word ${currentWordIdx + 1}…`
           }
           className="w-full rounded-xl border border-indigo-300 px-4 py-2 text-base font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+          aria-describedby={inputAriaDescribedBy}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
