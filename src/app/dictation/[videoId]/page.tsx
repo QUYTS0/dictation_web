@@ -1835,25 +1835,27 @@ function LessonSavedItemsList({
           )}
         >
           <div className="flex items-center justify-between gap-2">
-              <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>{item.term}</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
-                  {item.type}
-                </span>
-                {item.type === "word" && (
-                  <button
-                    onClick={() => beginEdit(item)}
-                    disabled={updatingId === item.id || deletingId === item.id}
-                    className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
-                    title="Edit saved word"
-                  >
-                    Edit
-                  </button>
-                )}
+            <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>
+              {item.term}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
+                {item.type}
+              </span>
+              {item.type === "word" && (
                 <button
-                  onClick={() => onDelete(item.id)}
-                  disabled={deletingId === item.id || updatingId === item.id}
-                  className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
+                  onClick={() => beginEdit(item)}
+                  disabled={updatingId === item.id || deletingId === item.id}
+                  className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
+                  title="Edit saved word"
+                >
+                  Edit
+                </button>
+              )}
+              <button
+                onClick={() => onDelete(item.id)}
+                disabled={deletingId === item.id || updatingId === item.id}
+                className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
                 aria-label={
                   deletingId === item.id
                     ? `Removing saved item ${item.term}`
@@ -1907,7 +1909,7 @@ function LessonSavedItemsList({
                 value={editingTerm}
                 onChange={(e) => setEditingTerm(e.target.value)}
                 className="rounded border border-slate-300 px-2 py-1 text-[11px]"
-                placeholder="Saved word"
+                placeholder="Saved text"
               />
               <input
                 value={editingSentenceContext}
