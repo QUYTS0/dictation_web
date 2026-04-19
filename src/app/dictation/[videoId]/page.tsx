@@ -15,7 +15,6 @@ import VocabularySaveButton from "@/components/VocabularySaveButton";
 
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
-import { normalizeText } from "@/lib/utils/text";
 import { useAuth, useRequireAuth } from "@/context/auth";
 import type {
   TranscriptResponse,
@@ -215,9 +214,6 @@ export default function DictationPage({ params }: PageProps) {
   const [hintLevel, setHintLevel] = useState<HintLevel>(0);
   const [transcriptId, setTranscriptId] = useState<string | undefined>();
   const [isRegenerating, setIsRegenerating] = useState(false);
-  // Incremented on each wrong-answer retry to force-remount DictationInput
-  // (gives it fresh state without needing setState inside a useEffect).
-  const [dictationKey, setDictationKey] = useState(0);
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
@@ -411,7 +407,6 @@ export default function DictationPage({ params }: PageProps) {
           );
           // Pause video when the user submits incorrectly during playback
           ytPlayerRef.current?.pauseVideo();
-          setDictationKey((k) => k + 1); // remount DictationInput so state resets cleanly
           setUxState("paused_waiting_input");
         }
       } catch {
@@ -616,16 +611,6 @@ export default function DictationPage({ params }: PageProps) {
   }, [resumeState?.sessionId, sessionStore, user, videoId]);
 
   const currentSegment = segments[currentSegIdx];
-
-  // Precompute word counts for all segments once when segments load
-  const wordCounts = useMemo(
-    () =>
-      segments.map((seg) =>
-        normalizeText(seg.text, "relaxed").split(" ").filter(Boolean).length
-      ),
-    [segments]
-  );
-  const wordCount = wordCounts[currentSegIdx] ?? 0;
 
   // Derived flag: show dictation input during playback and while paused/checking
   const shouldShowInput =
@@ -1245,9 +1230,8 @@ export default function DictationPage({ params }: PageProps) {
           {shouldShowInput && (
             <div className="flex flex-col gap-4">
               <DictationInput
-                key={`${currentSegIdx}-${dictationKey}`}
+                key={`${currentSegIdx}`}
                 isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
-                wordCount={wordCount}
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}
