@@ -309,10 +309,7 @@ export default function DictationInput({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p id="dictation-input-instruction" className="text-slate-500 text-xs">
-          Type the full sentence, then press Enter or Check
-        </p>
-        <span className="text-xs text-slate-400">Case &amp; punctuation: ignored</span>
+    
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-3">

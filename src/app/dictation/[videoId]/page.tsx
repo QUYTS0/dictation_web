@@ -1245,11 +1245,7 @@ export default function DictationPage({ params }: PageProps) {
                 focusSignal={inputFocusSignal}
                 inputAriaDescribedBy="dictation-shortcuts-hint"
               />
-              <p id="dictation-shortcuts-hint" className="text-[11px] text-slate-500">
-                Shortcuts: Replay <span className="font-medium">Shift+Space</span>, Previous{" "}
-                <span className="font-medium">Shift+←</span>, Next{" "}
-                <span className="font-medium">Shift+→</span> (available while typing).
-              </p>
+
 
               {/* Review previous completed sentence only after advancing */}
               {shouldShowPreviousReview && previousReview && (
