@@ -2,6 +2,14 @@
 
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { clsx } from "clsx";
+import {
+  BadgeCheck,
+  MessageCircle,
+  PenLine,
+  RefreshCcw,
+  Smile,
+  type LucideIcon,
+} from "lucide-react";
 import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
@@ -18,7 +26,166 @@ interface DictationInputProps {
 
 // Compact mask keeps feedback non-spoiling while still showing where errors exist.
 const MASKED_WORD_PLACEHOLDER = "***";
-const ALMOST_RIGHT_THRESHOLD = 0.7;
+
+type AnswerResultStatusKey =
+  | "perfect"
+  | "very_close"
+  | "almost_right"
+  | "partly_correct"
+  | "try_again";
+
+type MatchingRules = {
+  exactNormalizedMatch?: boolean;
+  minSimilarity?: number;
+  maxSimilarity?: number;
+  maxMinorTokenIssues?: number;
+  maxMajorTokenIssues?: number;
+};
+
+type StatusConfig = {
+  key: AnswerResultStatusKey;
+  priority: number;
+  label: string;
+  shortLabel: string;
+  helperText: string;
+  tone: "success" | "encouraging" | "coach";
+  icon: "BadgeCheck" | "Smile" | "MessageCircle" | "PenLine" | "RefreshCcw";
+  iconStyle: string;
+  colorTokens: {
+    bg: string;
+    border: string;
+    text: string;
+    subtext: string;
+    icon: string;
+  };
+  matchingRules: MatchingRules;
+};
+
+export const ANSWER_RESULT_STATUS_CONFIG: Record<AnswerResultStatusKey, StatusConfig> = {
+  perfect: {
+    key: "perfect",
+    priority: 5,
+    label: "Perfect",
+    shortLabel: "Perfect",
+    helperText: "Excellent. Your sentence matches the answer.",
+    tone: "success",
+    icon: "BadgeCheck",
+    iconStyle: "friendly-success",
+    colorTokens: {
+      bg: "bg-green-50",
+      border: "border-green-200",
+      text: "text-green-800",
+      subtext: "text-green-700",
+      icon: "text-green-600",
+    },
+    matchingRules: {
+      exactNormalizedMatch: true,
+      minSimilarity: 1,
+      maxMinorTokenIssues: 0,
+      maxMajorTokenIssues: 0,
+    },
+  },
+  very_close: {
+    key: "very_close",
+    priority: 4,
+    label: "Very close",
+    shortLabel: "Very close",
+    helperText: "You’re very close. Fix the small highlighted part and check again.",
+    tone: "encouraging",
+    icon: "Smile",
+    iconStyle: "friendly-near-success",
+    colorTokens: {
+      bg: "bg-lime-50",
+      border: "border-lime-200",
+      text: "text-lime-800",
+      subtext: "text-lime-700",
+      icon: "text-lime-600",
+    },
+    matchingRules: {
+      exactNormalizedMatch: false,
+      minSimilarity: 0.9,
+      maxSimilarity: 0.9999,
+      maxMinorTokenIssues: 1,
+      maxMajorTokenIssues: 0,
+    },
+  },
+  almost_right: {
+    key: "almost_right",
+    priority: 3,
+    label: "That’s almost right",
+    shortLabel: "Almost right",
+    helperText: "Nice progress. You only need a little correction.",
+    tone: "encouraging",
+    icon: "MessageCircle",
+    iconStyle: "friendly-coach",
+    colorTokens: {
+      bg: "bg-amber-50",
+      border: "border-amber-200",
+      text: "text-amber-800",
+      subtext: "text-amber-700",
+      icon: "text-amber-600",
+    },
+    matchingRules: {
+      minSimilarity: 0.75,
+      maxSimilarity: 0.8999,
+      maxMinorTokenIssues: 2,
+      maxMajorTokenIssues: 1,
+    },
+  },
+  partly_correct: {
+    key: "partly_correct",
+    priority: 2,
+    label: "Partly correct",
+    shortLabel: "Partly correct",
+    helperText: "You’re on the right track. Listen again and adjust more words.",
+    tone: "coach",
+    icon: "PenLine",
+    iconStyle: "friendly-coach",
+    colorTokens: {
+      bg: "bg-sky-50",
+      border: "border-sky-200",
+      text: "text-sky-800",
+      subtext: "text-sky-700",
+      icon: "text-sky-600",
+    },
+    matchingRules: {
+      minSimilarity: 0.45,
+      maxSimilarity: 0.7499,
+    },
+  },
+  try_again: {
+    key: "try_again",
+    priority: 1,
+    label: "Try again",
+    shortLabel: "Try again",
+    helperText: "No worries. Replay and try one more time—you can do it.",
+    tone: "coach",
+    icon: "RefreshCcw",
+    iconStyle: "friendly-retry",
+    colorTokens: {
+      bg: "bg-rose-50",
+      border: "border-rose-200",
+      text: "text-rose-800",
+      subtext: "text-rose-700",
+      icon: "text-rose-600",
+    },
+    matchingRules: {},
+  },
+};
+
+export const ANSWER_RESULT_EVALUATION_CONFIG = {
+  statusOrder: ["perfect", "very_close", "almost_right", "partly_correct", "try_again"] as const,
+  minorTokenStatuses: ["wrong"] as const,
+  majorTokenStatuses: ["missing", "extra"] as const,
+} as const;
+
+const STATUS_ICON_COMPONENTS: Record<StatusConfig["icon"], LucideIcon> = {
+  BadgeCheck,
+  Smile,
+  MessageCircle,
+  PenLine,
+  RefreshCcw,
+};
 
 function buildMaskedResult(diff: DiffToken[] | undefined) {
   if (!diff || diff.length === 0) return "";
@@ -28,39 +195,62 @@ function buildMaskedResult(diff: DiffToken[] | undefined) {
     .join(" ");
 }
 
-function buildResultState(diff: DiffToken[] | undefined, isCorrect?: boolean | null) {
-  if (isCorrect === true) {
-    return {
-      icon: "✅",
-      title: "Good job",
-      description: "You got this sentence right.",
-      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
-    };
+function evaluateAnswerStatus(
+  diff: DiffToken[] | undefined,
+  isCorrect?: boolean | null
+): StatusConfig | null {
+  if (!diff || diff.length === 0) {
+    return isCorrect ? ANSWER_RESULT_STATUS_CONFIG.perfect : null;
   }
 
-  if (!diff || diff.length === 0) return null;
+  const totalComparable = diff.filter((token) => token.status !== "extra").length;
+  if (totalComparable === 0) return null;
 
-  const comparableTokens = diff.filter((token) => token.status !== "extra");
-  if (comparableTokens.length === 0) return null;
-
-  const correctCount = comparableTokens.filter((token) => token.status === "correct").length;
-  const correctnessRatio = correctCount / comparableTokens.length;
-
-  if (correctnessRatio >= ALMOST_RIGHT_THRESHOLD) {
-    return {
-      icon: "🟡",
-      title: "That’s almost right.",
-      description: "You’re close. Fix the highlighted parts and check again.",
-      className: "border-amber-200 bg-amber-50 text-amber-800",
-    };
-  }
-
-  return {
-    icon: "🔁",
-    title: "Try again",
-    description: "Listen once more and revise your sentence.",
-    className: "border-rose-200 bg-rose-50 text-rose-800",
+  const countByStatus = {
+    correct: diff.filter((token) => token.status === "correct").length,
+    wrong: diff.filter((token) => token.status === "wrong").length,
+    missing: diff.filter((token) => token.status === "missing").length,
+    extra: diff.filter((token) => token.status === "extra").length,
   };
+
+  const minorTokenIssues = ANSWER_RESULT_EVALUATION_CONFIG.minorTokenStatuses.reduce(
+    (sum, status) => sum + countByStatus[status],
+    0
+  );
+  const majorTokenIssues = ANSWER_RESULT_EVALUATION_CONFIG.majorTokenStatuses.reduce(
+    (sum, status) => sum + countByStatus[status],
+    0
+  );
+  const similarity = countByStatus.correct / totalComparable;
+  const exactNormalizedMatch =
+    isCorrect === true ||
+    (countByStatus.wrong === 0 && countByStatus.missing === 0 && countByStatus.extra === 0);
+
+  const matchesRules = (rules: MatchingRules) => {
+    if (
+      rules.exactNormalizedMatch !== undefined &&
+      exactNormalizedMatch !== rules.exactNormalizedMatch
+    ) {
+      return false;
+    }
+    if (rules.minSimilarity !== undefined && similarity < rules.minSimilarity) return false;
+    if (rules.maxSimilarity !== undefined && similarity > rules.maxSimilarity) return false;
+    if (rules.maxMinorTokenIssues !== undefined && minorTokenIssues > rules.maxMinorTokenIssues) {
+      return false;
+    }
+    if (rules.maxMajorTokenIssues !== undefined && majorTokenIssues > rules.maxMajorTokenIssues) {
+      return false;
+    }
+    return true;
+  };
+
+  for (const statusKey of ANSWER_RESULT_EVALUATION_CONFIG.statusOrder) {
+    const statusConfig = ANSWER_RESULT_STATUS_CONFIG[statusKey];
+    if (statusKey === "try_again") return statusConfig;
+    if (matchesRules(statusConfig.matchingRules)) return statusConfig;
+  }
+
+  return ANSWER_RESULT_STATUS_CONFIG.try_again;
 }
 
 const INITIAL_FOCUS_DELAY_MS = 50;
@@ -78,7 +268,7 @@ export default function DictationInput({
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const maskedResult = useMemo(() => buildMaskedResult(diff), [diff]);
-  const resultState = useMemo(() => buildResultState(diff, isCorrect), [diff, isCorrect]);
+  const resultState = useMemo(() => evaluateAnswerStatus(diff, isCorrect), [diff, isCorrect]);
 
   const focusInput = useCallback(
     (delay = FOCUS_DELAY_MS) => window.setTimeout(() => inputRef.current?.focus(), delay),
@@ -156,14 +346,28 @@ export default function DictationInput({
 
       {resultState && (
         <div
-          className={clsx("rounded-xl border p-3", resultState.className)}
+          className={clsx(
+            "rounded-xl border p-3",
+            resultState.colorTokens.bg,
+            resultState.colorTokens.border
+          )}
           role="status"
           aria-live="polite"
         >
-          <p className="text-xs font-semibold uppercase tracking-wide">
-            {resultState.icon} {resultState.title}
-          </p>
-          <p className="mt-0.5 text-xs">{resultState.description}</p>
+          <div className="flex items-start gap-2">
+            {(() => {
+              const ResultIcon = STATUS_ICON_COMPONENTS[resultState.icon];
+              return <ResultIcon className={clsx("mt-0.5 h-4 w-4 shrink-0", resultState.colorTokens.icon)} />;
+            })()}
+            <div>
+              <p className={clsx("text-xs font-semibold uppercase tracking-wide", resultState.colorTokens.text)}>
+                {resultState.label}
+              </p>
+              <p className={clsx("mt-0.5 text-xs", resultState.colorTokens.subtext)}>
+                {resultState.helperText}
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
