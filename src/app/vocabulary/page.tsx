@@ -11,6 +11,7 @@ export default function VocabularyPage() {
   const [items, setItems] = useState<VocabularyItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -23,6 +24,27 @@ export default function VocabularyPage() {
       .catch(() => setError("Failed to load vocabulary."))
       .finally(() => setLoadingItems(false));
   }, [user]);
+
+  const handleDelete = async (id: string) => {
+    setDeletingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/vocabulary?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Failed to delete vocabulary item.");
+      }
+      setItems((prev) => prev.filter((item) => item.id !== id));
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message ? err.message : "Failed to delete vocabulary item.";
+      setError(message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -60,7 +82,21 @@ export default function VocabularyPage() {
           <ul className="space-y-3">
             {items.map((item) => (
               <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-4">
-                <p className="font-semibold text-slate-800">{item.term}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-semibold text-slate-800">{item.term}</p>
+                  <button
+                    onClick={() => handleDelete(item.id)}
+                    disabled={deletingId === item.id}
+                    className="h-7 px-2 rounded-md border border-slate-300 text-xs text-slate-600 hover:text-red-600 hover:border-red-300 disabled:opacity-40"
+                    aria-label={
+                      deletingId === item.id
+                        ? `Removing vocabulary ${item.term}`
+                        : `Remove vocabulary ${item.term}`
+                    }
+                  >
+                    {deletingId === item.id ? "Removing…" : "Remove"}
+                  </button>
+                </div>
                 <p className="text-xs text-slate-500 mt-1">{item.sentence_context}</p>
                 {item.note && <p className="text-xs text-indigo-600 mt-1">Note: {item.note}</p>}
                 <Link

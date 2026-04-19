@@ -225,7 +225,6 @@ export default function DictationPage({ params }: PageProps) {
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [selectionRange, setSelectionRange] = useState<{ start: number; end: number } | null>(null);
   const [learningItems, setLearningItems] = useState<LessonSavedItem[]>([]);
-  const [learningNote, setLearningNote] = useState("");
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [learningDeletingId, setLearningDeletingId] = useState<string | null>(null);
@@ -242,6 +241,9 @@ export default function DictationPage({ params }: PageProps) {
   const [showVideo, setShowVideo] = useState(true);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
+  // Keep lesson note draft in a ref (not state) so typing in note inputs
+  // does not trigger full-page rerenders and input lag on heavy lesson UI.
+  const learningNoteDraftRef = useRef("");
   const learningNoteInputRef = useRef<HTMLInputElement>(null);
   const scriptNoteInputRef = useRef<HTMLInputElement>(null);
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
@@ -722,12 +724,27 @@ export default function DictationPage({ params }: PageProps) {
     setScriptPopover(null);
   }, []);
 
+  // Intentionally ref-only updates: keep typing smooth without rerendering
+  // the entire lesson screen on every note keystroke.
+  const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    learningNoteDraftRef.current = event.target.value;
+  }, []);
+
+  const clearLearningNoteInputs = useCallback(() => {
+    learningNoteDraftRef.current = "";
+    // Keep these in sync with every lesson note input that writes to learningNoteDraftRef.
+    // Maintenance warning: when adding a new lesson note input, search for
+    // "learningNoteDraftRef" and add that input ref here so resets stay consistent.
+    if (learningNoteInputRef.current) learningNoteInputRef.current.value = "";
+    if (scriptNoteInputRef.current) scriptNoteInputRef.current.value = "";
+  }, []);
+
   const saveLessonCaptureAtSegment = useCallback(
     (text: string, type: LessonItemType, segmentIndex: number, sentenceContext: string) => {
       const trimmedText = text.trim();
       if (!trimmedText) return;
 
-      const saveNote = learningNote.trim();
+      const saveNote = learningNoteDraftRef.current.trim();
       requireAuth(() => {
         setLearningSaving(true);
         setLearningError(null);
@@ -759,7 +776,7 @@ export default function DictationPage({ params }: PageProps) {
               next[existingIndex] = item;
               return next;
             });
-            setLearningNote("");
+            clearLearningNoteInputs();
             setShowLearningPanel(true);
             if (type !== "sentence") {
               setSelectionRange(null);
@@ -778,15 +795,7 @@ export default function DictationPage({ params }: PageProps) {
           });
       });
     },
-    [clearScriptSelection, learningNote, requireAuth, videoId]
-  );
-
-  const saveLessonCapture = useCallback(
-    (text: string, type: LessonItemType) => {
-      if (!currentSegment) return;
-      saveLessonCaptureAtSegment(text, type, currentSegIdx, currentSegment.text);
-    },
-    [currentSegIdx, currentSegment, saveLessonCaptureAtSegment]
+    [clearLearningNoteInputs, clearScriptSelection, requireAuth, videoId]
   );
 
   const deleteLessonCapture = useCallback(
@@ -817,6 +826,19 @@ export default function DictationPage({ params }: PageProps) {
       });
     },
     [requireAuth]
+  );
+
+  const savePreviousReviewCapture = useCallback(
+    (text: string, type: LessonItemType) => {
+      if (!previousReview) return;
+      saveLessonCaptureAtSegment(
+        text,
+        type,
+        previousReview.segmentIndex,
+        previousReview.expectedText
+      );
+    },
+    [previousReview, saveLessonCaptureAtSegment]
   );
 
   const handleScriptWordSave = useCallback(
@@ -918,10 +940,10 @@ export default function DictationPage({ params }: PageProps) {
 
   useEffect(() => {
     setSelectionRange(null);
-    setLearningNote("");
+    clearLearningNoteInputs();
     setReviewShowAI(false);
     setReviewAiReady(false);
-  }, [currentSegIdx, currentSegment?.text]);
+  }, [clearLearningNoteInputs, currentSegIdx, currentSegment?.text]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1254,11 +1276,15 @@ export default function DictationPage({ params }: PageProps) {
                     words={previousReviewWords}
                     selection={normalizedSelection}
                     onToggleSelection={toggleSelection}
-                    onSaveWord={(word) => saveLessonCapture(word, "word")}
+                    onSaveWord={(word) => savePreviousReviewCapture(word, "word")}
                   />
                   <div className="flex flex-wrap gap-2">
                     <button
-                      onClick={() => selectedText && selectedType && saveLessonCapture(selectedText, selectedType)}
+                      onClick={() =>
+                        selectedText &&
+                        selectedType &&
+                        savePreviousReviewCapture(selectedText, selectedType)
+                      }
                       disabled={learningSaving || !selectedText || !selectedType}
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
@@ -1290,8 +1316,7 @@ export default function DictationPage({ params }: PageProps) {
 
                   <input
                     ref={learningNoteInputRef}
-                    value={learningNote}
-                    onChange={(e) => setLearningNote(e.target.value)}
+                    onChange={handleLearningNoteChange}
                     placeholder="Optional note for your next saved item"
                     className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                   />
@@ -1341,7 +1366,7 @@ export default function DictationPage({ params }: PageProps) {
                 <div className="flex flex-wrap gap-2">
                   {selectedText && selectedType && (
                     <button
-                      onClick={() => saveLessonCapture(selectedText, selectedType)}
+                      onClick={() => savePreviousReviewCapture(selectedText, selectedType)}
                       disabled={!selectedType}
                       className="text-xs px-3 py-1 rounded-full border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                     >
@@ -1525,8 +1550,7 @@ export default function DictationPage({ params }: PageProps) {
 
                     <input
                       ref={scriptNoteInputRef}
-                      value={learningNote}
-                      onChange={(e) => setLearningNote(e.target.value)}
+                      onChange={handleLearningNoteChange}
                       placeholder="Optional note for your next saved item"
                       className="rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none"
                     />
