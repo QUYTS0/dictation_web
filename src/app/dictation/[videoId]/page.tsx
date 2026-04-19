@@ -252,6 +252,7 @@ export default function DictationPage({ params }: PageProps) {
   // callbacks that fire after the user has already submitted early and advanced.
   const currentSegIdxRef = useRef(0);
   const resumeLoadedRef = useRef(false);
+  const previousShowVideoRef = useRef(showVideo);
 
   useEffect(() => {
     resumeLoadedRef.current = false;
@@ -507,13 +508,13 @@ export default function DictationPage({ params }: PageProps) {
         return;
       }
 
-      if (e.ctrlKey && e.key === "ArrowLeft") {
+      if (e.shiftKey && e.key === "ArrowLeft") {
         e.preventDefault();
         handlePrevious();
         return;
       }
 
-      if (e.ctrlKey && e.key === "ArrowRight") {
+      if (e.shiftKey && e.key === "ArrowRight") {
         e.preventDefault();
         handleSkip();
         return;
@@ -668,13 +669,9 @@ export default function DictationPage({ params }: PageProps) {
     uxState !== "loading_transcript" &&
     uxState !== "transcript_processing" &&
     uxState !== "transcript_failed";
-  const videoBlock = !showVideo ? (
-    <div className="aspect-video rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500">
-      Video hidden - use “Show video” to display it again.
-    </div>
-  ) : (
-    shouldRenderVideoPlayer && (
-      <div className={clsx("mx-auto w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[videoSizeMode])}>
+  const videoBlock = shouldRenderVideoPlayer && (
+    <div className={clsx("mx-auto w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[videoSizeMode])}>
+      <div className={clsx(!showVideo && "h-0 overflow-hidden pointer-events-none")} aria-hidden={!showVideo}>
         <YouTubePlayer
           ref={ytPlayerRef}
           videoId={videoId}
@@ -682,8 +679,42 @@ export default function DictationPage({ params }: PageProps) {
           onSegmentEnd={handleSegmentEnd}
         />
       </div>
-    )
+      {!showVideo && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-slate-700">Audio focus mode</p>
+            <p className="text-xs text-slate-500 truncate">
+              Video is hidden. Playback and transport controls remain active.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowVideo(true)}
+            className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Show video
+          </button>
+        </div>
+      )}
+    </div>
   );
+
+  useEffect(() => {
+    const wasShowingVideo = previousShowVideoRef.current;
+    if (!wasShowingVideo && showVideo) {
+      ytPlayerRef.current?.seekTo(playerStore.currentTimeSec, uxState === "playing");
+    }
+    previousShowVideoRef.current = showVideo;
+  }, [showVideo, playerStore.currentTimeSec, uxState]);
+
+  useEffect(() => {
+    if (!showLearningPanel || rightPanelTab !== "script") return;
+    const container = scriptTextContainerRef.current;
+    if (!container) return;
+    const currentCard = container.querySelector<HTMLElement>(
+      `[data-script-segment-index="${currentSegIdx}"]`
+    );
+    currentCard?.scrollIntoView({ block: "nearest" });
+  }, [currentSegIdx, rightPanelTab, showLearningPanel]);
 
   const toggleSelection = useCallback(
     (idx: number) => {
@@ -1043,7 +1074,7 @@ export default function DictationPage({ params }: PageProps) {
                 onClick={() => setShowVideo((v) => !v)}
                 className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
               >
-                {showVideo ? "Hide video" : "Show video"}
+                {showVideo ? "Audio focus mode" : "Exit audio focus"}
               </button>
             </div>
           </div>
@@ -1069,9 +1100,9 @@ export default function DictationPage({ params }: PageProps) {
                 onClick={handlePrevious}
                 disabled={currentSegIdx === 0}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Previous sentence (Ctrl+←)"
+                title="Previous sentence (Shift+←)"
               >
-                ⏮ Prev (Ctrl+←)
+                ⏮ Prev (Shift+←)
               </button>
               <button
                 onClick={handleReplay}
@@ -1084,9 +1115,9 @@ export default function DictationPage({ params }: PageProps) {
                 onClick={handleSkip}
                 disabled={currentSegIdx >= segments.length - 1}
                 className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Next sentence (Ctrl+→)"
+                title="Next sentence (Shift+→)"
               >
-                ⏭ Next (Ctrl+→)
+                ⏭ Next (Shift+→)
               </button>
             </div>
           )}
@@ -1241,20 +1272,29 @@ export default function DictationPage({ params }: PageProps) {
               />
               <p id="dictation-shortcuts-hint" className="text-[11px] text-slate-500">
                 Shortcuts: Replay <span className="font-medium">Shift+Space</span>, Previous{" "}
-                <span className="font-medium">Ctrl+←</span>, Next{" "}
-                <span className="font-medium">Ctrl+→</span> (available while typing).
+                <span className="font-medium">Shift+←</span>, Next{" "}
+                <span className="font-medium">Shift+→</span> (available while typing).
               </p>
 
               {/* Review previous completed sentence only after advancing */}
               {shouldShowPreviousReview && previousReview && (
-                <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-3">
-                  <p className="text-sm font-semibold text-slate-700">
-                    Review previous sentence (#{previousReview.segmentIndex + 1})
-                  </p>
-                  <p className="text-sm text-slate-800">{previousReview.expectedText}</p>
-                  <p className="text-xs text-slate-500">
-                    You typed: <span className="text-slate-700">{previousReview.userText || "—"}</span>
-                  </p>
+                <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Review previous sentence
+                    </p>
+                    <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                      #{previousReview.segmentIndex + 1}
+                    </span>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                    <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
+                    <p className="mt-0.5 text-sm text-slate-800">{previousReview.expectedText}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">
+                    <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
+                    <p className="mt-0.5 text-sm text-slate-700">{previousReview.userText || "—"}</p>
+                  </div>
                   <DiffTokenChips diff={previousReview.diff} />
                   <SentenceTokenSelector
                     words={previousReviewWords}
@@ -1502,9 +1542,31 @@ export default function DictationPage({ params }: PageProps) {
                       >
                         {segments.map((segment, segIdx) => {
                           const words = splitSentenceIntoWords(segment.text);
+                          const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
+                          const isPreviousScriptSentence = segment.segmentIndex === currentSegIdx - 1;
                           return (
-                            <div key={segment.segmentIndex} className="rounded-lg border border-slate-200 p-3 bg-slate-50">
-                              <p className="text-xs font-semibold text-slate-500 mb-1">Sentence {segment.segmentIndex + 1}</p>
+                            <div
+                              key={segment.segmentIndex}
+                              data-script-segment-index={segment.segmentIndex}
+                              className={clsx(
+                                "rounded-lg border p-3 transition-colors",
+                                isCurrentScriptSentence
+                                  ? "border-indigo-300 bg-indigo-50"
+                                  : isPreviousScriptSentence
+                                  ? "border-emerald-200 bg-emerald-50/70"
+                                  : "border-slate-200 bg-slate-50"
+                              )}
+                            >
+                              <p
+                                className={clsx(
+                                  "text-xs font-semibold mb-1",
+                                  isCurrentScriptSentence ? "text-indigo-700" : "text-slate-500"
+                                )}
+                              >
+                                {isCurrentScriptSentence
+                                  ? `Current sentence · #${segment.segmentIndex + 1}`
+                                  : `Sentence ${segment.segmentIndex + 1}`}
+                              </p>
                               <div data-script-array-index={segIdx} className="text-sm leading-7 text-slate-700">
                                 {words.map((word, wordIdx) => (
                                   <span
