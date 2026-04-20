@@ -23,6 +23,7 @@ interface DictationInputProps {
   /** Increment to request focus from keyboard shortcuts (e.g. "/") */
   focusSignal?: number;
   inputAriaDescribedBy?: string;
+  extraWordCount?: number;
 }
 
 // Compact mask keeps feedback non-spoiling while still showing where errors exist.
@@ -256,13 +257,12 @@ function evaluateAnswerStatus(
 
 function summarizeDiff(diff: DiffToken[] | undefined) {
   if (!diff || diff.length === 0) {
-    return { wrong: 0, missing: 0, extra: 0, extraWords: [] as string[] };
+    return { wrong: 0, missing: 0, extra: 0 };
   }
   return {
     wrong: diff.filter((token) => token.status === "wrong").length,
     missing: diff.filter((token) => token.status === "missing").length,
     extra: diff.filter((token) => token.status === "extra").length,
-    extraWords: diff.filter((token) => token.status === "extra").map((token) => token.word),
   };
 }
 
@@ -278,6 +278,7 @@ export default function DictationInput({
   wrongAttempts = 0,
   focusSignal = 0,
   inputAriaDescribedBy,
+  extraWordCount = 0,
 }: DictationInputProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +319,7 @@ export default function DictationInput({
   const isEmpty = !inputText.trim();
   const isButtonDisabled = !isEnabled || isEmpty || isChecking;
   const hasResult = !isChecking && (isCorrect === true || isCorrect === false);
+  const shouldShowExtraWordCount = extraWordCount > 0;
 
   return (
     <div className="flex flex-col gap-3">
@@ -406,38 +408,18 @@ export default function DictationInput({
         >
           <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Answer comparison</p>
           <p className="mt-1 text-sm font-medium text-amber-900">{maskedResult}</p>
-          {(diffSummary.missing > 0 || diffSummary.wrong > 0 || diffSummary.extra > 0) && (
+          {(diffSummary.wrong > 0 || shouldShowExtraWordCount) && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {diffSummary.missing > 0 && (
-                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700">
-                  Missing {diffSummary.missing}
-                </span>
-              )}
               {diffSummary.wrong > 0 && (
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                   Wrong {diffSummary.wrong}
                 </span>
               )}
-              {diffSummary.extra > 0 && (
+              {shouldShowExtraWordCount && (
                 <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                  Extra {diffSummary.extra}
+                  Extra {extraWordCount}
                 </span>
               )}
-            </div>
-          )}
-          {diffSummary.extraWords.length > 0 && (
-            <div className="mt-2">
-              <p className="text-[11px] font-medium text-violet-700">Extra words in your answer:</p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {diffSummary.extraWords.map((word, index) => (
-                  <span
-                    key={`${word}-${index}`}
-                    className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700"
-                  >
-                    {word}
-                  </span>
-                ))}
-              </div>
             </div>
           )}
         </div>

@@ -1371,6 +1371,15 @@ export default function DictationPage({ params }: PageProps) {
                 onSubmit={handleAnswerSubmit}
                 diff={checkResult?.diff}
                 isCorrect={checkResult?.isCorrect ?? null}
+                extraWordCount={
+                  checkResult
+                    ? Math.max(
+                        splitSentenceIntoWords(checkResult.normalizedUser).length -
+                          splitSentenceIntoWords(checkResult.normalizedExpected).length,
+                        0
+                      )
+                    : 0
+                }
                 wrongAttempts={wrongAttempts}
                 focusSignal={inputFocusSignal}
                 inputAriaDescribedBy="dictation-shortcuts-hint"
@@ -1427,28 +1436,27 @@ export default function DictationPage({ params }: PageProps) {
                   </div>
                   {(() => {
                     const diffSummary = summarizeDiff(previousReview.diff);
+                    const previousReviewExtraWordCount = Math.max(
+                      splitSentenceIntoWords(previousReview.firstUserText).length -
+                        splitSentenceIntoWords(previousReview.expectedText).length,
+                      0
+                    );
                     if (
-                      diffSummary.missing === 0 &&
                       diffSummary.wrong === 0 &&
-                      diffSummary.extra === 0
+                      previousReviewExtraWordCount === 0
                     ) {
                       return null;
                     }
                     return (
                       <div className="flex flex-wrap gap-1">
-                        {diffSummary.missing > 0 && (
-                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700">
-                            Missing {diffSummary.missing}
-                          </span>
-                        )}
                         {diffSummary.wrong > 0 && (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                             Wrong {diffSummary.wrong}
                           </span>
                         )}
-                        {diffSummary.extra > 0 && (
+                        {previousReviewExtraWordCount > 0 && (
                           <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                            Extra {diffSummary.extra}
+                            Extra {previousReviewExtraWordCount}
                           </span>
                         )}
                       </div>
