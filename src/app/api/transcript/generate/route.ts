@@ -37,60 +37,98 @@ export async function POST(request: NextRequest) {
       .from("videos")
       .upsert({ youtube_video_id: videoId }, { onConflict: "youtube_video_id" });
 
-    // If force=true, mark all existing transcripts as failed so we always do a fresh fetch
-    if (force) {
-      await supabase
+    const { data: existingTranscripts, error: existingTranscriptsError } = await supabase
+      .from("transcripts")
+      .select("id, status, updated_at, created_at")
+      .eq("youtube_video_id", videoId)
+      .eq("language", language)
+      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    if (existingTranscriptsError) {
+      console.error("[transcript generate] existing transcript query error:", existingTranscriptsError);
+      return NextResponse.json({ error: "Failed to inspect transcript state" }, { status: 500 });
+    }
+
+    const canonicalTranscript = existingTranscripts?.[0] ?? null;
+    const duplicateTranscriptIds = (existingTranscripts ?? []).slice(1).map((item) => item.id);
+
+    if (duplicateTranscriptIds.length > 0) {
+      const { error: duplicateDeleteError } = await supabase
         .from("transcripts")
-        .update({ status: "failed" })
-        .eq("youtube_video_id", videoId)
-        .eq("language", language)
-        .in("status", ["ready", "processing"]);
+        .delete()
+        .in("id", duplicateTranscriptIds);
+      if (duplicateDeleteError) {
+        console.error("[transcript generate] duplicate cleanup error:", duplicateDeleteError);
+        return NextResponse.json({ error: "Failed to cleanup duplicate transcripts" }, { status: 500 });
+      }
     }
 
-    // Check if there is already a READY transcript for this video (cached result)
-    const { data: existing } = await supabase
-      .from("transcripts")
-      .select("id, status")
-      .eq("youtube_video_id", videoId)
-      .eq("language", language)
-      .eq("status", "ready")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existing) {
-      console.log(`[transcript generate] ready transcript ${existing.id} already exists, skipping re-fetch`);
-      return NextResponse.json({ transcriptId: existing.id, status: existing.status });
+    if (!force && canonicalTranscript?.status === "ready") {
+      const { count: segmentCount, error: segmentCountError } = await supabase
+        .from("transcript_segments")
+        .select("id", { count: "exact", head: true })
+        .eq("transcript_id", canonicalTranscript.id);
+      if (segmentCountError) {
+        console.error("[transcript generate] ready transcript segment count error:", segmentCountError);
+        return NextResponse.json({ error: "Failed to validate ready transcript" }, { status: 500 });
+      }
+      if ((segmentCount ?? 0) > 0) {
+        console.log(
+          `[transcript generate] reusing ready transcript ${canonicalTranscript.id} (segments=${segmentCount})`
+        );
+        return NextResponse.json({ transcriptId: canonicalTranscript.id, status: canonicalTranscript.status });
+      }
     }
 
-    // Mark any previous stale "processing" transcripts for this video as failed
-    // so they don't block future attempts
-    await supabase
-      .from("transcripts")
-      .update({ status: "failed" })
-      .eq("youtube_video_id", videoId)
-      .eq("language", language)
-      .eq("status", "processing");
+    let transcriptId: string | null = null;
+    if (canonicalTranscript) {
+      const { error: canonicalUpdateError } = await supabase
+        .from("transcripts")
+        .update({
+          status: "processing",
+          source: segments ? "manual" : "cache",
+          full_text: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", canonicalTranscript.id);
+      if (canonicalUpdateError) {
+        console.error("[transcript generate] canonical transcript update error:", canonicalUpdateError);
+        return NextResponse.json({ error: "Failed to refresh transcript record" }, { status: 500 });
+      }
 
-    // Create a transcript record in "processing" state
-    const { data: transcript, error: tError } = await supabase
-      .from("transcripts")
-      .insert({
-        youtube_video_id: videoId,
-        language,
-        source: segments ? "manual" : "cache",
-        status: "processing",
-        version: 1,
-      })
-      .select("id")
-      .single();
+      const { error: previousSegmentDeleteError } = await supabase
+        .from("transcript_segments")
+        .delete()
+        .eq("transcript_id", canonicalTranscript.id);
+      if (previousSegmentDeleteError) {
+        console.error("[transcript generate] previous segment cleanup error:", previousSegmentDeleteError);
+        return NextResponse.json({ error: "Failed to reset transcript segments" }, { status: 500 });
+      }
+      transcriptId = canonicalTranscript.id;
+    } else {
+      const { data: transcript, error: tError } = await supabase
+        .from("transcripts")
+        .insert({
+          youtube_video_id: videoId,
+          language,
+          source: segments ? "manual" : "cache",
+          status: "processing",
+          version: 1,
+        })
+        .select("id")
+        .single();
 
-    if (tError || !transcript) {
-      console.error("[transcript generate] insert error:", tError);
-      return NextResponse.json({ error: "Failed to create transcript record" }, { status: 500 });
+      if (tError || !transcript) {
+        console.error("[transcript generate] insert error:", tError);
+        return NextResponse.json({ error: "Failed to create transcript record" }, { status: 500 });
+      }
+      transcriptId = transcript.id;
     }
 
-    const transcriptId = transcript.id;
+    if (!transcriptId) {
+      return NextResponse.json({ error: "Failed to initialize transcript" }, { status: 500 });
+    }
     console.log(`[transcript generate] created transcript ${transcriptId} for video ${videoId}`);
 
     // If segments were provided directly (e.g., from caption API), store them immediately

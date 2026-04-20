@@ -7,6 +7,7 @@ import type { TranscriptSegment } from "@/lib/types";
 export interface YouTubePlayerHandle {
   playSegment: (segIdx: number) => void;
   pauseVideo: () => void;
+  seekTo: (timeSec: number, autoPlay?: boolean) => void;
 }
 
 interface YouTubePlayerProps {
@@ -169,9 +170,16 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       []
     );
 
+    const seekToFn = useCallback((timeSec: number, autoPlay = false) => {
+      if (!playerRef.current || !playerReadyRef.current) return;
+      playerRef.current.seekTo(timeSec, true);
+      if (autoPlay) playerRef.current.playVideo();
+    }, []);
+
     useImperativeHandle(ref, () => ({
       playSegment: playSegmentFn,
       pauseVideo: pauseVideoFn,
+      seekTo: seekToFn,
     }));
 
     return (

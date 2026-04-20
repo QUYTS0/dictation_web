@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { clsx } from "clsx";
 import type { AIExplainResponse } from "@/lib/types";
 
@@ -10,6 +10,8 @@ interface AIExplainerProps {
   attemptId?: string;
   /** Pre-loaded explanation (e.g., from cache) */
   explanation?: AIExplainResponse | null;
+  buttonLabel?: string;
+  onExplanationReady?: (ready: boolean) => void;
 }
 
 export default function AIExplainer({
@@ -17,12 +19,18 @@ export default function AIExplainer({
   userText,
   attemptId,
   explanation: initialExplanation = null,
+  buttonLabel = "Explain my mistake",
+  onExplanationReady,
 }: AIExplainerProps) {
   const [explanation, setExplanation] = useState<AIExplainResponse | null>(
     initialExplanation
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onExplanationReady?.(Boolean(explanation));
+  }, [explanation, onExplanationReady]);
 
   const handleExplain = async () => {
     if (explanation || loading) return;
@@ -67,7 +75,7 @@ export default function AIExplainer({
                 : "bg-violet-200 text-violet-800 hover:bg-violet-300"
             )}
           >
-            {loading ? "Thinking…" : "Explain my mistake"}
+            {loading ? "Thinking…" : buttonLabel}
           </button>
         )}
       </div>

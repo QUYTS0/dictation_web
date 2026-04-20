@@ -1,283 +1,430 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { clsx } from "clsx";
+import {
+  BadgeCheck,
+  MessageCircle,
+  PenLine,
+  RefreshCcw,
+  Smile,
+  type LucideIcon,
+} from "lucide-react";
 import type { DiffToken } from "@/lib/types";
 
 interface DictationInputProps {
   isEnabled: boolean;
-  /** Total number of expected words — determines how many blank slots to show */
-  wordCount: number;
+  isChecking?: boolean;
   onSubmit: (text: string) => void;
   diff?: DiffToken[];
   isCorrect?: boolean | null;
   /** Number of wrong attempts for this segment */
   wrongAttempts?: number;
+  /** Increment to request focus from keyboard shortcuts (e.g. "/") */
+  focusSignal?: number;
+  inputAriaDescribedBy?: string;
+  extraWordCount?: number;
 }
 
-/**
- * Extracts expected-position correctness from an LCS diff.
- * Returns an array of length ~wordCount where each entry is the matched
- * word string (if correct at that expected position) or null (missing/wrong).
- * "extra" tokens (user-only) are skipped — they have no expected slot.
- */
-function buildCorrectSlots(diff: DiffToken[]): (string | null)[] {
-  const result: (string | null)[] = [];
-  for (const token of diff) {
-    if (token.status === "correct") {
-      result.push(token.word);
-    } else if (token.status === "missing" || token.status === "wrong") {
-      result.push(null); // expected slot that wasn't correctly matched
-    }
-    // skip "extra" tokens — they are user-only tokens with no expected slot
-  }
-  return result;
+// Compact mask keeps feedback non-spoiling while still showing where errors exist.
+const MASKED_WORD_PLACEHOLDER = "***";
+
+type AnswerResultStatusKey =
+  | "perfect"
+  | "very_close"
+  | "almost_right"
+  | "partly_correct"
+  | "try_again";
+
+type MatchingRules = {
+  exactNormalizedMatch?: boolean;
+  minSimilarity?: number;
+  maxSimilarity?: number;
+  maxMinorTokenIssues?: number;
+  maxMajorTokenIssues?: number;
+};
+
+type StatusConfig = {
+  key: AnswerResultStatusKey;
+  priority: number;
+  label: string;
+  shortLabel: string;
+  helperText: string;
+  tone: "success" | "encouraging" | "coach";
+  icon: "BadgeCheck" | "Smile" | "MessageCircle" | "PenLine" | "RefreshCcw";
+  iconStyle: string;
+  colorTokens: {
+    bg: string;
+    border: string;
+    text: string;
+    subtext: string;
+    icon: string;
+  };
+  matchingRules: MatchingRules;
+};
+
+export const ANSWER_RESULT_STATUS_CONFIG: Record<AnswerResultStatusKey, StatusConfig> = {
+  perfect: {
+    key: "perfect",
+    priority: 5,
+    label: "Perfect",
+    shortLabel: "Perfect",
+    helperText: "Excellent. Your sentence matches the answer.",
+    tone: "success",
+    icon: "BadgeCheck",
+    iconStyle: "friendly-success",
+    colorTokens: {
+      bg: "bg-green-50",
+      border: "border-green-200",
+      text: "text-green-800",
+      subtext: "text-green-700",
+      icon: "text-green-600",
+    },
+    matchingRules: {
+      exactNormalizedMatch: true,
+      minSimilarity: 1,
+      maxMinorTokenIssues: 0,
+      maxMajorTokenIssues: 0,
+    },
+  },
+  very_close: {
+    key: "very_close",
+    priority: 4,
+    label: "Very close",
+    shortLabel: "Very close",
+    helperText: "You’re very close. Fix the small highlighted part and check again.",
+    tone: "encouraging",
+    icon: "Smile",
+    iconStyle: "friendly-near-success",
+    colorTokens: {
+      bg: "bg-lime-50",
+      border: "border-lime-200",
+      text: "text-lime-800",
+      subtext: "text-lime-700",
+      icon: "text-lime-600",
+    },
+    matchingRules: {
+      exactNormalizedMatch: false,
+      minSimilarity: 0.9,
+      maxSimilarity: 0.9999,
+      maxMinorTokenIssues: 1,
+      maxMajorTokenIssues: 0,
+    },
+  },
+  almost_right: {
+    key: "almost_right",
+    priority: 3,
+    label: "That’s almost right",
+    shortLabel: "Almost right",
+    helperText: "Nice progress. You only need a little correction.",
+    tone: "encouraging",
+    icon: "MessageCircle",
+    iconStyle: "friendly-coach",
+    colorTokens: {
+      bg: "bg-amber-50",
+      border: "border-amber-200",
+      text: "text-amber-800",
+      subtext: "text-amber-700",
+      icon: "text-amber-600",
+    },
+    matchingRules: {
+      minSimilarity: 0.75,
+      maxSimilarity: 0.8999,
+      maxMinorTokenIssues: 2,
+      maxMajorTokenIssues: 1,
+    },
+  },
+  partly_correct: {
+    key: "partly_correct",
+    priority: 2,
+    label: "Partly correct",
+    shortLabel: "Partly correct",
+    helperText: "You’re on the right track. Listen again and adjust more words.",
+    tone: "coach",
+    icon: "PenLine",
+    iconStyle: "friendly-coach",
+    colorTokens: {
+      bg: "bg-sky-50",
+      border: "border-sky-200",
+      text: "text-sky-800",
+      subtext: "text-sky-700",
+      icon: "text-sky-600",
+    },
+    matchingRules: {
+      minSimilarity: 0.45,
+      maxSimilarity: 0.7499,
+    },
+  },
+  try_again: {
+    key: "try_again",
+    priority: 1,
+    label: "Try again",
+    shortLabel: "Try again",
+    helperText: "No worries. Replay and try one more time—you can do it.",
+    tone: "coach",
+    icon: "RefreshCcw",
+    iconStyle: "friendly-retry",
+    colorTokens: {
+      bg: "bg-rose-50",
+      border: "border-rose-200",
+      text: "text-rose-800",
+      subtext: "text-rose-700",
+      icon: "text-rose-600",
+    },
+    matchingRules: {},
+  },
+};
+
+export const ANSWER_RESULT_EVALUATION_CONFIG = {
+  statusOrder: ["perfect", "very_close", "almost_right", "partly_correct", "try_again"] as const,
+  minorTokenStatuses: ["wrong"] as const,
+  majorTokenStatuses: ["missing", "extra"] as const,
+} as const;
+
+const STATUS_ICON_COMPONENTS: Record<StatusConfig["icon"], LucideIcon> = {
+  BadgeCheck,
+  Smile,
+  MessageCircle,
+  PenLine,
+  RefreshCcw,
+};
+
+function buildMaskedResult(diff: DiffToken[] | undefined) {
+  if (!diff || diff.length === 0) return "";
+  return diff
+    .filter((token) => token.status !== "extra")
+    .map((token) => (token.status === "correct" ? token.word : MASKED_WORD_PLACEHOLDER))
+    .join(" ");
 }
+
+function evaluateAnswerStatus(
+  diff: DiffToken[] | undefined,
+  isCorrect?: boolean | null
+): StatusConfig | null {
+  if (!diff || diff.length === 0) {
+    return isCorrect ? ANSWER_RESULT_STATUS_CONFIG.perfect : null;
+  }
+
+  const totalComparable = diff.filter((token) => token.status !== "extra").length;
+  if (totalComparable === 0) return null;
+
+  const countByStatus = {
+    correct: diff.filter((token) => token.status === "correct").length,
+    wrong: diff.filter((token) => token.status === "wrong").length,
+    missing: diff.filter((token) => token.status === "missing").length,
+    extra: diff.filter((token) => token.status === "extra").length,
+  };
+
+  const minorTokenIssues = ANSWER_RESULT_EVALUATION_CONFIG.minorTokenStatuses.reduce(
+    (sum, status) => sum + countByStatus[status],
+    0
+  );
+  const majorTokenIssues = ANSWER_RESULT_EVALUATION_CONFIG.majorTokenStatuses.reduce(
+    (sum, status) => sum + countByStatus[status],
+    0
+  );
+  const similarity = countByStatus.correct / totalComparable;
+  const exactNormalizedMatch =
+    isCorrect === true ||
+    (countByStatus.wrong === 0 && countByStatus.missing === 0 && countByStatus.extra === 0);
+
+  const matchesRules = (rules: MatchingRules) => {
+    if (
+      rules.exactNormalizedMatch !== undefined &&
+      exactNormalizedMatch !== rules.exactNormalizedMatch
+    ) {
+      return false;
+    }
+    if (rules.minSimilarity !== undefined && similarity < rules.minSimilarity) return false;
+    if (rules.maxSimilarity !== undefined && similarity > rules.maxSimilarity) return false;
+    if (rules.maxMinorTokenIssues !== undefined && minorTokenIssues > rules.maxMinorTokenIssues) {
+      return false;
+    }
+    if (rules.maxMajorTokenIssues !== undefined && majorTokenIssues > rules.maxMajorTokenIssues) {
+      return false;
+    }
+    return true;
+  };
+
+  for (const statusKey of ANSWER_RESULT_EVALUATION_CONFIG.statusOrder) {
+    const statusConfig = ANSWER_RESULT_STATUS_CONFIG[statusKey];
+    if (statusKey === "try_again") return statusConfig;
+    if (matchesRules(statusConfig.matchingRules)) return statusConfig;
+  }
+
+  return ANSWER_RESULT_STATUS_CONFIG.try_again;
+}
+
+function summarizeDiff(diff: DiffToken[] | undefined) {
+  if (!diff || diff.length === 0) {
+    return { wrong: 0, missing: 0, extra: 0 };
+  }
+  return {
+    wrong: diff.filter((token) => token.status === "wrong").length,
+    missing: diff.filter((token) => token.status === "missing").length,
+    extra: diff.filter((token) => token.status === "extra").length,
+  };
+}
+
+const INITIAL_FOCUS_DELAY_MS = 50;
+const FOCUS_DELAY_MS = 10;
 
 export default function DictationInput({
   isEnabled,
-  wordCount,
+  isChecking = false,
   onSubmit,
   diff,
   isCorrect,
   wrongAttempts = 0,
+  focusSignal = 0,
+  inputAriaDescribedBy,
+  extraWordCount = 0,
 }: DictationInputProps) {
-  const [typedWords, setTypedWords] = useState<string[]>([]);
-  const [currentInput, setCurrentInput] = useState("");
-  const [currentWordIdx, setCurrentWordIdx] = useState(0);
+  const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const maskedResult = useMemo(() => buildMaskedResult(diff), [diff]);
+  const resultState = useMemo(() => evaluateAnswerStatus(diff, isCorrect), [diff, isCorrect]);
+  const diffSummary = useMemo(() => summarizeDiff(diff), [diff]);
 
-  // Reset state and focus the input on mount (component is remounted for each
-  // new segment and after each wrong-answer retry via the `key` prop in page.tsx).
+  const focusInput = useCallback(
+    (delay = FOCUS_DELAY_MS) => window.setTimeout(() => inputRef.current?.focus(), delay),
+    []
+  );
+
+  // Reset state and focus the input on mount (component is remounted per segment via key).
   useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 50);
-    return () => clearTimeout(t);
-  }, []);
+    const t = focusInput(INITIAL_FOCUS_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [focusInput]);
 
-  /**
-   * Commits `input` as the word at slot `idx`, advances the pointer,
-   * and auto-submits when all slots are filled.
-   */
-  const commitWord = (input: string, typed: string[], idx: number) => {
-    const word = input.trim();
-    if (!word) return;
-    const newTyped = [...typed];
-    newTyped[idx] = word;
-    const newIdx = idx + 1;
-
-    if (newIdx >= wordCount) {
-      // All slots filled — auto-submit immediately
-      setTypedWords(newTyped);
-      setCurrentInput("");
-      setCurrentWordIdx(newIdx);
-      onSubmit(newTyped.join(" "));
-    } else {
-      setTypedWords(newTyped);
-      // Pre-populate the next slot if the user had previously typed something there
-      setCurrentInput(newTyped[newIdx] ?? "");
-      setCurrentWordIdx(newIdx);
-    }
-  };
-
-  /**
-   * Navigate to slot `i` for editing — sets it as the active slot and
-   * restores any previously committed value as the current input.
-   */
-  const navigateToSlot = (i: number) => {
+  useEffect(() => {
     if (!isEnabled) return;
-    setCurrentInput(typedWords[i] ?? "");
-    setCurrentWordIdx(i);
-    setTimeout(() => inputRef.current?.focus(), 10);
-  };
+    const t = focusInput();
+    return () => window.clearTimeout(t);
+  }, [focusInput, focusSignal, isEnabled]);
 
-  /**
-   * When showing the post-incorrect result (correctSlots mode), clicking a slot
-   * reconstructs the typedWords array from the diff and jumps into edit mode at
-   * that slot — correct words are pre-filled, wrong/missing ones are blank.
-   */
-  const handleCorrectSlotClick = (i: number) => {
-    if (!isEnabled) return;
-    const reconstructed: string[] = [];
-    let expectedIdx = 0;
-    for (const token of diff!) {
-      if (token.status === "correct") {
-        reconstructed[expectedIdx] = token.word;
-        expectedIdx++;
-      } else if (token.status === "missing" || token.status === "wrong") {
-        reconstructed[expectedIdx] = ""; // leave blank so user can re-type
-        expectedIdx++;
-      }
-      // skip "extra" tokens — they have no expected slot
-    }
-    setTypedWords(reconstructed);
-    setCurrentInput(reconstructed[i] ?? "");
-    setCurrentWordIdx(i);
-    setTimeout(() => inputRef.current?.focus(), 10);
-  };
+  const submitCurrentInput = useCallback(() => {
+    const trimmed = inputText.trim();
+    if (!trimmed || !isEnabled) return;
+    onSubmit(trimmed);
+  }, [inputText, isEnabled, onSubmit]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Space advances to the next slot
-    if ((e.key === " " || e.key === "Spacebar") && currentWordIdx < wordCount) {
+    if (e.key === "Enter") {
       e.preventDefault();
-      commitWord(currentInput, typedWords, currentWordIdx);
-    // Enter on any slot: commit current word and submit (handles last word too)
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (currentWordIdx < wordCount && currentInput.trim()) {
-        commitWord(currentInput, typedWords, currentWordIdx);
-      } else if (typedWords.filter(Boolean).length > 0 || currentInput.trim()) {
-        const finalWords = [...typedWords];
-        if (currentInput.trim() && currentWordIdx < wordCount) {
-          finalWords[currentWordIdx] = currentInput.trim();
-        }
-        onSubmit(finalWords.filter(Boolean).join(" "));
-      }
-    // Backspace on empty input navigates back to re-type the previous word.
-    // Also clears the current slot so the deleted word does not reappear.
-    } else if (e.key === "Backspace" && currentInput === "" && currentWordIdx > 0) {
-      const newTyped = [...typedWords];
-      newTyped[currentWordIdx] = "";
-      setTypedWords(newTyped);
-      const prevIdx = currentWordIdx - 1;
-      setCurrentInput(newTyped[prevIdx] ?? "");
-      setCurrentWordIdx(prevIdx);
-      setTimeout(() => inputRef.current?.focus(), 10);
+      submitCurrentInput();
     }
   };
 
-  // Handle paste: split on first space so pasting a full word works naturally
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (val.includes(" ")) {
-      const first = val.split(" ")[0].trim();
-      if (first) commitWord(first, typedWords, currentWordIdx);
-    } else {
-      setCurrentInput(val);
-    }
-  };
-
-  // After an incorrect result: show which positions were correct (green) and
-  // which were wrong (blank). Disappears once the user starts typing again.
-  const showCorrectSlots =
-    diff &&
-    diff.length > 0 &&
-    isCorrect === false &&
-    currentWordIdx === 0 &&
-    typedWords.length === 0 &&
-    currentInput === "";
-
-  const correctSlots = showCorrectSlots ? buildCorrectSlots(diff!) : null;
-
-  // ---- Build word-slot nodes ----
-  const slots: React.ReactNode[] = [];
-  for (let i = 0; i < wordCount; i++) {
-    if (correctSlots) {
-      // Post-incorrect result: show correctly matched words (green) and blanks for
-      // wrong/missing. All slots are clickable to jump into edit mode at that word.
-      const w = correctSlots[i];
-      slots.push(
-        <span
-          key={i}
-          onClick={() => handleCorrectSlotClick(i)}
-          title="Click to edit"
-          className={clsx(
-            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 transition-colors",
-            isEnabled
-              ? w
-                ? "border-emerald-400 text-emerald-700 bg-emerald-50 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
-                : "border-slate-200 text-slate-300 cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
-              : w
-                ? "border-emerald-400 text-emerald-700 bg-emerald-50"
-                : "border-slate-200 text-slate-300"
-          )}
-        >
-          {w ?? "_"}
-        </span>
-      );
-    } else if (i === currentWordIdx && isEnabled) {
-      // Active slot — mirrors what the user is currently typing
-      slots.push(
-        <span
-          key={i}
-          className="inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-indigo-500 text-indigo-700"
-        >
-          {currentInput || <span className="opacity-30 select-none">_</span>}
-        </span>
-      );
-    } else if (typedWords[i]) {
-      // Committed word (before cursor) or previously-typed word (after cursor) —
-      // clicking it navigates directly to that slot for editing.
-      const isBeforeCursor = i < currentWordIdx;
-      slots.push(
-        <span
-          key={i}
-          onClick={() => navigateToSlot(i)}
-          title="Click to edit"
-          className={clsx(
-            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 cursor-pointer transition-colors",
-            isEnabled
-              ? isBeforeCursor
-                ? "border-slate-400 text-slate-700 bg-slate-50 hover:border-indigo-400 hover:bg-indigo-50"
-                : "border-amber-300 text-amber-700 bg-amber-50 hover:border-indigo-400 hover:bg-indigo-50"
-              : "border-slate-400 text-slate-700 bg-slate-50"
-          )}
-        >
-          {typedWords[i]}
-        </span>
-      );
-    } else {
-      // Empty future slot — clickable so the user can jump directly to any position
-      slots.push(
-        <span
-          key={i}
-          onClick={() => isEnabled && navigateToSlot(i)}
-          title={isEnabled ? "Click to type here" : undefined}
-          className={clsx(
-            "inline-flex items-center justify-center min-w-[2.5rem] h-8 px-2 rounded font-medium text-sm border-b-2 border-slate-200 text-slate-300 transition-colors",
-            isEnabled && "cursor-pointer hover:border-indigo-400 hover:bg-indigo-50"
-          )}
-        >
-          _
-        </span>
-      );
-    }
-  }
+  const isEmpty = !inputText.trim();
+  const isButtonDisabled = !isEnabled || isEmpty || isChecking;
+  const hasResult = !isChecking && (isCorrect === true || isCorrect === false);
+  const shouldShowExtraWordCount = extraWordCount > 0;
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Header row */}
       <div className="flex items-center justify-between">
-        <span className="text-slate-500 text-xs">
-          {isEnabled && currentWordIdx < wordCount
-            ? `Word ${currentWordIdx + 1} of ${wordCount} — type then press Space`
-            : `Fill in ${wordCount} word${wordCount !== 1 ? "s" : ""}`}
-        </span>
-        <span className="text-xs text-slate-400">Case &amp; punctuation: ignored</span>
+    
       </div>
 
-      {/* Word-slot display */}
-      <div className="flex flex-wrap gap-2 p-3 rounded-xl border border-slate-200 bg-white min-h-12 items-center">
-        {slots}
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <label htmlFor="dictation-full-input" className="sr-only">
+          Enter the sentence you heard
+        </label>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            id="dictation-full-input"
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type the full sentence you hear…"
+            className="w-full rounded-xl border border-indigo-300 px-4 py-2 text-base font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+            aria-describedby={
+              inputAriaDescribedBy
+                ? `dictation-input-instruction ${inputAriaDescribedBy}`
+                : "dictation-input-instruction"
+            }
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            disabled={!isEnabled || isChecking}
+          />
+          <button
+            onClick={submitCurrentInput}
+            disabled={isButtonDisabled}
+            aria-busy={isChecking}
+            className={clsx(
+              "rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1",
+              isChecking
+                ? "bg-indigo-500 text-white focus:ring-indigo-300"
+                : hasResult
+                ? "bg-emerald-600 text-white focus:ring-emerald-300"
+                : isEmpty
+                ? "bg-slate-300 text-slate-600"
+                : "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-md focus:ring-indigo-300",
+              isButtonDisabled && "cursor-not-allowed"
+            )}
+          >
+            {isChecking ? "Checking..." : hasResult ? "Checked" : "Check"}
+          </button>
+        </div>
       </div>
 
-      {/* Current-word input field (only shown while filling slots) */}
-      {isEnabled && currentWordIdx < wordCount && (
-        <input
-          ref={inputRef}
-          type="text"
-          value={currentInput}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={`Type word ${currentWordIdx + 1}…`}
-          className="w-full rounded-xl border border-indigo-300 px-4 py-2 text-base font-medium outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck={false}
-        />
+      {resultState && (
+        <div
+          className={clsx(
+            "rounded-xl border p-3",
+            resultState.colorTokens.bg,
+            resultState.colorTokens.border
+          )}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex items-start gap-2">
+            {(() => {
+              const ResultIcon = STATUS_ICON_COMPONENTS[resultState.icon];
+              return <ResultIcon className={clsx("mt-0.5 h-4 w-4 shrink-0", resultState.colorTokens.icon)} />;
+            })()}
+            <div>
+              <p className={clsx("text-xs font-semibold uppercase tracking-wide", resultState.colorTokens.text)}>
+                {resultState.label}
+              </p>
+              <p className={clsx("mt-0.5 text-xs", resultState.colorTokens.subtext)}>
+                {resultState.helperText}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
 
-      {/* Wrong-attempts hint */}
+      {isCorrect === false && maskedResult && (
+        <div
+          className="rounded-xl border border-amber-200 bg-amber-50 p-3"
+          role="region"
+          aria-label="Answer comparison"
+        >
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Answer comparison</p>
+          <p className="mt-1 text-sm font-medium text-amber-900">{maskedResult}</p>
+          {(diffSummary.wrong > 0 || shouldShowExtraWordCount) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {diffSummary.wrong > 0 && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                  Wrong {diffSummary.wrong}
+                </span>
+              )}
+              {shouldShowExtraWordCount && (
+                <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                  Extra {extraWordCount}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {wrongAttempts >= 2 && isCorrect !== true && (
         <p className="text-slate-500 text-xs">
           Having trouble? Try using a hint or ask the AI tutor for help.

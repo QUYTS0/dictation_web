@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import type { SaveProgressRequest, SaveProgressResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
   try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+
     const body: SaveProgressRequest = await request.json();
     const {
       sessionId,
       youtubeVideoId,
       transcriptId,
       currentSegmentIndex,
+      videoCurrentTimeSec = 0,
       accuracy,
       totalAttempts,
       status = "active",
@@ -22,23 +32,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createServiceClient();
-
     if (sessionId) {
       // Update existing session
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("learning_sessions")
         .update({
           current_segment_index: currentSegmentIndex,
+          active_segment_index: currentSegmentIndex,
+          video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
+          attempt_count: totalAttempts,
           status,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", sessionId);
+        .eq("id", sessionId)
+        .eq("user_id", user.id)
+        .select("id")
+        .single();
 
       if (error) {
         console.error("[save-progress] update error:", error);
+        return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
+      }
+
+      if (!data) {
         return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
       }
 
@@ -48,15 +66,64 @@ export async function POST(request: NextRequest) {
         status,
       });
     } else {
-      // Create a new anonymous session
+      // Reuse an existing active session for this user+video when available.
+      const { data: existingActiveSession, error: existingSessionError } = await supabase
+        .from("learning_sessions")
+        .select("id, transcript_id")
+        .eq("user_id", user.id)
+        .eq("youtube_video_id", youtubeVideoId)
+        .eq("status", "active")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSessionError) {
+        console.error("[save-progress] existing active session query error:", existingSessionError);
+        return NextResponse.json({ error: "Failed to save session" }, { status: 500 });
+      }
+
+      if (existingActiveSession) {
+        const { data, error } = await supabase
+          .from("learning_sessions")
+          .update({
+            transcript_id: transcriptId ?? existingActiveSession.transcript_id ?? null,
+            current_segment_index: currentSegmentIndex,
+            active_segment_index: currentSegmentIndex,
+            video_current_time: videoCurrentTimeSec,
+            accuracy,
+            total_attempts: totalAttempts,
+            attempt_count: totalAttempts,
+            status,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingActiveSession.id)
+          .eq("user_id", user.id)
+          .select("id")
+          .single();
+
+        if (error || !data) {
+          console.error("[save-progress] existing session update error:", error);
+          return NextResponse.json({ error: "Failed to update existing session" }, { status: 500 });
+        }
+
+        return NextResponse.json<SaveProgressResponse>({
+          sessionId: existingActiveSession.id,
+          status,
+        });
+      }
+
       const { data, error } = await supabase
         .from("learning_sessions")
         .insert({
+          user_id: user.id,
           youtube_video_id: youtubeVideoId,
           transcript_id: transcriptId ?? null,
           current_segment_index: currentSegmentIndex,
+          active_segment_index: currentSegmentIndex,
+          video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
+          attempt_count: totalAttempts,
           status,
         })
         .select("id")
