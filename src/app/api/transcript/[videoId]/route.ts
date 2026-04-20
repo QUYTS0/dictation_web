@@ -20,20 +20,41 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const supabase = createServiceClient();
 
-    // 1. Look for an existing ready transcript
-    const { data: transcript, error: tError } = await supabase
+    // Prefer a ready transcript first to avoid selecting stale/failed duplicates.
+    const { data: readyTranscript, error: readyError } = await supabase
       .from("transcripts")
       .select("id, status, source")
       .eq("youtube_video_id", videoId)
       .eq("language", lang)
+      .eq("status", "ready")
+      .order("updated_at", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (tError) {
-      console.error("[transcript GET] DB error:", tError);
+    if (readyError) {
+      console.error("[transcript GET] ready transcript DB error:", readyError);
       return NextResponse.json({ error: "Database error" }, { status: 500 });
     }
+
+    const { data: latestTranscript, error: latestError } = readyTranscript
+      ? { data: null, error: null }
+      : await supabase
+          .from("transcripts")
+          .select("id, status, source")
+          .eq("youtube_video_id", videoId)
+          .eq("language", lang)
+          .order("updated_at", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+    if (latestError) {
+      console.error("[transcript GET] latest transcript DB error:", latestError);
+      return NextResponse.json({ error: "Database error" }, { status: 500 });
+    }
+
+    const transcript = readyTranscript ?? latestTranscript;
 
     if (!transcript) {
       // No transcript at all — return processing to prompt generation

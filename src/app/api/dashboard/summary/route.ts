@@ -62,7 +62,13 @@ export async function GET() {
     const activeSessions = (sessions ?? [])
       .filter((s) => s.status === "active")
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-    const recentSessions = activeSessions.slice(0, 4);
+    const latestSessionByVideoId = new Map<string, (typeof activeSessions)[number]>();
+    for (const session of activeSessions) {
+      if (!latestSessionByVideoId.has(session.youtube_video_id)) {
+        latestSessionByVideoId.set(session.youtube_video_id, session);
+      }
+    }
+    const recentSessions = [...latestSessionByVideoId.values()].slice(0, 4);
     const recentVideoIds = [...new Set(recentSessions.map((s) => s.youtube_video_id))];
     const recentSessionIds = recentSessions.map((s) => s.id);
 
