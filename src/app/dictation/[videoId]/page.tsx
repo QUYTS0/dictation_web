@@ -16,6 +16,7 @@ import VocabularySaveButton from "@/components/VocabularySaveButton";
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { useAuth, useRequireAuth } from "@/context/auth";
+import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
 import type {
   TranscriptResponse,
   TranscriptSegment,
@@ -166,7 +167,7 @@ async function fetchTranscript(videoId: string): Promise<TranscriptResponse> {
   return res.json();
 }
 
-async function checkAnswer(
+async function checkAnswerApi(
   segmentIndex: number,
   userText: string,
   expectedText: string,
@@ -343,6 +344,7 @@ export default function DictationPage({ params }: PageProps) {
   useEffect(() => {
     resumeLoadedRef.current = false;
     setResumeState(null);
+    firstAttemptBySegmentRef.current = {};
   }, [videoId, user?.id]);
 
   // ---- Transcript query ----
@@ -440,7 +442,7 @@ export default function DictationPage({ params }: PageProps) {
       setUxState("checking_answer");
 
       try {
-        const result = await checkAnswer(
+        const result = await checkAnswerApi(
           currentSegIdx,
           userText,
           segments[currentSegIdx].text,
@@ -452,13 +454,17 @@ export default function DictationPage({ params }: PageProps) {
         sessionStore.incrementAttempt(result.isCorrect);
 
         if (result.isCorrect) {
+          const firstAttemptText = (firstAttemptBySegmentRef.current[currentSegIdx] ?? userText).trim();
+          const firstAttemptReview = evaluateAnswer(
+            segments[currentSegIdx].text,
+            firstAttemptText,
+            result.matchMode
+          );
           setPreviousReview({
             segmentIndex: currentSegIdx,
             expectedText: segments[currentSegIdx].text,
-            firstUserText:
-              firstAttemptBySegmentRef.current[currentSegIdx] ??
-              (result.normalizedUser || userText),
-            diff: result.diff ?? [],
+            firstUserText: firstAttemptText,
+            diff: firstAttemptReview.diff ?? [],
           });
           setWrongAttempts(0);
           setHintLevel(0);
@@ -508,6 +514,7 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Start session (seek to segment 0 and play) ----
   const handleStart = useCallback(() => {
+    firstAttemptBySegmentRef.current = {};
     triggerAutoSave(0, "active");
     setUxState("playing");
     ytPlayerRef.current?.playSegment(0);
@@ -694,6 +701,7 @@ export default function DictationPage({ params }: PageProps) {
     if (!user) return;
     void restartSession(videoId, resumeState?.sessionId)
       .then(() => {
+        firstAttemptBySegmentRef.current = {};
         setResumeState(null);
         sessionStore.setSessionId(null);
       })
@@ -1677,92 +1685,95 @@ export default function DictationPage({ params }: PageProps) {
 
                     {learningError && <p className="text-xs text-red-600">{learningError}</p>}
 
-                    {scriptPopover && (
-                      <div
-                        ref={scriptPopoverRef}
-                        className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-lg border border-slate-200 bg-white shadow-lg p-2 flex flex-wrap gap-1.5"
-                        style={{ left: scriptPopover.x, top: scriptPopover.y, maxWidth: `${SCRIPT_POPOVER_MAX_WIDTH_PX}px` }}
-                        tabIndex={0}
-                        role="dialog"
-                        aria-modal="false"
-                        aria-label="Script selection actions"
-                        aria-describedby="script-selection-actions-help"
-                      >
-                        <button
-                          onClick={() => handleScriptPopoverAction("word")}
-                          disabled={scriptPopover.selectedWordCount !== 1 || learningSaving}
-                          className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
-                        >
-                          Save word
-                        </button>
-                        <button
-                          onClick={() => handleScriptPopoverAction("phrase")}
-                          disabled={scriptPopover.selectedWordCount < 2 || learningSaving}
-                          className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
-                        >
-                          Save phrase
-                        </button>
-                        <button
-                          onClick={() => handleScriptPopoverAction("sentence")}
-                          disabled={learningSaving}
-                          className="px-2 py-1 text-[11px] rounded border border-slate-300"
-                        >
-                          Save sentence
-                        </button>
-                        <button
-                          onClick={() => handleScriptPopoverAction("explain")}
-                          className="px-2 py-1 text-[11px] rounded border border-violet-300 text-violet-700 bg-violet-50"
-                        >
-                          Explain
-                        </button>
-                        <button
-                          onClick={() => handleScriptPopoverAction("note")}
-                          className="px-2 py-1 text-[11px] rounded border border-slate-300"
-                        >
-                          Add note
-                        </button>
-                        {scriptPopoverNoteMode && (
-                          <div className="w-full pt-1 flex items-center gap-1.5">
-                            <input
-                              ref={scriptPopoverNoteInputRef}
-                              onChange={handleLearningNoteChange}
-                              placeholder="Optional note"
-                              className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                            />
-                            <button
-                              onClick={() => setScriptPopoverNoteMode(false)}
-                              className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
-                            >
-                              Done
-                            </button>
-                          </div>
-                        )}
-                        <span id="script-selection-actions-help" className="sr-only">
-                          Actions for selected script text: save word, phrase, sentence, explain, or add note.
-                        </span>
-                      </div>
-                    )}
-
-                    {scriptShowAI && scriptPopover && (
-                      <AIExplainer
-                        expectedText={scriptAiPayload.expectedText}
-                        userText={scriptAiPayload.userText}
-                        buttonLabel={scriptAiPayload.buttonLabel}
-                        onExplanationReady={setScriptAiReady}
-                      />
-                    )}
-                    {scriptShowAI && scriptAiReady && scriptPopover && (
-                      <p className="text-xs text-slate-500">
-                        Selection: <span className="font-medium text-slate-700">{scriptPopover.selectedText}</span>
-                      </p>
-                    )}
                   </div>
                 )}
               </div>
             )}
           </div>
         </aside>
+
+        {scriptPopover && (
+          <div
+            ref={scriptPopoverRef}
+            className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-lg border border-slate-200 bg-white shadow-lg p-2 flex flex-wrap gap-1.5"
+            style={{ left: scriptPopover.x, top: scriptPopover.y, maxWidth: `${SCRIPT_POPOVER_MAX_WIDTH_PX}px` }}
+            tabIndex={0}
+            role="dialog"
+            aria-modal="false"
+            aria-label="Script selection actions"
+            aria-describedby="script-selection-actions-help"
+          >
+            <button
+              onClick={() => handleScriptPopoverAction("word")}
+              disabled={scriptPopover.selectedWordCount !== 1 || learningSaving}
+              className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
+            >
+              Save word
+            </button>
+            <button
+              onClick={() => handleScriptPopoverAction("phrase")}
+              disabled={scriptPopover.selectedWordCount < 2 || learningSaving}
+              className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
+            >
+              Save phrase
+            </button>
+            <button
+              onClick={() => handleScriptPopoverAction("sentence")}
+              disabled={learningSaving}
+              className="px-2 py-1 text-[11px] rounded border border-slate-300"
+            >
+              Save sentence
+            </button>
+            <button
+              onClick={() => handleScriptPopoverAction("explain")}
+              className="px-2 py-1 text-[11px] rounded border border-violet-300 text-violet-700 bg-violet-50"
+            >
+              Explain
+            </button>
+            <button
+              onClick={() => handleScriptPopoverAction("note")}
+              className="px-2 py-1 text-[11px] rounded border border-slate-300"
+            >
+              Add note
+            </button>
+            {scriptPopoverNoteMode && (
+              <div className="w-full pt-1 flex items-center gap-1.5">
+                <input
+                  ref={scriptPopoverNoteInputRef}
+                  onChange={handleLearningNoteChange}
+                  placeholder="Optional note"
+                  className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                />
+                <button
+                  onClick={() => setScriptPopoverNoteMode(false)}
+                  className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+            <span id="script-selection-actions-help" className="sr-only">
+              Actions for selected script text: save word, phrase, sentence, explain, or add note.
+            </span>
+          </div>
+        )}
       </main>
+
+      {scriptShowAI && scriptPopover && (
+        <div className="mx-auto w-full max-w-7xl px-4 lg:px-6 pb-4">
+          <AIExplainer
+            expectedText={scriptAiPayload.expectedText}
+            userText={scriptAiPayload.userText}
+            buttonLabel={scriptAiPayload.buttonLabel}
+            onExplanationReady={setScriptAiReady}
+          />
+          {scriptAiReady && (
+            <p className="mt-2 text-xs text-slate-500">
+              Selection: <span className="font-medium text-slate-700">{scriptPopover.selectedText}</span>
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
