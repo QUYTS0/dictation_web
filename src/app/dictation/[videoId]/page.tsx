@@ -102,6 +102,17 @@ function splitSentenceIntoWords(sentence: string) {
   return sentence.trim().split(/\s+/).filter(Boolean);
 }
 
+function normalizeComparableText(text: string) {
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function inferSavedItemType(item: VocabularyItem): LessonItemType {
+  const normalizedTerm = normalizeComparableText(item.term);
+  const normalizedSentence = normalizeComparableText(item.sentence_context);
+  if (normalizedTerm && normalizedTerm === normalizedSentence) return "sentence";
+  return splitSentenceIntoWords(item.term).length <= 1 ? "word" : "phrase";
+}
+
 function summarizeDiff(diff: DiffToken[]) {
   return {
     wrong: diff.filter((token) => token.status === "wrong").length,
@@ -643,6 +654,42 @@ export default function DictationPage({ params }: PageProps) {
         .catch(() => {});
     }
   }, [transcriptStatus, transcriptId, videoId]);
+
+  // ---- Load saved vocabulary for this video ----
+  useEffect(() => {
+    if (!user) {
+      setLearningItems([]);
+      return;
+    }
+
+    let isCancelled = false;
+    setLearningError(null);
+
+    void fetch(`/api/vocabulary?videoId=${encodeURIComponent(videoId)}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to fetch saved items");
+        const data = (await res.json()) as { items?: VocabularyItem[] };
+        if (isCancelled) return;
+        const items = (data.items ?? []).map((item) => ({
+          ...item,
+          type: inferSavedItemType(item),
+          note: item.note ?? "",
+        }));
+        setLearningItems(items);
+      })
+      .catch((err: unknown) => {
+        if (isCancelled) return;
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : "Failed to load saved items for this video.";
+        setLearningError(message);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [user, videoId]);
 
   // ---- Load resumable session for authenticated users ----
   useEffect(() => {
@@ -1551,7 +1598,7 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
 
                 {rightPanelTab === "saved" ? (
-                  <div className="flex flex-col gap-3">
+                  <div className="flex h-[60vh] flex-col gap-3">
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-semibold text-slate-700">
                         Saved items ({lessonSavedInCurrentVideo.length})
@@ -1580,18 +1627,21 @@ export default function DictationPage({ params }: PageProps) {
                           : `No ${getSavedFilterLabel(savedFilter).toLowerCase()} saved yet.`}
                       </p>
                     ) : (
-                      <LessonSavedItemsList
-                        items={filteredSavedItems}
-                        compact
-                        deletingId={learningDeletingId}
-                        updatingId={learningUpdatingId}
-                        onDelete={deleteLessonCapture}
-                        onUpdate={updateLessonCapture}
-                      />
+                      <div className="min-h-0 flex-1">
+                        <LessonSavedItemsList
+                          items={filteredSavedItems}
+                          compact
+                          scrollClassName="h-full"
+                          deletingId={learningDeletingId}
+                          updatingId={learningUpdatingId}
+                          onDelete={deleteLessonCapture}
+                          onUpdate={updateLessonCapture}
+                        />
+                      </div>
                     )}
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-3">
+                  <div className="flex h-[60vh] flex-col gap-3">
                     <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                       Viewing the script may reveal answers.
                     </div>
@@ -1625,7 +1675,7 @@ export default function DictationPage({ params }: PageProps) {
                       <div
                         ref={scriptTextContainerRef}
                         onMouseUp={handleScriptMouseUp}
-                        className="relative max-h-[60vh] overflow-y-auto pr-1 flex flex-col gap-3"
+                        className="relative min-h-0 flex-1 overflow-y-auto pr-1 flex flex-col gap-3"
                       >
                         {scriptContextSegments.map((segment) => {
                           const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
@@ -1812,6 +1862,7 @@ function StatusCard({
 function LessonSavedItemsList({
   items,
   compact = false,
+  scrollClassName,
   deletingId,
   updatingId,
   onDelete,
@@ -1819,6 +1870,7 @@ function LessonSavedItemsList({
 }: {
   items: LessonSavedItem[];
   compact?: boolean;
+  scrollClassName?: string;
   deletingId: string | null;
   updatingId: string | null;
   onDelete: (itemId: string) => void;
@@ -1844,7 +1896,13 @@ function LessonSavedItemsList({
   };
 
   return (
-    <div className={clsx("flex flex-col gap-2 max-h-52 overflow-y-auto pr-1", compact && "pr-0")}>
+    <div
+      className={clsx(
+        "flex flex-col gap-2 overflow-y-auto pr-1",
+        compact && "pr-0",
+        scrollClassName ?? "max-h-52"
+      )}
+    >
       {items.map((item) => (
         <div
           key={item.id}
