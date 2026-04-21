@@ -1166,9 +1166,9 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Render ----
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-slate-50">
       {/* Top bar */}
-      <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-4">
+      <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md">
         <Link href="/" className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
           ← Back
         </Link>
@@ -1191,12 +1191,12 @@ export default function DictationPage({ params }: PageProps) {
         <UserButton />
       </header>
 
-      <main
-        className={clsx(
-          "flex-1 flex flex-col lg:flex-row gap-6 p-4 lg:p-6 max-w-7xl mx-auto w-full transition-all duration-300",
-          !showLearningPanel && "lg:justify-center"
-        )}
-      >
+        <main
+          className={clsx(
+            "mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-4 transition-all duration-300 lg:flex-row lg:p-6",
+            !showLearningPanel && "lg:justify-center"
+          )}
+        >
         {/* Primary lesson column */}
         <div
           className={clsx(
@@ -1204,10 +1204,10 @@ export default function DictationPage({ params }: PageProps) {
             showLearningPanel ? "lg:w-2/3" : "lg:w-3/4 xl:w-2/3"
           )}
         >
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between rounded-2xl border border-white/70 bg-white/60 p-3 shadow-sm backdrop-blur-xl">
             <p className="text-sm font-semibold text-slate-700">Video</p>
             <div className="flex items-center gap-2">
-              <div className="rounded-lg border border-slate-300 p-0.5 flex items-center">
+              <div className="flex items-center rounded-xl border border-slate-300 bg-white p-0.5">
                 <button
                   onClick={() => setVideoSizeMode("standard")}
                   className={clsx(
@@ -1233,7 +1233,7 @@ export default function DictationPage({ params }: PageProps) {
               </div>
               <button
                 onClick={() => setShowVideo((v) => !v)}
-                className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
+                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
               >
                 {showVideo ? "Audio focus mode" : "Exit audio focus"}
               </button>
@@ -1545,7 +1545,7 @@ export default function DictationPage({ params }: PageProps) {
         >
           <div
             className={clsx(
-              "rounded-xl border border-slate-200 bg-white lg:sticky lg:top-4 transition-all duration-300",
+              "rounded-3xl border border-white/80 bg-white/60 shadow-lg backdrop-blur-xl lg:sticky lg:top-4 transition-all duration-300",
               showLearningPanel ? "p-4" : "p-2"
             )}
           >
@@ -1557,7 +1557,7 @@ export default function DictationPage({ params }: PageProps) {
               )}
               <button
                 onClick={() => setShowLearningPanel((v) => !v)}
-                className="h-8 w-8 shrink-0 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors"
+                className="h-8 w-8 shrink-0 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
                 aria-label={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
                 title={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
               >
@@ -1574,13 +1574,13 @@ export default function DictationPage({ params }: PageProps) {
 
             {showLearningPanel && (
               <div className="mt-3 flex flex-col gap-3">
-                <div className="rounded-lg bg-slate-100 p-1 grid grid-cols-2 gap-1">
+                <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/80 bg-white/70 p-1 shadow-inner">
                   <button
                     onClick={() => setRightPanelTab("saved")}
                     className={clsx(
                       "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
                       rightPanelTab === "saved"
-                        ? "bg-white text-slate-800 shadow-sm"
+                        ? "bg-white text-indigo-700 shadow-sm"
                         : "text-slate-500 hover:text-slate-700"
                     )}
                   >
@@ -1591,7 +1591,7 @@ export default function DictationPage({ params }: PageProps) {
                     className={clsx(
                       "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
                       rightPanelTab === "script"
-                        ? "bg-white text-slate-800 shadow-sm"
+                        ? "bg-white text-indigo-700 shadow-sm"
                         : "text-slate-500 hover:text-slate-700"
                     )}
                   >
