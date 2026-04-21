@@ -37,7 +37,7 @@ export default function Workspace({ onNavigate }: { onNavigate: (view: string) =
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-40 transition-all"
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-0 transition-all pointer-events-none"
           />
         )}
       </AnimatePresence>
@@ -80,7 +80,7 @@ export default function Workspace({ onNavigate }: { onNavigate: (view: string) =
       </AnimatePresence>
 
       {/* Main Workspace */}
-      <main className={`flex-1 flex gap-6 p-6 overflow-hidden z-10 transition-all ${isZenMode ? 'justify-center items-center' : ''}`}>
+      <main className={`flex-1 flex gap-6 p-6 overflow-hidden relative z-10 transition-all ${isZenMode ? 'justify-center items-center' : ''}`}>
         
         {/* Left Column (Video & Interaction) */}
         <div className={`flex flex-col gap-6 overflow-y-auto pb-12 pr-2 transition-all duration-500 ${isZenMode ? 'flex-1 max-w-4xl z-50' : 'flex-[0.65]'}`}>
