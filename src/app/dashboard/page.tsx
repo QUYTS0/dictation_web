@@ -130,9 +130,9 @@ export default function DashboardPage() {
               <div className="flex gap-2 rounded-2xl border border-white/80 bg-white/60 p-2 shadow-md backdrop-blur-md">
                 <div className="flex shrink-0 items-center gap-2 rounded-lg bg-orange-50 px-3 py-1.5 text-orange-600">
                   <Flame size={18} className="fill-orange-500/20" />
-                  <span className="text-sm font-semibold">{Math.max(dashboardData.completedVideos, 1)} Days</span>
+                  <span className="text-sm font-semibold">{dashboardData.completedVideos} Videos</span>
                 </div>
-                <div className="my-1 mx-1 w-px bg-slate-200" />
+                <div className="mx-1 my-1 w-px bg-slate-200" />
                 <div className="flex shrink-0 items-center gap-2 rounded-lg bg-yellow-50 px-3 py-1.5 text-yellow-600">
                   <Trophy size={18} className="fill-yellow-500/20" />
                   <span className="text-sm font-semibold">Active Learner</span>
@@ -145,13 +145,11 @@ export default function DashboardPage() {
                 title="Completed Videos"
                 value={String(dashboardData.completedVideos)}
                 icon={<PlayCircle size={20} />}
-                trend={dashboardData.completedVideos > 0 ? `+${dashboardData.completedVideos} total` : undefined}
               />
               <MetricCard
                 title="Avg. Accuracy"
                 value={`${dashboardData.avgAccuracy}%`}
                 icon={<CheckCircle2 size={20} />}
-                trend={dashboardData.avgAccuracy > 0 ? `${dashboardData.avgAccuracy}%` : undefined}
                 positive
               />
               <MetricCard
@@ -168,7 +166,7 @@ export default function DashboardPage() {
             </section>
 
             <div className="grid items-start gap-8 md:grid-cols-3">
-              <div className="md:col-span-2 flex flex-col gap-8">
+              <div className="flex flex-col gap-8 md:col-span-2">
                 <section>
                   <div className="mb-4 flex items-center justify-between">
                     <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-900">Continue Learning</h2>
@@ -202,7 +200,9 @@ export default function DashboardPage() {
                         <h3 className="mb-1 font-semibold text-slate-900 transition-colors group-hover:text-indigo-600">
                           {firstSession.videoTitle ?? `Video ${firstSession.videoId}`}
                         </h3>
-                        <p className="mb-3 text-sm text-slate-500">Last practiced {new Date(firstSession.updatedAt).toLocaleString()}</p>
+                        <p className="mb-3 text-sm text-slate-500">
+                          Last practiced {new Date(firstSession.updatedAt).toLocaleDateString()}
+                        </p>
 
                         <div className="mt-auto">
                           <div className="mb-1 flex justify-between text-xs text-slate-600">
@@ -238,17 +238,12 @@ export default function DashboardPage() {
                         <thead className="border-b border-white/60 bg-white/40 text-slate-500">
                           <tr>
                             <th className="px-4 py-3 font-medium">Word / Phrase</th>
-                            <th className="px-4 py-3 font-medium">Context meaning</th>
+                            <th className="px-4 py-3 font-medium">Sentence context</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {dashboardData.recentVocabulary.map((item) => (
-                            <VocabRow
-                              key={item.id}
-                              word={item.term}
-                              meaning={item.sentence_context}
-                              context={item.sentence_context}
-                            />
+                            <VocabRow key={item.id} word={item.term} context={item.sentence_context} />
                           ))}
                         </tbody>
                       </table>
@@ -309,7 +304,7 @@ function MetricCard({
   positive?: boolean;
 }) {
   return (
-    <div className="flex flex-col rounded-3xl border border-white/60 bg-white/50 p-5 shadow-xl transition-all hover:-translate-y-1 backdrop-blur-md">
+    <div className="flex flex-col rounded-3xl border border-white/60 bg-white/50 p-5 backdrop-blur-md shadow-xl transition-all hover:-translate-y-1">
       <div className="mb-2 flex items-start justify-between">
         <div className="text-slate-500">{icon}</div>
         {trend && (
@@ -330,15 +325,14 @@ function MetricCard({
   );
 }
 
-function VocabRow({ word, meaning, context }: { word: string; meaning: string; context: string }) {
+function VocabRow({ word, context }: { word: string; context: string }) {
   return (
     <tr className="group cursor-pointer transition-colors hover:bg-white/40">
       <td className="w-1/3 px-4 py-3 align-top">
         <div className="font-semibold text-slate-900">{word}</div>
       </td>
       <td className="px-4 py-3 align-top">
-        <div className="mb-1 font-medium text-slate-700">{meaning}</div>
-        <div className="line-clamp-1 text-xs italic text-slate-500 transition-colors group-hover:text-slate-700">
+        <div className="line-clamp-2 text-xs italic text-slate-500 transition-colors group-hover:text-slate-700">
           &quot;{context}&quot;
         </div>
       </td>
