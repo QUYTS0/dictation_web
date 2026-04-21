@@ -279,9 +279,9 @@ export default function HomePage() {
                 <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   Vocabulary
                 </Link>
-                <a href="#history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
+                <Link href="/history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   History
-                </a>
+                </Link>
               </nav>
               <UserButton />
             </div>

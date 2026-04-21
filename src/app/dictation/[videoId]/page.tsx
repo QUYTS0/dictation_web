@@ -4,6 +4,7 @@ import { use, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { clsx } from "clsx";
+import { ArrowLeft, Settings } from "lucide-react";
 
 import YouTubePlayer, { type YouTubePlayerHandle } from "@/components/YouTubePlayer";
 import DictationInput from "@/components/DictationInput";
@@ -258,6 +259,7 @@ const SCRIPT_POPOVER_VERTICAL_OFFSET_PX = 12;
 const SCRIPT_POPOVER_MAX_WIDTH_PX = 320;
 const SCRIPT_CONTEXT_NEXT_COUNT = 2;
 const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
+const WORKSPACE_TITLE_MAX_LENGTH = 48;
 const CORRECT_RESULT_VISIBILITY_DELAY_MS = 650;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 const LESSON_PANEL_TAB_HEIGHT_CLASS =
@@ -1164,17 +1166,56 @@ export default function DictationPage({ params }: PageProps) {
     setScriptPopoverNoteMode(false);
   }, [scriptPopover]);
 
+  const workspaceTitle =
+    currentSegment?.text?.slice(0, WORKSPACE_TITLE_MAX_LENGTH) ??
+    `English Dictation Workspace · ${videoId}`;
+  const sentenceProgressLabel =
+    segments.length > 0
+      ? `Sentence ${Math.min(currentSegIdx + 1, segments.length)} of ${segments.length}`
+      : "Preparing transcript…";
+
   // ---- Render ----
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
+    <div className="relative min-h-screen overflow-hidden bg-[#f4f7ff]">
+      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
+      <div className="pointer-events-none absolute right-[0%] bottom-[10%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+
+      <div className="relative z-10 flex min-h-screen flex-col">
       {/* Top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md">
-        <Link href="/" className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
-          ← Back
-        </Link>
-        <h1 className="text-base font-bold text-slate-800 truncate flex-1">
-          English Dictation Trainer
-        </h1>
+      <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-white/40 bg-white/30 px-4 py-3 backdrop-blur-md">
+        <div className="flex min-w-0 items-center gap-4">
+          <Link
+            href="/"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100"
+            aria-label="Back to dashboard"
+          >
+            <ArrowLeft size={18} />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold leading-tight text-slate-900">
+              {workspaceTitle}
+            </h1>
+            <span className="text-xs text-slate-500">{sentenceProgressLabel}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowVideo((v) => !v)}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+          >
+            {showVideo ? "Audio focus mode" : "Exit audio focus"}
+          </button>
+          <button
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100"
+            aria-label="Lesson settings"
+            type="button"
+          >
+            <Settings size={18} />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex items-center justify-end gap-3 px-4 pt-2">
         {/* Regenerate button — shown when a transcript is loaded so user can fix timestamp issues */}
         {(uxState === "transcript_ready" || uxState === "playing" || uxState === "paused_waiting_input" || uxState === "checking_answer") && (
           <button
@@ -1189,7 +1230,7 @@ export default function DictationPage({ params }: PageProps) {
         )}
         <span className="text-xs text-slate-400 font-mono hidden sm:block">{videoId}</span>
         <UserButton />
-      </header>
+      </div>
 
         <main
           className={clsx(
@@ -1826,6 +1867,7 @@ export default function DictationPage({ params }: PageProps) {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }
