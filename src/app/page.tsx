@@ -3,6 +3,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import clsx from "clsx";
 import {
   ArrowRight,
   BookOpen,
@@ -70,6 +71,7 @@ const LANDING_FEATURES = [
     delay: 0.4,
   },
 ] as const;
+const MAX_HOME_HISTORY_SESSIONS = 8;
 
 export default function HomePage() {
   const router = useRouter();
@@ -176,12 +178,12 @@ export default function HomePage() {
                 >
                   Sign In
                 </button>
-                <button
-                  onClick={() => document.getElementById("landing-youtube-url")?.focus()}
+                <a
+                  href="#landing-youtube-url"
                   className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-800"
                 >
                   Get Started
-                </button>
+                </a>
               </div>
             </div>
           </header>
@@ -197,7 +199,7 @@ export default function HomePage() {
                   <Zap size={14} className="text-primary-500" />
                   <span>Master English through listening</span>
                 </div>
-                <h1 className="mb-6 text-4xl leading-tight font-semibold text-balance text-slate-900 tracking-tight md:text-6xl">
+                <h1 className="mb-6 text-4xl font-semibold leading-tight tracking-tight text-balance text-slate-900 md:text-6xl">
                   Turn any YouTube video into an <span className="text-primary-600">interactive language lesson</span>
                 </h1>
                 <p className="mx-auto mb-8 max-w-2xl text-lg leading-relaxed text-slate-600 md:text-xl">
@@ -273,11 +275,11 @@ export default function HomePage() {
             </Link>
             <div className="flex items-center gap-6">
               <nav className="hidden gap-6 md:flex">
-                <span className="text-sm font-bold text-indigo-600">Dashboard</span>
-                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600">
+                <span className="text-sm font-bold text-primary-600">Dashboard</span>
+                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   Vocabulary
                 </Link>
-                <a href="#history" className="text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600">
+                <a href="#history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   History
                 </a>
               </nav>
@@ -412,7 +414,11 @@ export default function HomePage() {
                   <section>
                     <div className="mb-4 flex items-center justify-between">
                       <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-900">Recent Vocabulary</h2>
-                      <Link href="/vocabulary" className="flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700">
+                      <Link
+                        href="/vocabulary"
+                        aria-label="View all vocabulary"
+                        className="flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700"
+                      >
                         View all <ArrowRight size={16} />
                       </Link>
                     </div>
@@ -437,13 +443,13 @@ export default function HomePage() {
                     </div>
                   </section>
 
-                  <section id="history" className="rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md">
+                  <section id="history" tabIndex={0} className="rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md">
                     <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-900">History</h2>
                     {dashboardData.resumableSessions.length === 0 ? (
                       <p className="text-sm text-slate-500">No recent sessions yet.</p>
                     ) : (
                       <ul className="space-y-2">
-                        {dashboardData.resumableSessions.slice(0, 5).map((session) => (
+                        {dashboardData.resumableSessions.slice(0, MAX_HOME_HISTORY_SESSIONS).map((session) => (
                           <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
                             <p className="font-medium text-slate-800">{session.videoTitle ?? `Video ${session.videoId}`}</p>
                             <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
@@ -513,7 +519,7 @@ function LandingFeatureCard({
       transition={{ duration: 0.5, delay }}
       className="rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl transition-all hover:-translate-y-1 backdrop-blur-xl"
     >
-      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-indigo-600 shadow-sm">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-primary-600 shadow-sm">
         {icon}
       </div>
       <h3 className="mb-2 text-lg font-semibold text-slate-900">{title}</h3>
@@ -540,7 +546,9 @@ function MetricCard({
       <div className="mb-2 flex items-start justify-between">
         <div className="text-slate-500">{icon}</div>
         {trend && (
-          <div className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600"}`}>
+          <div
+            className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600")}
+          >
             {trend}
           </div>
         )}

@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import clsx from "clsx";
 import {
   BookOpen,
   CheckCircle2,
@@ -37,6 +38,7 @@ interface DashboardData {
     mistakesCount: number;
   }>;
 }
+const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
 
 export default function DashboardPage() {
   const { user, loading, openAuthModal } = useAuth();
@@ -82,11 +84,11 @@ export default function DashboardPage() {
             </Link>
             <div className="flex items-center gap-6">
               <nav className="hidden gap-6 md:flex">
-                <span className="text-sm font-bold text-indigo-600">Dashboard</span>
-                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600">
+                <span className="text-sm font-bold text-primary-600">Dashboard</span>
+                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   Vocabulary
                 </Link>
-                <a href="#history" className="text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600">
+                <a href="#history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
                   History
                 </a>
               </nav>
@@ -232,13 +234,13 @@ export default function DashboardPage() {
                     </div>
                   </section>
 
-                  <section id="history" className="rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md">
+                  <section id="history" tabIndex={0} className="rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md">
                     <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-900">History</h2>
                     {dashboardData.resumableSessions.length === 0 ? (
                       <p className="text-sm text-slate-500">No recent sessions yet.</p>
                     ) : (
                       <ul className="space-y-2">
-                        {dashboardData.resumableSessions.slice(0, 8).map((session) => (
+                        {dashboardData.resumableSessions.slice(0, MAX_DASHBOARD_HISTORY_SESSIONS).map((session) => (
                           <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
                             <p className="font-medium text-slate-800">{session.videoTitle ?? `Video ${session.videoId}`}</p>
                             <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
@@ -308,7 +310,9 @@ function MetricCard({
       <div className="mb-2 flex items-start justify-between">
         <div className="text-slate-500">{icon}</div>
         {trend && (
-          <div className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600"}`}>
+          <div
+            className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600")}
+          >
             {trend}
           </div>
         )}
