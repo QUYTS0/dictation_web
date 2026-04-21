@@ -3,6 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  BookOpen,
+  CheckCircle2,
+  Clock3,
+  Headphones,
+  PlayCircle,
+  Video,
+} from "lucide-react";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import UserButton from "@/components/UserButton";
 import { useAuth } from "@/context/auth";
@@ -99,136 +108,168 @@ export default function HomePage() {
       .finally(() => setDashboardLoading(false));
   }, [user]);
 
+  const recentMistakeSessions = dashboardData?.resumableSessions.filter((session) => session.mistakesCount > 0) ?? [];
+
   return (
     <>
-      <nav className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-white">
-        <div className="flex items-center gap-4">
-          <span className="font-bold text-slate-800 text-base">🎧 Dictation Trainer</span>
-          {user && (
-            <Link
-              href="/vocabulary"
-              className="text-sm font-medium text-slate-600 hover:text-slate-900"
-            >
-              Vocabulary
-            </Link>
-          )}
-        </div>
-        <div className="shrink-0">
-          <UserButton />
+      <nav className="sticky top-0 z-20 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
+              <Headphones size={18} />
+            </div>
+            <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
+            {user && (
+              <Link
+                href="/vocabulary"
+                className="ml-2 hidden text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600 sm:inline"
+              >
+                Vocabulary
+              </Link>
+            )}
+          </div>
+          <div className="shrink-0">
+            <UserButton />
+          </div>
         </div>
       </nav>
 
       {authLoading ? (
-        <main className="max-w-5xl mx-auto w-full p-4 md:p-6">
+        <main className="mx-auto w-full max-w-6xl p-4 md:p-6">
           <p className="text-sm text-slate-500">Loading…</p>
         </main>
       ) : user ? (
-        <main className="max-w-5xl mx-auto w-full p-4 md:p-6 flex flex-col gap-4">
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm">
+        <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
+          <section className="rounded-3xl border border-white/70 bg-white/60 p-5 shadow-lg backdrop-blur-xl md:p-6">
             <div className="mb-4">
-              <h1 className="text-2xl font-bold text-slate-900">Start New Dictation</h1>
-              <p className="text-sm text-slate-500 mt-1">
-                Paste a YouTube URL and continue improving your listening accuracy.
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Start your next dictation</h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Paste a YouTube URL and jump right back into focused listening practice.
               </p>
             </div>
-            <form onSubmit={handleStart} className="flex flex-col gap-3">
-              <label htmlFor="youtube-url" className="font-semibold text-slate-700 text-sm">
+            <form onSubmit={handleStart} className="flex flex-col gap-3 md:flex-row md:items-center">
+              <label htmlFor="youtube-url" className="sr-only">
                 YouTube video URL
               </label>
-              <input
-                id="youtube-url"
-                type="text"
-                value={url}
-                onChange={(e) => {
-                  setUrl(e.target.value);
-                  setError(null);
-                }}
-                placeholder="https://www.youtube.com/watch?v=..."
-                className="w-full rounded-xl border border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
-                autoFocus
-              />
-              {error && (
-                <p className="text-red-600 text-sm flex items-center gap-1">
-                  <span>⚠</span> {error}
-                </p>
-              )}
+              <div className="relative flex-1">
+                <Video className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  id="youtube-url"
+                  type="text"
+                  value={url}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    setError(null);
+                  }}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pl-11 text-base text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  autoFocus
+                />
+              </div>
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full sm:w-auto rounded-xl bg-indigo-600 text-white font-bold px-6 py-3 text-base hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {submitting ? "Loading…" : "Start Dictation →"}
+                {submitting ? "Loading…" : "Start Dictation"}
+                {!submitting && <ArrowRight size={17} />}
               </button>
             </form>
+            {error && (
+              <p className="mt-3 flex items-center gap-1 text-sm text-red-600">
+                <span>⚠</span> {error}
+              </p>
+            )}
           </section>
 
-          {dashboardError && <p className="text-red-600 text-sm">{dashboardError}</p>}
+          {dashboardError && <p className="text-sm text-red-600">{dashboardError}</p>}
 
           {dashboardLoading ? (
             <p className="text-sm text-slate-500">Loading workspace…</p>
           ) : !dashboardData ? (
-            <p className="text-sm text-slate-500">No workspace data yet. Start a new dictation to begin.</p>
+            <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+              No workspace data yet. Start a new dictation to begin.
+            </p>
           ) : (
             <>
-              <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <MetricCard title="Completed videos" value={String(dashboardData.completedVideos)} />
-                <MetricCard title="Average accuracy" value={`${dashboardData.avgAccuracy}%`} />
-                <MetricCard title="Practice time" value={`${dashboardData.totalPracticeMinutes} min`} />
-                <MetricCard title="Vocabulary" value={String(dashboardData.vocabularyCount)} />
+              <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <MetricCard title="Completed videos" value={String(dashboardData.completedVideos)} icon={<PlayCircle size={18} />} />
+                <MetricCard title="Average accuracy" value={`${dashboardData.avgAccuracy}%`} icon={<CheckCircle2 size={18} />} />
+                <MetricCard title="Practice time" value={`${dashboardData.totalPracticeMinutes} min`} icon={<Clock3 size={18} />} />
+                <MetricCard title="Saved vocabulary" value={String(dashboardData.vocabularyCount)} icon={<BookOpen size={18} />} />
               </section>
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <h2 className="font-semibold text-slate-800 mb-2">Continue learning</h2>
-                {dashboardData.resumableSessions.length === 0 ? (
-                  <p className="text-sm text-slate-500">No recent lessons to continue yet.</p>
-                ) : (
-                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {dashboardData.resumableSessions.map((session) => (
-                      <li key={session.sessionId} className="rounded-xl border border-slate-200 overflow-hidden">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={`https://img.youtube.com/vi/${session.videoId}/hqdefault.jpg`}
-                          alt={session.videoTitle ?? `Thumbnail for lesson video ${session.videoId}`}
-                          className="w-full aspect-video object-cover bg-slate-100"
-                          loading="lazy"
-                        />
-                        <div className="p-3 flex flex-col gap-2">
-                          <p className="font-semibold text-slate-900 line-clamp-2">
+              <div className="grid gap-4 lg:grid-cols-3">
+                <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl lg:col-span-2">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Continue learning</h2>
+                  {dashboardData.resumableSessions.length === 0 ? (
+                    <p className="text-sm text-slate-500">No recent sessions yet.</p>
+                  ) : (
+                    <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      {dashboardData.resumableSessions.map((session) => (
+                        <li key={session.sessionId} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={`https://img.youtube.com/vi/${session.videoId}/hqdefault.jpg`}
+                            alt={session.videoTitle ?? `Thumbnail for lesson video ${session.videoId}`}
+                            className="aspect-video w-full bg-slate-100 object-cover"
+                            loading="lazy"
+                          />
+                          <div className="flex flex-col gap-2 p-3">
+                            <p className="line-clamp-2 font-semibold text-slate-900">
+                              {session.videoTitle ?? `Video ${session.videoId}`}
+                            </p>
+                            <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
+                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
+                              <p>Accuracy: {session.accuracy}%</p>
+                              <p>Sentence: {session.currentSegmentIndex + 1}</p>
+                              <p>Attempts: {session.totalAttempts}</p>
+                              <p>Mistakes: {session.mistakesCount}</p>
+                            </div>
+                            <div className="pt-1">
+                              <Link
+                                href={`/dictation/${session.videoId}`}
+                                className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700"
+                              >
+                                Resume
+                              </Link>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Recent mistakes</h2>
+                  {recentMistakeSessions.length === 0 ? (
+                    <p className="text-sm text-slate-500">No mistakes logged yet.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {recentMistakeSessions.slice(0, 4).map((session) => (
+                        <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3">
+                          <p className="line-clamp-2 text-sm font-medium text-slate-800">
                             {session.videoTitle ?? `Video ${session.videoId}`}
                           </p>
-                          <p className="text-xs text-slate-500">
-                            Last practiced {new Date(session.updatedAt).toLocaleString()}
-                          </p>
-                          <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-                            <p>Accuracy: {session.accuracy}%</p>
-                            <p>Segment: {session.currentSegmentIndex + 1}</p>
-                            <p>Attempts: {session.totalAttempts}</p>
-                            <p>Mistakes: {session.mistakesCount}</p>
-                          </div>
-                          <div className="flex items-center justify-between gap-2 pt-1">
-                            <p className="text-xs text-slate-500">
-                              {session.mistakesCount > 0
-                                ? "Review mistakes in this lesson."
-                                : "Continue this lesson from where you left off."}
-                            </p>
-                            <Link
-                              href={`/dictation/${session.videoId}`}
-                              className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
-                            >
-                              Resume
-                            </Link>
-                          </div>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+                          <p className="mt-1 text-xs text-slate-500">Mistakes: {session.mistakesCount}</p>
+                          <Link
+                            href={`/dictation/${session.videoId}`}
+                            className="mt-2 inline-flex text-xs font-semibold text-indigo-600 transition-colors hover:text-indigo-800"
+                          >
+                            Review lesson
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+              </div>
 
-              <section className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <h2 className="font-semibold text-slate-800">Recent vocabulary</h2>
-                  <Link href="/vocabulary" className="text-xs text-indigo-600 hover:text-indigo-800 underline">
+              <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Recent vocabulary</h2>
+                  <Link href="/vocabulary" className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-800">
                     View all
                   </Link>
                 </div>
@@ -237,7 +278,7 @@ export default function HomePage() {
                 ) : (
                   <ul className="space-y-2">
                     {dashboardData.recentVocabulary.map((item) => (
-                      <li key={item.id} className="text-sm">
+                      <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
                         <p className="font-medium text-slate-800">{item.term}</p>
                         <p className="text-xs text-slate-500">{item.sentence_context}</p>
                       </li>
@@ -249,85 +290,97 @@ export default function HomePage() {
           )}
         </main>
       ) : (
-        <main className="flex flex-1 flex-col items-center justify-center px-4 py-16">
-          <div className="mb-10 text-center">
-            <div className="text-5xl mb-4">🎧</div>
-            <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 mb-2">
-              English Dictation Trainer
+        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-4 py-12 md:py-16">
+          <section className="w-full max-w-3xl text-center">
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
+              <PlayCircle size={14} className="text-indigo-600" />
+              Master English through listening
+            </div>
+            <h1 className="text-balance text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
+              Turn any YouTube video into an interactive language lesson
             </h1>
-            <p className="text-slate-500 text-lg max-w-md mx-auto">
-              Paste a YouTube link, listen sentence by sentence, and type what you
-              hear. AI will help you fix mistakes.
+            <p className="mx-auto mt-4 max-w-2xl text-base text-slate-600 md:text-lg">
+              Paste a link, listen sentence by sentence, and type what you hear. Get instant feedback while you practice.
             </p>
-          </div>
+          </section>
 
           <form
             onSubmit={handleStart}
-            className="w-full max-w-xl bg-white rounded-2xl shadow-md border border-slate-200 p-6 flex flex-col gap-4"
+            className="mt-8 flex w-full max-w-3xl flex-col gap-3 rounded-3xl border border-white/70 bg-white/60 p-4 shadow-xl backdrop-blur-xl md:flex-row"
           >
-            <label htmlFor="youtube-url" className="font-semibold text-slate-700">
+            <label htmlFor="youtube-url" className="sr-only">
               YouTube video URL
             </label>
-            <input
-              id="youtube-url"
-              type="text"
-              value={url}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                setError(null);
-              }}
-              placeholder="https://www.youtube.com/watch?v=..."
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-base outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors"
-              autoFocus
-            />
-
-            {error && (
-              <p className="text-red-600 text-sm flex items-center gap-1">
-                <span>⚠</span> {error}
-              </p>
-            )}
-
+            <div className="relative flex-1">
+              <Video className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input
+                id="youtube-url"
+                type="text"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setError(null);
+                }}
+                placeholder="Paste YouTube URL here (e.g. https://www.youtube.com/watch?v=...)"
+                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pl-11 text-base text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                autoFocus
+              />
+            </div>
             <button
               type="submit"
               disabled={submitting}
-              className="w-full rounded-xl bg-indigo-600 text-white font-bold py-3 text-base hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting ? "Loading…" : "Start Dictation →"}
+              {submitting ? "Loading…" : "Start Dictation"}
+              {!submitting && <ArrowRight size={17} />}
             </button>
-
-            <p className="text-center text-xs text-slate-400">
-              Start without signing in.{" "}
-              <span className="text-slate-500">
-                Sign in to save progress, vocabulary, and dashboard data.
-              </span>
-            </p>
           </form>
 
-          <ul className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl w-full text-sm text-slate-600">
-            {[
-              "▶  Auto-pause after each sentence",
-              "✅  Relaxed matching (case & punctuation ignored)",
-              "💡  4-level hint system",
-              "🤖  AI grammar explanations",
-              "📊  Progress & accuracy tracking",
-              "🔁  Replay any sentence anytime",
-            ].map((feature) => (
-              <li key={feature} className="flex items-start gap-2">
-                {feature}
-              </li>
-            ))}
-          </ul>
+          {error && (
+            <p className="mt-3 flex items-center gap-1 text-sm text-red-600">
+              <span>⚠</span> {error}
+            </p>
+          )}
+
+          <p className="mt-4 text-sm text-slate-500">
+            Start without signing in. Sign in later to save progress.
+          </p>
+
+          <section className="mt-10 grid w-full max-w-5xl grid-cols-1 gap-4 md:grid-cols-3">
+            <FeatureCard
+              title="Auto-pause engine"
+              description="The lesson pauses sentence by sentence so you can listen and type with focus."
+            />
+            <FeatureCard
+              title="Relaxed matching"
+              description="Case and punctuation are handled for you so you can focus on comprehension."
+            />
+            <FeatureCard
+              title="Progress tracking"
+              description="Sign in to save vocabulary, resume sessions, and track your improvement."
+            />
+          </section>
         </main>
       )}
     </>
   );
 }
 
-function MetricCard({ title, value }: { title: string; value: string }) {
+function MetricCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-xs text-slate-500">{title}</p>
-      <p className="text-2xl font-bold text-slate-900 mt-1">{value}</p>
+    <div className="rounded-2xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
+      <div className="mb-2 text-indigo-600">{icon}</div>
+      <p className="text-xs uppercase tracking-wide text-slate-500">{title}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function FeatureCard({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-3xl border border-white/70 bg-white/60 p-5 shadow-lg backdrop-blur-xl">
+      <h3 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
+      <p className="mt-2 text-sm leading-relaxed text-slate-600">{description}</p>
     </div>
   );
 }
