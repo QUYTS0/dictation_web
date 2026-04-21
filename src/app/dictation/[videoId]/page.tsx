@@ -260,6 +260,8 @@ const SCRIPT_CONTEXT_NEXT_COUNT = 2;
 const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
 const CORRECT_RESULT_VISIBILITY_DELAY_MS = 650;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
+const LESSON_PANEL_TAB_HEIGHT_CLASS =
+  "h-[50vh] sm:h-[52vh] md:h-[54vh] lg:h-[56vh] xl:h-[58vh] 2xl:h-[60vh]";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   standard: "max-w-lg",
   large: "max-w-5xl",
@@ -1598,7 +1600,7 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
 
                 {rightPanelTab === "saved" ? (
-                  <div className="flex h-[60vh] flex-col gap-3">
+                  <div className={clsx("flex flex-col gap-3", LESSON_PANEL_TAB_HEIGHT_CLASS)}>
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-semibold text-slate-700">
                         Saved items ({lessonSavedInCurrentVideo.length})
@@ -1641,7 +1643,7 @@ export default function DictationPage({ params }: PageProps) {
                     )}
                   </div>
                 ) : (
-                  <div className="flex h-[60vh] flex-col gap-3">
+                  <div className={clsx("flex flex-col gap-3", LESSON_PANEL_TAB_HEIGHT_CLASS)}>
                     <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                       Viewing the script may reveal answers.
                     </div>
