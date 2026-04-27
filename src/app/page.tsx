@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import clsx from "clsx";
 import {
   ArrowRight,
   BookOpen,
+  BrainCircuit,
   CheckCircle2,
-  Clock3,
+  Clock,
+  Flame,
   Headphones,
+  Play,
   PlayCircle,
+  ShieldCheck,
+  Sparkles,
+  Trophy,
   Video,
+  Zap,
 } from "lucide-react";
+import { motion } from "motion/react";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import UserButton from "@/components/UserButton";
 import { useAuth } from "@/context/auth";
@@ -39,25 +48,34 @@ interface DashboardData {
   }>;
 }
 
-const LANDING_FEATURE_CARDS = [
+const LANDING_FEATURES = [
   {
-    title: "Auto-pause engine",
-    description: "The lesson pauses sentence by sentence so you can listen and type with focus.",
+    icon: <Play size={24} />,
+    title: "Auto-pause Engine",
+    description:
+      "The video automatically pauses after each sentence, giving you time to process and type without frantic clicking.",
+    delay: 0.2,
   },
   {
-    title: "Relaxed matching",
-    description: "Case and punctuation are handled for you so you can focus on comprehension.",
+    icon: <BrainCircuit size={24} />,
+    title: "AI Grammar Insights",
+    description:
+      "Get personalized explanations for your mistakes. Understand why you misheard something, not just that you did.",
+    delay: 0.3,
   },
   {
-    title: "Progress tracking",
-    description: "Sign in to save vocabulary, resume sessions, and track your improvement.",
+    icon: <ShieldCheck size={24} />,
+    title: "Relaxed Matching",
+    description:
+      "Focus on meaning, not mechanics. Our system ignores minor punctuation and capitalization so you can flow.",
+    delay: 0.4,
   },
 ] as const;
-const MAX_DISPLAYED_MISTAKE_SESSIONS = 4;
+const MAX_HOME_HISTORY_SESSIONS = 8;
 
 export default function HomePage() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, openAuthModal } = useAuth();
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -65,7 +83,7 @@ export default function HomePage() {
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
 
-  const handleStart = async (e: React.FormEvent) => {
+  const handleStart = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -124,85 +142,178 @@ export default function HomePage() {
       .finally(() => setDashboardLoading(false));
   }, [user]);
 
-  const resumableSessionsWithMistakes = dashboardData?.resumableSessions.filter((session) => session.mistakesCount > 0) ?? [];
+  const firstSession = dashboardData?.resumableSessions[0] ?? null;
+  const latestMistakeSession = useMemo(
+    () => dashboardData?.resumableSessions.find((session) => session.mistakesCount > 0) ?? null,
+    [dashboardData]
+  );
+
+  if (authLoading) {
+    return (
+      <main className="mx-auto w-full max-w-6xl p-4 md:p-6">
+        <p className="text-sm text-slate-500">Loading…</p>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+        <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
+        <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+
+        <div className="relative z-10 flex flex-1 flex-col">
+          <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
+                  <Headphones size={18} />
+                </div>
+                <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={openAuthModal}
+                  className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+                >
+                  Sign In
+                </button>
+                <a
+                  href="#landing-youtube-url"
+                  className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-800"
+                >
+                  Get Started
+                </a>
+              </div>
+            </div>
+          </header>
+
+          <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col items-center justify-center px-4 py-16">
+            <section className="mx-auto mb-16 max-w-3xl pt-8 text-center">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+              >
+                <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-primary-100 bg-primary-50 px-3 py-1 text-xs font-semibold text-primary-700">
+                  <Zap size={14} className="text-primary-500" />
+                  <span>Master English through listening</span>
+                </div>
+                <h1 className="mb-6 text-4xl font-semibold leading-tight tracking-tight text-balance text-slate-900 md:text-6xl">
+                  Turn any YouTube video into an <span className="text-primary-600">interactive language lesson</span>
+                </h1>
+                <p className="mx-auto mb-8 max-w-2xl text-lg leading-relaxed text-slate-600 md:text-xl">
+                  Paste a link, listen sentence by sentence, and type what you hear. Our AI provides instant
+                  feedback to perfect your comprehension and grammar.
+                </p>
+              </motion.div>
+
+              <motion.form
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: 0.1 }}
+                onSubmit={handleStart}
+                className="mx-auto flex max-w-2xl flex-col gap-3 rounded-3xl border border-white/60 bg-white/40 p-3 shadow-xl transition-all focus-within:ring-2 focus-within:ring-primary-500/30 backdrop-blur-xl md:p-4 sm:flex-row"
+              >
+                <div className="relative flex flex-1 items-center">
+                  <Video className="absolute left-4 text-slate-400" size={20} />
+                  <input
+                    id="landing-youtube-url"
+                    type="text"
+                    value={url}
+                    onChange={(e) => {
+                      setUrl(e.target.value);
+                      setError(null);
+                    }}
+                    placeholder="Paste YouTube URL here (e.g. https://www.youtube.com/...)"
+                    className="w-full border-none bg-transparent py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-0"
+                    autoFocus
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-8 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? "Loading…" : "Start Dictation"} {!submitting && <ArrowRight size={18} />}
+                </button>
+              </motion.form>
+              {error && <p className="mt-3 text-sm text-red-600">⚠ {error}</p>}
+              <p className="mt-4 text-sm text-slate-500">Start without signing in. Sign in later to save progress.</p>
+            </section>
+
+            <section className="mt-12 grid w-full gap-6 md:grid-cols-3">
+              {LANDING_FEATURES.map((feature) => (
+                <LandingFeatureCard
+                  key={feature.title}
+                  icon={feature.icon}
+                  title={feature.title}
+                  description={feature.description}
+                  delay={feature.delay}
+                />
+              ))}
+            </section>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <>
-      <nav
-        aria-label="Primary navigation"
-        className="sticky top-0 z-20 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md"
-      >
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
-              <Headphones size={18} />
-            </div>
-            <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
-            {user && (
-              <Link
-                href="/vocabulary"
-                className="ml-2 hidden text-sm font-medium text-slate-500 transition-colors hover:text-indigo-600 sm:inline"
-              >
-                Vocabulary
-              </Link>
-            )}
-          </div>
-          <div className="shrink-0">
-            <UserButton />
-          </div>
-        </div>
-      </nav>
+    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
+      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
 
-      {authLoading ? (
-        <main className="mx-auto w-full max-w-6xl p-4 md:p-6">
-          <p className="text-sm text-slate-500">Loading…</p>
-        </main>
-      ) : user ? (
-        <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
-          <section className="rounded-3xl border border-white/70 bg-white/60 p-5 shadow-lg backdrop-blur-xl md:p-6">
-            <div className="mb-4">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Start your next dictation</h1>
-              <p className="mt-1 text-sm text-slate-500">
-                Paste a YouTube URL and jump right back into focused listening practice.
-              </p>
+      <div className="relative z-10 flex flex-1 flex-col">
+        <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
+            <Link href="/" className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
+                <Headphones size={18} />
+              </div>
+              <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
+            </Link>
+            <div className="flex items-center gap-6">
+              <nav className="hidden gap-6 md:flex">
+                <span className="text-sm font-bold text-primary-600">Dashboard</span>
+                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
+                  Vocabulary
+                </Link>
+                <Link href="/history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
+                  History
+                </Link>
+              </nav>
+              <UserButton />
             </div>
-            <form onSubmit={handleStart} className="flex flex-col gap-3 md:flex-row md:items-center">
-              <label htmlFor="youtube-url" className="sr-only">
-                Enter a YouTube video URL to start your dictation lesson
-              </label>
-              <div className="relative flex-1">
-                <Video
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-                  size={18}
-                />
+          </div>
+        </header>
+
+        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-8">
+          <section className="rounded-3xl border border-white/60 bg-white/40 p-4 shadow-xl backdrop-blur-xl md:p-5">
+            <form onSubmit={handleStart} className="flex flex-col gap-3 sm:flex-row">
+              <div className="relative flex flex-1 items-center">
+                <Video className="absolute left-4 text-slate-400" size={20} />
                 <input
-                  id="youtube-url"
+                  id="workspace-youtube-url"
                   type="text"
                   value={url}
                   onChange={(e) => {
                     setUrl(e.target.value);
                     setError(null);
                   }}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pl-11 text-base text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                  autoFocus
+                  placeholder="Paste YouTube URL here (e.g. https://www.youtube.com/...)"
+                  className="w-full border-none bg-transparent py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-0"
                 />
               </div>
               <button
                 type="submit"
                 disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-8 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {submitting ? "Loading…" : "Start Dictation"}
-                {!submitting && <ArrowRight size={17} />}
+                {submitting ? "Loading…" : "Start Dictation"} {!submitting && <ArrowRight size={18} />}
               </button>
             </form>
-            {error && (
-              <p className="mt-3 flex items-center gap-1 text-sm text-red-600">
-                <span>⚠</span> {error}
-              </p>
-            )}
+            {error && <p className="mt-3 text-sm text-red-600">⚠ {error}</p>}
           </section>
 
           {dashboardError && <p className="text-sm text-red-600">{dashboardError}</p>}
@@ -210,198 +321,255 @@ export default function HomePage() {
           {dashboardLoading ? (
             <p className="text-sm text-slate-500">Loading workspace…</p>
           ) : !dashboardData ? (
-            <p className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+            <p className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
               No workspace data yet. Start a new dictation to begin.
             </p>
           ) : (
             <>
-              <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <MetricCard title="Completed videos" value={String(dashboardData.completedVideos)} icon={<PlayCircle size={18} />} />
-                <MetricCard title="Average accuracy" value={`${dashboardData.avgAccuracy}%`} icon={<CheckCircle2 size={18} />} />
-                <MetricCard title="Practice time" value={`${dashboardData.totalPracticeMinutes} min`} icon={<Clock3 size={18} />} />
-                <MetricCard title="Vocabulary" value={String(dashboardData.vocabularyCount)} icon={<BookOpen size={18} />} />
+              <section className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
+                <div>
+                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">
+                    Welcome back, {user.email?.split("@")[0] ?? "Learner"}
+                  </h1>
+                  <p className="text-sm text-slate-500">
+                    You have {dashboardData.resumableSessions.length} active session
+                    {dashboardData.resumableSessions.length === 1 ? "" : "s"}.
+                  </p>
+                </div>
+                <div className="flex gap-2 rounded-2xl border border-white/80 bg-white/60 p-2 shadow-md backdrop-blur-md">
+                  <div className="flex shrink-0 items-center gap-2 rounded-lg bg-orange-50 px-3 py-1.5 text-orange-600">
+                    <Flame size={18} className="fill-orange-500/20" />
+                    <span className="text-sm font-semibold">{dashboardData.completedVideos} Videos</span>
+                  </div>
+                  <div className="mx-1 my-1 w-px bg-slate-200" />
+                  <div className="flex shrink-0 items-center gap-2 rounded-lg bg-yellow-50 px-3 py-1.5 text-yellow-600">
+                    <Trophy size={18} className="fill-yellow-500/20" />
+                    <span className="text-sm font-semibold">Active Learner</span>
+                  </div>
+                </div>
               </section>
 
-              <div className="grid gap-4 lg:grid-cols-3">
-                <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl lg:col-span-2">
-                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Continue learning</h2>
-                  {dashboardData.resumableSessions.length === 0 ? (
-                    <p className="text-sm text-slate-500">No recent sessions yet.</p>
-                  ) : (
-                    <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      {dashboardData.resumableSessions.map((session) => (
-                        <li key={session.sessionId} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                <MetricCard title="Completed Videos" value={String(dashboardData.completedVideos)} icon={<PlayCircle size={20} />} />
+                <MetricCard title="Avg. Accuracy" value={`${dashboardData.avgAccuracy}%`} icon={<CheckCircle2 size={20} />} positive />
+                <MetricCard title="Practice Time" value={`${dashboardData.totalPracticeMinutes}m`} icon={<Clock size={20} />} />
+                <MetricCard title="Vocab Saved" value={String(dashboardData.vocabularyCount)} icon={<BookOpen size={20} />} trend={dashboardData.vocabularyCount > 0 ? `+${dashboardData.vocabularyCount} words` : undefined} />
+              </section>
+
+              <div className="grid items-start gap-8 md:grid-cols-3">
+                <div className="flex flex-col gap-8 md:col-span-2">
+                  <section>
+                    <div className="mb-4 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-900">Continue Learning</h2>
+                    </div>
+
+                    {!firstSession ? (
+                      <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
+                        No recent sessions yet.
+                      </div>
+                    ) : (
+                      <Link
+                        href={`/dictation/${firstSession.videoId}`}
+                        className="group relative flex cursor-pointer flex-col gap-4 rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md transition-all hover:-translate-y-1 sm:flex-row"
+                      >
+                        <div className="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl bg-slate-800 sm:w-48">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
-                            src={`https://img.youtube.com/vi/${session.videoId}/hqdefault.jpg`}
-                            alt={session.videoTitle ?? `Thumbnail for lesson video ${session.videoId}`}
-                            className="aspect-video w-full bg-slate-100 object-cover"
+                            src={`https://img.youtube.com/vi/${firstSession.videoId}/hqdefault.jpg`}
+                            alt={firstSession.videoTitle ?? `Thumbnail for ${firstSession.videoId}`}
+                            className="h-full w-full object-cover opacity-80 transition-opacity group-hover:opacity-100"
                             loading="lazy"
                           />
-                          <div className="flex flex-col gap-2 p-3">
-                            <p className="line-clamp-2 font-semibold text-slate-900">
-                              {session.videoTitle ?? `Video ${session.videoId}`}
-                            </p>
-                            <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
-                            <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-                              <p>Accuracy: {session.accuracy}%</p>
-                              <p>Segment: {session.currentSegmentIndex + 1}</p>
-                              <p>Attempts: {session.totalAttempts}</p>
-                              <p>Mistakes: {session.mistakesCount}</p>
-                            </div>
-                            <div className="pt-1">
-                              <Link
-                                href={`/dictation/${session.videoId}`}
-                                className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700"
-                              >
-                                Resume
-                              </Link>
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/30 shadow-lg backdrop-blur-md transition-transform group-hover:scale-110">
+                              <PlayCircle className="fill-white/20 text-white" size={24} />
                             </div>
                           </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
+                        </div>
 
-                <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
-                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-700">Recent mistakes</h2>
-                  {resumableSessionsWithMistakes.length === 0 ? (
-                    <p className="text-sm text-slate-500">No mistakes to review in recent sessions.</p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {resumableSessionsWithMistakes.slice(0, MAX_DISPLAYED_MISTAKE_SESSIONS).map((session) => (
-                        <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3">
-                          <p className="line-clamp-2 text-sm font-medium text-slate-800">
-                            {session.videoTitle ?? `Video ${session.videoId}`}
+                        <div className="flex flex-1 flex-col justify-center">
+                          <h3 className="mb-1 font-semibold text-slate-900 transition-colors group-hover:text-primary-600">
+                            {firstSession.videoTitle ?? `Video ${firstSession.videoId}`}
+                          </h3>
+                          <p className="mb-3 text-sm text-slate-500">
+                            Last practiced {new Date(firstSession.updatedAt).toLocaleDateString()}
                           </p>
-                          <p className="mt-1 text-xs text-slate-500">Mistakes: {session.mistakesCount}</p>
-                          <Link
-                            href={`/dictation/${session.videoId}`}
-                            className="mt-2 inline-flex text-xs font-semibold text-indigo-600 transition-colors hover:text-indigo-800"
-                          >
-                            Review lesson
-                          </Link>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
-              </div>
 
-              <section className="rounded-3xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Recent vocabulary</h2>
-                  <Link href="/vocabulary" className="text-xs font-medium text-indigo-600 transition-colors hover:text-indigo-800">
-                    View all
-                  </Link>
+                          <div className="mt-auto">
+                            <div className="mb-1 flex justify-between text-xs text-slate-600">
+                              <span>
+                                {firstSession.currentSegmentIndex + 1} segments · {firstSession.totalAttempts} attempts
+                              </span>
+                              <span className="font-medium">{firstSession.accuracy}%</span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                              <div className="h-full rounded-full bg-primary-500" style={{ width: `${Math.min(100, Math.max(0, firstSession.accuracy))}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      </Link>
+                    )}
+                  </section>
+
+                  <section>
+                    <div className="mb-4 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-900">Recent Vocabulary</h2>
+                      <Link
+                        href="/vocabulary"
+                        aria-label="View all vocabulary"
+                        className="flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700"
+                      >
+                        View all <ArrowRight size={16} />
+                      </Link>
+                    </div>
+                    <div className="overflow-hidden rounded-3xl border border-white/60 bg-white/50 shadow-xl backdrop-blur-md">
+                      {dashboardData.recentVocabulary.length === 0 ? (
+                        <p className="p-4 text-sm text-slate-500">No saved vocabulary yet.</p>
+                      ) : (
+                        <table className="w-full text-left text-sm">
+                          <thead className="border-b border-white/60 bg-white/40 text-slate-500">
+                            <tr>
+                              <th className="px-4 py-3 font-medium">Word / Phrase</th>
+                              <th className="px-4 py-3 font-medium">Sentence context</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {dashboardData.recentVocabulary.map((item) => (
+                              <VocabRow key={item.id} word={item.term} context={item.sentence_context} />
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </section>
+
+                  <section id="history" tabIndex={0} className="rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md">
+                    <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-900">History</h2>
+                    {dashboardData.resumableSessions.length === 0 ? (
+                      <p className="text-sm text-slate-500">No recent sessions yet.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {dashboardData.resumableSessions.slice(0, MAX_HOME_HISTORY_SESSIONS).map((session) => (
+                          <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                            <p className="font-medium text-slate-800">{session.videoTitle ?? `Video ${session.videoId}`}</p>
+                            <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
                 </div>
-                {dashboardData.recentVocabulary.length === 0 ? (
-                  <p className="text-sm text-slate-500">No saved vocabulary yet.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {dashboardData.recentVocabulary.map((item) => (
-                      <li key={item.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
-                        <p className="font-medium text-slate-800">{item.term}</p>
-                        <p className="text-xs text-slate-500">{item.sentence_context}</p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+
+                <div className="md:col-span-1">
+                  <section className="relative overflow-hidden rounded-3xl bg-indigo-600 p-6 text-white shadow-xl">
+                    <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
+                    <div className="relative z-10 mb-4 flex items-center gap-2">
+                      <Sparkles size={20} className="text-white" />
+                      <h2 className="font-semibold tracking-tight text-white">AI Insights</h2>
+                    </div>
+
+                    <div className="relative z-10 flex flex-col gap-4">
+                      <div className="rounded-2xl border border-white/20 bg-white/10 p-4 text-sm shadow-sm">
+                        <h4 className="mb-1 font-bold text-white">Focus Area</h4>
+                        {!latestMistakeSession ? (
+                          <p className="leading-relaxed text-indigo-100">
+                            No mistakes logged yet. Keep practicing to unlock personalized insights.
+                          </p>
+                        ) : (
+                          <>
+                            <p className="mb-3 leading-relaxed text-indigo-100">
+                              You made {latestMistakeSession.mistakesCount} mistakes in your most recent challenge.
+                            </p>
+                            <Link
+                              href={`/dictation/${latestMistakeSession.videoId}`}
+                              className="block w-full rounded-xl bg-white py-2 text-center text-sm font-bold text-indigo-600 shadow-lg shadow-indigo-900/20"
+                            >
+                              Review Lesson
+                            </Link>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
             </>
           )}
         </main>
-      ) : (
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-4 py-12 md:py-16">
-          <section className="w-full max-w-3xl text-center">
-            <span
-              role="status"
-              className="mb-5 inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700"
-            >
-              <PlayCircle size={14} className="text-indigo-600" />
-              Master English through listening
-            </span>
-            <h1 className="text-balance text-4xl font-semibold tracking-tight text-slate-900 md:text-5xl">
-              Turn any YouTube video into an interactive language lesson
-            </h1>
-            <p className="mx-auto mt-4 max-w-2xl text-base text-slate-600 md:text-lg">
-              Paste a link, listen sentence by sentence, and type what you hear. Get instant feedback while you practice.
-            </p>
-          </section>
+      </div>
+    </div>
+  );
+}
 
-          <form
-            onSubmit={handleStart}
-            className="mt-8 flex w-full max-w-3xl flex-col gap-3 rounded-3xl border border-white/70 bg-white/60 p-4 shadow-xl backdrop-blur-xl md:flex-row"
+function LandingFeatureCard({
+  icon,
+  title,
+  description,
+  delay,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  delay: number;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay }}
+      className="rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl transition-all hover:-translate-y-1 backdrop-blur-xl"
+    >
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-primary-600 shadow-sm">
+        {icon}
+      </div>
+      <h3 className="mb-2 text-lg font-semibold text-slate-900">{title}</h3>
+      <p className="text-sm leading-relaxed text-slate-500">{description}</p>
+    </motion.div>
+  );
+}
+
+function MetricCard({
+  title,
+  value,
+  icon,
+  trend,
+  positive,
+}: {
+  title: string;
+  value: string;
+  icon: ReactNode;
+  trend?: string;
+  positive?: boolean;
+}) {
+  return (
+    <div className="flex flex-col rounded-3xl border border-white/60 bg-white/50 p-5 shadow-xl transition-all hover:-translate-y-1 backdrop-blur-md">
+      <div className="mb-2 flex items-start justify-between">
+        <div className="text-slate-500">{icon}</div>
+        {trend && (
+          <div
+            className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600")}
           >
-            <label htmlFor="youtube-url" className="sr-only">
-              Enter a YouTube video URL to start your dictation lesson
-            </label>
-            <div className="relative flex-1">
-              <Video
-                aria-hidden="true"
-                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-                size={18}
-              />
-              <input
-                id="youtube-url"
-                type="text"
-                value={url}
-                onChange={(e) => {
-                  setUrl(e.target.value);
-                  setError(null);
-                }}
-                placeholder="Paste YouTube URL here..."
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 pl-11 text-base text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                autoFocus
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {submitting ? "Loading…" : "Start Dictation"}
-              {!submitting && <ArrowRight size={17} />}
-            </button>
-          </form>
-
-          {error && (
-            <p className="mt-3 flex items-center gap-1 text-sm text-red-600">
-              <span>⚠</span> {error}
-            </p>
-          )}
-
-          <p className="mt-4 text-sm text-slate-500">
-            Start without signing in. Sign in later to save progress.
-          </p>
-
-          <section className="mt-10 grid w-full max-w-5xl grid-cols-1 gap-4 md:grid-cols-3">
-            {LANDING_FEATURE_CARDS.map((feature) => (
-              <FeatureCard key={feature.title} title={feature.title} description={feature.description} />
-            ))}
-          </section>
-        </main>
-      )}
-    </>
-  );
-}
-
-function MetricCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-white/70 bg-white/60 p-4 shadow-md backdrop-blur-xl">
-      <div className="mb-2 text-indigo-600">{icon}</div>
-      <p className="text-xs uppercase tracking-wide text-slate-500">{title}</p>
-      <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+            {trend}
+          </div>
+        )}
+      </div>
+      <div className="mt-auto">
+        <div className="text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
+        <div className="mt-0.5 text-xs font-medium uppercase text-slate-500">{title}</div>
+      </div>
     </div>
   );
 }
 
-function FeatureCard({ title, description }: { title: string; description: string }) {
+function VocabRow({ word, context }: { word: string; context: string }) {
   return (
-    <div className="rounded-3xl border border-white/70 bg-white/60 p-5 shadow-lg backdrop-blur-xl">
-      <h3 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h3>
-      <p className="mt-2 text-sm leading-relaxed text-slate-600">{description}</p>
-    </div>
+    <tr className="group cursor-pointer transition-colors hover:bg-white/40">
+      <td className="w-1/3 px-4 py-3 align-top">
+        <div className="font-semibold text-slate-900">{word}</div>
+      </td>
+      <td className="px-4 py-3 align-top">
+        <div className="line-clamp-2 text-xs italic text-slate-500 transition-colors group-hover:text-slate-700">&quot;{context}&quot;</div>
+      </td>
+    </tr>
   );
 }

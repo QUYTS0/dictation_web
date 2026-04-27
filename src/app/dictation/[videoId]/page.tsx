@@ -1,12 +1,27 @@
 "use client";
 
 import { use, useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { clsx } from "clsx";
+import {
+  ArrowLeft,
+  PanelRightClose,
+  PanelRightOpen,
+  SkipBack,
+  SkipForward,
+  Repeat,
+  HelpCircle,
+  Check,
+  X,
+  FileText,
+  Bookmark,
+  CheckCircle2,
+  Sparkles,
+} from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 
 import YouTubePlayer, { type YouTubePlayerHandle } from "@/components/YouTubePlayer";
-import DictationInput from "@/components/DictationInput";
 import HintDisplay from "@/components/HintDisplay";
 import AIExplainer from "@/components/AIExplainer";
 import ProgressBar from "@/components/ProgressBar";
@@ -81,23 +96,6 @@ function getSavedFilterLabel(filter: SavedFilter) {
   return "Sentences";
 }
 
-function getScriptSentenceLabel({
-  isPreviousScriptSentence,
-  isCurrentScriptSentence,
-  isNextScriptSentence,
-  segmentIndex,
-}: {
-  isPreviousScriptSentence: boolean;
-  isCurrentScriptSentence: boolean;
-  isNextScriptSentence: boolean;
-  segmentIndex: number;
-}) {
-  if (isPreviousScriptSentence) return `Previous sentence · #${segmentIndex + 1}`;
-  if (isCurrentScriptSentence) return `Current sentence · #${segmentIndex + 1}`;
-  if (isNextScriptSentence) return `Next sentence · #${segmentIndex + 1}`;
-  return `Upcoming sentence · #${segmentIndex + 1}`;
-}
-
 function splitSentenceIntoWords(sentence: string) {
   return sentence.trim().split(/\s+/).filter(Boolean);
 }
@@ -111,14 +109,6 @@ function inferSavedItemType(item: VocabularyItem): LessonItemType {
   const normalizedSentence = normalizeComparableText(item.sentence_context);
   if (normalizedTerm && normalizedTerm === normalizedSentence) return "sentence";
   return splitSentenceIntoWords(item.term).length <= 1 ? "word" : "phrase";
-}
-
-function summarizeDiff(diff: DiffToken[]) {
-  return {
-    wrong: diff.filter((token) => token.status === "wrong").length,
-    missing: diff.filter((token) => token.status === "missing").length,
-    extra: diff.filter((token) => token.status === "extra").length,
-  };
 }
 
 function buildComparedTokens({
@@ -260,11 +250,9 @@ const SCRIPT_CONTEXT_NEXT_COUNT = 2;
 const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
 const CORRECT_RESULT_VISIBILITY_DELAY_MS = 650;
 const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
-const LESSON_PANEL_TAB_HEIGHT_CLASS =
-  "h-[50vh] sm:h-[52vh] md:h-[54vh] lg:h-[56vh] xl:h-[58vh] 2xl:h-[60vh]";
 const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
-  standard: "max-w-lg",
-  large: "max-w-5xl",
+  standard: "max-w-4xl",
+  large: "max-w-none",
 };
 
 function buildAiExplainPayload({
@@ -302,8 +290,6 @@ export default function DictationPage({ params }: PageProps) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
   const accuracy = selectAccuracy(sessionStore);
-  const queryClient = useQueryClient();
-
   // Local state
   const [currentSegIdx, setCurrentSegIdx] = useState(0);
   const [uxState, setUxState] = useState<UXState>("loading_transcript");
@@ -311,7 +297,6 @@ export default function DictationPage({ params }: PageProps) {
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [hintLevel, setHintLevel] = useState<HintLevel>(0);
   const [transcriptId, setTranscriptId] = useState<string | undefined>();
-  const [isRegenerating, setIsRegenerating] = useState(false);
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
@@ -334,8 +319,12 @@ export default function DictationPage({ params }: PageProps) {
   const [showPreviousScriptContext, setShowPreviousScriptContext] = useState(false);
   const [showScriptContext, setShowScriptContext] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
+  const [workspaceInputValue, setWorkspaceInputValue] = useState("");
+  const [isZenMode, setIsZenMode] = useState(false);
+  const [showHintPanel, setShowHintPanel] = useState(false);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
+  const workspaceInputRef = useRef<HTMLInputElement>(null);
   // Keep lesson note draft in a ref (not state) so typing in note inputs
   // does not trigger full-page rerenders and input lag on heavy lesson UI.
   const learningNoteDraftRef = useRef("");
@@ -525,6 +514,22 @@ export default function DictationPage({ params }: PageProps) {
     [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts]
   );
 
+  const handleWorkspaceCheck = useCallback(() => {
+    const trimmed = workspaceInputValue.trim();
+    if (!trimmed) return;
+    void handleAnswerSubmit(trimmed);
+  }, [handleAnswerSubmit, workspaceInputValue]);
+
+  const handleWorkspaceInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        handleWorkspaceCheck();
+      }
+    },
+    [handleWorkspaceCheck]
+  );
+
   // ---- Start session (seek to segment 0 and play) ----
   const handleStart = useCallback(() => {
     firstAttemptBySegmentRef.current = {};
@@ -575,32 +580,6 @@ export default function DictationPage({ params }: PageProps) {
       triggerAutoSave(prevIdx, "active");
     }
   }, [currentSegIdx, triggerAutoSave]);
-
-  // ---- Force-regenerate transcript ----
-  const handleRegenerate = useCallback(async () => {
-    setIsRegenerating(true);
-    setTranscriptId(undefined);
-    try {
-      const res = await fetch("/api/transcript/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId, force: true }),
-      });
-      if (!res.ok) throw new Error("Regenerate request failed");
-      // Reset UI state back to loading so the query refetch picks up the
-      // new "processing" transcript and starts polling.
-      setUxState("loading_transcript");
-      setCurrentSegIdx(0);
-      setCheckResult(null);
-      setWrongAttempts(0);
-      setHintLevel(0);
-      await queryClient.invalidateQueries({ queryKey: ["transcript", videoId] });
-    } catch {
-      // Ignore errors — the user can try again
-    } finally {
-      setIsRegenerating(false);
-    }
-  }, [videoId, queryClient]);
 
   // ---- Keyboard shortcuts ----
   useEffect(() => {
@@ -766,6 +745,17 @@ export default function DictationPage({ params }: PageProps) {
       uxState === "playing") &&
     !!currentSegment;
 
+  useEffect(() => {
+    setWorkspaceInputValue("");
+    setShowHintPanel(false);
+  }, [currentSegIdx]);
+
+  useEffect(() => {
+    if (!shouldShowInput) return;
+    const t = window.setTimeout(() => workspaceInputRef.current?.focus(), 30);
+    return () => window.clearTimeout(t);
+  }, [inputFocusSignal, shouldShowInput]);
+
   const lessonSavedInCurrentVideo = useMemo(
     () => learningItems.filter((item) => item.video_id === videoId),
     [learningItems, videoId]
@@ -806,8 +796,8 @@ export default function DictationPage({ params }: PageProps) {
     uxState !== "transcript_processing" &&
     uxState !== "transcript_failed";
   const videoBlock = shouldRenderVideoPlayer && (
-    <div className={clsx("mx-auto w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[videoSizeMode])}>
-      <div className={clsx(!showVideo && "h-0 overflow-hidden pointer-events-none")} aria-hidden={!showVideo}>
+    <div className={clsx("mx-auto flex h-full w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[videoSizeMode])}>
+      <div className="h-full w-full">
         <YouTubePlayer
           ref={ytPlayerRef}
           videoId={videoId}
@@ -815,22 +805,6 @@ export default function DictationPage({ params }: PageProps) {
           onSegmentEnd={handleSegmentEnd}
         />
       </div>
-      {!showVideo && (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-slate-700">Audio focus mode</p>
-            <p className="text-xs text-slate-500 truncate">
-              Video is hidden. Playback and transport controls remain active.
-            </p>
-          </div>
-          <button
-            onClick={() => setShowVideo(true)}
-            className="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Show video
-          </button>
-        </div>
-      )}
     </div>
   );
 
@@ -1164,585 +1138,533 @@ export default function DictationPage({ params }: PageProps) {
     setScriptPopoverNoteMode(false);
   }, [scriptPopover]);
 
+  const workspaceTitle =
+    transcriptQuery.data?.title ?? `Video ${videoId}`;
+  const sentenceProgressLabel =
+    segments.length > 0
+      ? `Sentence ${Math.min(currentSegIdx + 1, segments.length)} of ${segments.length}`
+      : "Preparing transcript…";
+
+  const isCheckingWorkspace = uxState === "checking_answer" && checkResult === null;
+  const workspaceStatus: "idle" | "success" | "error" = checkResult
+    ? checkResult.isCorrect
+      ? "success"
+      : "error"
+    : "idle";
+
   // ---- Render ----
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
-      {/* Top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-white/60 bg-white/70 px-4 py-3 backdrop-blur-md">
-        <Link href="/" className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
-          ← Back
-        </Link>
-        <h1 className="text-base font-bold text-slate-800 truncate flex-1">
-          English Dictation Trainer
-        </h1>
-        {/* Regenerate button — shown when a transcript is loaded so user can fix timestamp issues */}
-        {(uxState === "transcript_ready" || uxState === "playing" || uxState === "paused_waiting_input" || uxState === "checking_answer") && (
-          <button
-            onClick={handleRegenerate}
-            disabled={isRegenerating}
-            title="Re-fetch captions from YouTube if sentences don't match the audio"
-            aria-label={isRegenerating ? "Regenerating transcript…" : "Regenerate transcript"}
-            className="text-xs text-slate-400 hover:text-amber-600 disabled:opacity-50 transition-colors whitespace-nowrap"
-          >
-            {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate"}
-          </button>
+    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
+      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+      <AnimatePresence>
+        {isZenMode && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-0 transition-all pointer-events-none"
+          />
         )}
-        <span className="text-xs text-slate-400 font-mono hidden sm:block">{videoId}</span>
-        <UserButton />
-      </header>
+      </AnimatePresence>
 
-        <main
-          className={clsx(
-            "mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-4 transition-all duration-300 lg:flex-row lg:p-6",
-            !showLearningPanel && "lg:justify-center"
-          )}
-        >
-        {/* Primary lesson column */}
-        <div
-          className={clsx(
-            "flex flex-col gap-4 transition-all duration-300",
-            showLearningPanel ? "lg:w-2/3" : "lg:w-3/4 xl:w-2/3"
-          )}
-        >
-          <div className="flex items-center justify-between rounded-2xl border border-white/70 bg-white/60 p-3 shadow-sm backdrop-blur-xl">
-            <p className="text-sm font-semibold text-slate-700">Video</p>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center rounded-xl border border-slate-300 bg-white p-0.5">
-                <button
-                  onClick={() => setVideoSizeMode("standard")}
-                  className={clsx(
-                    "px-2.5 py-1 text-xs rounded-md transition-colors",
-                    videoSizeMode === "standard"
-                      ? "bg-slate-200 text-slate-800"
-                      : "text-slate-600 hover:bg-slate-100"
-                  )}
-                >
-                  Standard
-                </button>
-                <button
-                  onClick={() => setVideoSizeMode("large")}
-                  className={clsx(
-                    "px-2.5 py-1 text-xs rounded-md transition-colors",
-                    videoSizeMode === "large"
-                      ? "bg-slate-200 text-slate-800"
-                      : "text-slate-600 hover:bg-slate-100"
-                  )}
-                >
-                  Large
-                </button>
-              </div>
-              <button
-                onClick={() => setShowVideo((v) => !v)}
-                className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
-              >
-                {showVideo ? "Audio focus mode" : "Exit audio focus"}
-              </button>
-            </div>
-          </div>
-
-          {/* YouTube Player */}
-          <div className="w-full">
-            {videoBlock}
-          </div>
-
-          {/* Progress bar */}
-          {segments.length > 0 && (
-            <ProgressBar
-              currentIndex={currentSegIdx}
-              totalSegments={segments.length}
-              accuracy={accuracy}
-            />
-          )}
-
-          {/* Replay / Skip controls */}
-          {(uxState === "paused_waiting_input" || uxState === "playing") && (
-            <div className="flex gap-2">
-              <button
-                onClick={handlePrevious}
-                disabled={currentSegIdx === 0}
-                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Previous sentence (Shift+←)"
-              >
-                ⏮ Prev (Shift+←)
-              </button>
-              <button
-                onClick={handleReplay}
-                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 transition-colors"
-                title="Replay (Shift+Space)"
-              >
-                🔁 Replay (Shift+Space)
-              </button>
-              <button
-                onClick={handleSkip}
-                disabled={currentSegIdx >= segments.length - 1}
-                className="flex-1 py-2 rounded-xl border border-slate-300 text-sm font-medium hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Next sentence (Shift+→)"
-              >
-                ⏭ Next (Shift+→)
-              </button>
-            </div>
-          )}
-
-          {/* UX State indicators */}
-          {uxState === "loading_transcript" && (
-            <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
-          )}
-
-          {uxState === "transcript_processing" && (
-            <StatusCard
-              icon="🔄"
-              title="Generating transcript…"
-              description="This may take a moment. The page will update automatically."
-              pulse
-            />
-          )}
-
-          {uxState === "transcript_failed" && (
-            <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-2">
-              <p className="text-2xl">❌</p>
-              <p className="font-semibold text-slate-800">Transcript failed</p>
-              <p className="text-sm text-slate-500">
-                Could not generate a transcript for this video. You can try re-fetching from YouTube.
-              </p>
-              <button
-                onClick={handleRegenerate}
-                disabled={isRegenerating}
-                aria-label={isRegenerating ? "Regenerating transcript…" : "Retry or regenerate transcript"}
-                className="self-start mt-1 px-4 py-2 rounded-xl bg-amber-500 text-white font-semibold text-sm hover:bg-amber-600 disabled:opacity-50 transition-colors"
-              >
-                {isRegenerating ? "⏳ Regenerating…" : "🔄 Retry / Regenerate transcript"}
-              </button>
-            </div>
-          )}
-
-          {uxState === "transcript_ready" && segments.length > 0 && (
-            <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 flex flex-col gap-3">
-              <p className="text-emerald-700 font-semibold">
-                ✅ Transcript ready — {segments.length} sentences
-              </p>
-              <p className="text-sm text-slate-600">
-                Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.
-              </p>
-              <div className="flex items-center gap-3 mt-1">
-                {resumeState ? (
-                  <>
-                    <button
-                      onClick={handleResume}
-                      className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
-                    >
-                      ▶ Resume at sentence {resumeState.currentSegmentIndex + 1}
-                    </button>
-                    <button
-                      onClick={handleRestart}
-                      className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors"
-                    >
-                      Restart
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={handleStart}
-                    className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
-                  >
-                    ▶ Start Dictation
-                  </button>
-                )}
-                <button
-                  onClick={handleRegenerate}
-                  disabled={isRegenerating}
-                  title="Re-fetch captions from YouTube to fix sentence/audio mismatches"
-                  aria-label={isRegenerating ? "Regenerating transcript…" : "Regenerate transcript"}
-                  className="text-xs text-slate-500 hover:text-amber-600 disabled:opacity-50 transition-colors underline"
-                >
-                  {isRegenerating ? "⏳ Regenerating…" : "🔄 Regenerate transcript"}
-                </button>
-              </div>
-              {resumeLoading && (
-                <p className="text-xs text-slate-500">Checking for saved progress…</p>
-              )}
-            </div>
-          )}
-
-          {uxState === "session_completed" && (
-            <div className="rounded-xl border border-indigo-300 bg-indigo-50 p-6 flex flex-col gap-4">
-              <div className="text-center">
-                <p className="text-3xl">🎉</p>
-                <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
-                <p className="text-slate-600 text-sm mt-1">
-                  Final accuracy: <span className="font-bold">{accuracy}%</span> over{" "}
-                  {sessionStore.totalAttempts} attempts.
-                </p>
-              </div>
-
-              {/* Mistakes review */}
-              {mistakes.length > 0 ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-slate-700 font-semibold text-sm">
-                    Mistakes ({mistakes.length} sentence{mistakes.length !== 1 ? "s" : ""}):
-                  </p>
-                  <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
-                    {mistakes.map((m) => (
-                      <div
-                        key={m.segIdx}
-                        className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col gap-1"
-                      >
-                        <span className="text-xs text-slate-400 font-medium">
-                          Sentence {m.segIdx + 1}
-                        </span>
-                        <span className="text-sm text-slate-800">{m.expectedText}</span>
-                        <span className="text-xs text-red-500">
-                          You typed:{" "}
-                          {m.userText || <span className="italic text-slate-400">nothing</span>}
-                        </span>
-                        <VocabularySaveButton
-                          videoId={videoId}
-                          segmentIndex={m.segIdx}
-                          sentenceContext={m.expectedText}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-emerald-600 text-sm font-medium text-center">
-                  🏆 Perfect session — no mistakes!
-                </p>
-              )}
-
-              <Link
-                href="/"
-                className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center"
-              >
-                Try another video
-              </Link>
-            </div>
-          )}
-
-          {/* Dictation input area — below video and controls */}
-          {shouldShowInput && (
-            <div className="flex flex-col gap-4">
-              <DictationInput
-                key={`${currentSegIdx}`}
-                isEnabled={uxState === "paused_waiting_input" || uxState === "playing"}
-                isChecking={uxState === "checking_answer" && checkResult === null}
-                onSubmit={handleAnswerSubmit}
-                diff={checkResult?.diff}
-                isCorrect={checkResult?.isCorrect ?? null}
-                extraWordCount={
-                  checkResult
-                    ? Math.max(
-                        splitSentenceIntoWords(checkResult.normalizedUser).length -
-                          splitSentenceIntoWords(checkResult.normalizedExpected).length,
-                        0
-                      )
-                    : 0
-                }
-                wrongAttempts={wrongAttempts}
-                focusSignal={inputFocusSignal}
-                inputAriaDescribedBy="dictation-shortcuts-hint"
-              />
-
-
-              {/* Review previous completed sentence only after advancing */}
-              {shouldShowPreviousReview && previousReview && (
-                <div
-                  ref={reviewTextContainerRef}
-                  onMouseUp={handleReviewMouseUp}
-                  className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      Review previous sentence
-                    </p>
-                    <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                      #{previousReview.segmentIndex + 1}
-                    </span>
-                  </div>
-                  <div
-                    // Enables shared selection popover actions for review text (word/phrase/sentence/note/explain).
-                    data-script-segment-index={previousReview.segmentIndex}
-                    data-selection-sentence-text={previousReview.expectedText}
-                    className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700"
-                  >
-                    <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
-                    <ComparedSentenceText
-                      tokens={buildComparedTokens({
-                        diff: previousReview.diff,
-                        expectedText: previousReview.expectedText,
-                        userText: previousReview.firstUserText,
-                      }).expectedTokens}
-                      tone="expected"
-                    />
-                  </div>
-                  <div
-                    // Enables shared selection popover actions for review text (word/phrase/sentence/note/explain).
-                    data-script-segment-index={previousReview.segmentIndex}
-                    data-selection-sentence-text={previousReview.expectedText}
-                    className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700"
-                  >
-                    <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
-                    <ComparedSentenceText
-                      tokens={buildComparedTokens({
-                        diff: previousReview.diff,
-                        expectedText: previousReview.expectedText,
-                        userText: previousReview.firstUserText,
-                      }).userTokens}
-                      tone="user"
-                      emptyFallback="(No answer provided)"
-                    />
-                  </div>
-                  {(() => {
-                    const diffSummary = summarizeDiff(previousReview.diff);
-                    const previousReviewExtraWordCount = Math.max(
-                      splitSentenceIntoWords(previousReview.firstUserText).length -
-                        splitSentenceIntoWords(previousReview.expectedText).length,
-                      0
-                    );
-                    if (
-                      diffSummary.wrong === 0 &&
-                      previousReviewExtraWordCount === 0
-                    ) {
-                      return null;
-                    }
-                    return (
-                      <div className="flex flex-wrap gap-1">
-                        {diffSummary.wrong > 0 && (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                            Wrong {diffSummary.wrong}
-                          </span>
-                        )}
-                        {previousReviewExtraWordCount > 0 && (
-                          <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                            Extra {previousReviewExtraWordCount}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-
-              {/* Hint — only relevant when paused */}
-              {(uxState === "paused_waiting_input" || uxState === "checking_answer") &&
-                !checkResult?.isCorrect && (
-                  <HintDisplay
-                    text={currentSegment.text}
-                    level={hintLevel}
-                    onLevelChange={(l) => setHintLevel(l)}
-                  />
-                )}
-
-            </div>
-          )}
-        </div>
-
-        {/* Secondary right panel */}
-        <aside
-          className={clsx(
-            "transition-all duration-300",
-            showLearningPanel ? "lg:w-1/3" : "lg:w-14"
-          )}
-        >
-          <div
-            className={clsx(
-              "rounded-3xl border border-white/80 bg-white/60 shadow-lg backdrop-blur-xl lg:sticky lg:top-4 transition-all duration-300",
-              showLearningPanel ? "p-4" : "p-2"
-            )}
+      <AnimatePresence>
+        {!isZenMode && (
+          <motion.header
+            initial={{ y: -64, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -64, opacity: 0 }}
+            className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md"
           >
-            <div className="flex items-center justify-between">
-              {showLearningPanel ? (
-                <p className="text-sm font-semibold text-slate-700">Lesson panel</p>
-              ) : (
-                <span className="sr-only">Lesson panel collapsed. Press button to expand.</span>
-              )}
+            <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
+              <div className="flex min-w-0 items-center gap-4">
+                <Link href="/" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100" aria-label="Back to dashboard">
+                  <ArrowLeft size={18} />
+                </Link>
+                <div className="min-w-0">
+                  <h1 className="truncate text-sm font-semibold leading-tight text-slate-900">{workspaceTitle}</h1>
+                  <span className="text-xs text-slate-500">{sentenceProgressLabel}</span>
+                </div>
+              </div>
+              <UserButton />
+            </div>
+          </motion.header>
+        )}
+      </AnimatePresence>
+
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 lg:flex-row lg:items-start">
+        <motion.div
+          layout
+          transition={{ duration: 0.5, ease: "easeInOut" }}
+          className={clsx(
+            "min-w-0 flex flex-col gap-6 transition-all duration-500",
+            isZenMode ? "z-50 w-full" : showLearningPanel ? "w-full lg:w-[70%]" : "w-full"
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-start gap-2">
+            <button
+              onClick={() => setShowVideo((v) => !v)}
+              className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+            >
+              <Sparkles size={14} className="text-indigo-500" />
+              {showVideo ? "Audio Mode" : "Exit Audio Mode"}
+            </button>
+            <button
+              onClick={() => setIsZenMode(true)}
+              className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+            >
+              <Sparkles size={14} className="text-indigo-500" />
+              Zen Mode
+            </button>
+
+            <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
               <button
-                onClick={() => setShowLearningPanel((v) => !v)}
-                className="h-8 w-8 shrink-0 rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
-                aria-label={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
-                title={showLearningPanel ? "Collapse right panel" : "Expand right panel"}
+                onClick={() => setVideoSizeMode("standard")}
+                className={clsx(
+                  "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                  videoSizeMode === "standard"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-600 hover:bg-white/80"
+                )}
               >
-                <svg
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  aria-hidden="true"
-                  className={clsx("h-4 w-4 mx-auto transition-transform", !showLearningPanel && "rotate-180")}
-                >
-                  <path d="M12.5 4.5L7.5 10l5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                Standard
+              </button>
+              <button
+                onClick={() => setVideoSizeMode("large")}
+                className={clsx(
+                  "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                  videoSizeMode === "large"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-600 hover:bg-white/80"
+                )}
+              >
+                Large
               </button>
             </div>
 
-            {showLearningPanel && (
-              <div className="mt-3 flex flex-col gap-3">
-                <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/80 bg-white/70 p-1 shadow-inner">
+          </div>
+
+          <div className={clsx("relative w-full aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
+            <div className={clsx("absolute inset-0", !showVideo && "opacity-0 pointer-events-none")} aria-hidden={!showVideo}>
+              {videoBlock}
+            </div>
+            {!showVideo && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+                <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-center text-xs text-white/85">
+                  Audio focus mode is enabled. Video is hidden.
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className={`flex-1 bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-6 sm:p-8 flex flex-col shadow-xl transition-all ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
+            
+
+            {uxState === "loading_transcript" && (
+              <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
+            )}
+
+            {uxState === "transcript_processing" && (
+              <StatusCard
+                icon="🔄"
+                title="Generating transcript…"
+                description="This may take a moment. The page will update automatically."
+                pulse
+              />
+            )}
+
+            {uxState === "transcript_failed" && (
+              <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-2">
+                <p className="text-2xl">❌</p>
+                <p className="font-semibold text-slate-800">Transcript failed</p>
+                <p className="text-sm text-slate-500">Could not generate a transcript for this video.</p>
+              </div>
+            )}
+
+            {uxState === "transcript_ready" && segments.length > 0 && (
+              <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 flex flex-col gap-3 mb-4">
+                <p className="text-emerald-700 font-semibold">Transcript ready - {segments.length} sentences</p>
+                <p className="text-sm text-slate-600">Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.</p>
+                <div className="flex items-center gap-3 mt-1">
+                  {resumeState ? (
+                    <>
+                      <button onClick={handleResume} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
+                        Resume at sentence {resumeState.currentSegmentIndex + 1}
+                      </button>
+                      <button onClick={handleRestart} className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">
+                        Restart
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={handleStart} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
+                      Start Dictation
+                    </button>
+                  )}
+                </div>
+                {resumeLoading && <p className="text-xs text-slate-500">Checking for saved progress...</p>}
+              </div>
+            )}
+
+            {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
+              <>
+                <div className="flex items-center justify-between px-2 mb-2">
+                  <div className="flex items-center gap-3">
+                    <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
+                    <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
+                    <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={handleSkip} disabled={currentSegIdx >= segments.length - 1} />
+                  </div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400">
+                    <CheckCircle2 size={16} className="text-emerald-500" />
+                    <span>Accuracy: {accuracy}%</span>
+                  </div>
+                </div>
+
+                <div className="relative mt-4">
+                  <div className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
+                    workspaceStatus === "success"
+                      ? "border-emerald-500 bg-emerald-50/30"
+                      : workspaceStatus === "error"
+                      ? "border-red-500 bg-red-50/30"
+                      : `border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-500/10 ${isZenMode ? "shadow-2xl" : ""}`
+                  }`}>
+                    <input
+                      ref={workspaceInputRef}
+                      type="text"
+                      value={workspaceInputValue}
+                      onChange={(e) => {
+                        setWorkspaceInputValue(e.target.value);
+                        setCheckResult(null);
+                      }}
+                      onKeyDown={handleWorkspaceInputKeyDown}
+                      placeholder="Type what you hear..."
+                      className="w-full bg-transparent p-6 pr-24 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                    />
+
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center">
+                      <AnimatePresence mode="wait">
+                        {isCheckingWorkspace ? (
+                          <motion.div
+                            key="loading"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.8 }}
+                            className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin"
+                          />
+                        ) : workspaceStatus === "success" ? (
+                          <motion.div
+                            key="success"
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="bg-emerald-500 text-white p-2 rounded-xl flex items-center shadow-lg"
+                          >
+                            <Check size={20} strokeWidth={3} />
+                          </motion.div>
+                        ) : workspaceStatus === "error" ? (
+                          <motion.button
+                            key="error"
+                            onClick={() => setCheckResult(null)}
+                            initial={{ opacity: 0, scale: 0.8 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="bg-red-500 text-white px-4 py-2 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all"
+                          >
+                            Try Again
+                          </motion.button>
+                        ) : (
+                          <motion.button
+                            key="idle"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            onClick={handleWorkspaceCheck}
+                            disabled={!workspaceInputValue.trim()}
+                            className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/20 active:scale-95"
+                          >
+                            Check
+                          </motion.button>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+                </div>
+
+                <AnimatePresence>
+                  {workspaceStatus === "error" && checkResult && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0, scale: 0.95 }}
+                      animate={{ height: "auto", opacity: 1, scale: 1 }}
+                      exit={{ height: 0, opacity: 0, scale: 0.95 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 mt-4">
+                        <h4 className="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] mb-3">Correction Needed</h4>
+                        <div className="font-mono text-sm leading-relaxed p-4 bg-white/20 dark:bg-black/20 rounded-xl border border-red-500/20 shadow-inner">
+                          <p className="text-red-500 line-through opacity-60 decoration-2">{checkResult.normalizedUser || "(No answer provided)"}</p>
+                          <p className="text-slate-900 dark:text-white bg-red-500/20 px-2 py-0.5 rounded font-bold underline decoration-red-500/50 decoration-offset-4 mt-2">{checkResult.normalizedExpected}</p>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="flex justify-center mt-6">
                   <button
-                    onClick={() => setRightPanelTab("saved")}
-                    className={clsx(
-                      "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
-                      rightPanelTab === "saved"
-                        ? "bg-white text-indigo-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
-                    )}
+                    onClick={() => setShowHintPanel((prev) => !prev)}
+                    className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 bg-white/60 dark:bg-white/5 hover:bg-white/90 px-6 py-3 rounded-2xl transition-all border border-white/80 dark:border-white/10 shadow-sm active:scale-95"
                   >
-                    Saved
-                  </button>
-                  <button
-                    onClick={() => setRightPanelTab("script")}
-                    className={clsx(
-                      "rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
-                      rightPanelTab === "script"
-                        ? "bg-white text-indigo-700 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
-                    )}
-                  >
-                    Script
+                    <HelpCircle size={18} /> {showHintPanel ? "Hide hint" : "Need a hint?"}
                   </button>
                 </div>
 
-                {rightPanelTab === "saved" ? (
-                  <div className={clsx("flex flex-col gap-3", LESSON_PANEL_TAB_HEIGHT_CLASS)}>
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-semibold text-slate-700">
-                        Saved items ({lessonSavedInCurrentVideo.length})
-                      </p>
+                {showHintPanel && currentSegment && !checkResult?.isCorrect && (
+                  <div className="mt-4">
+                    <HintDisplay text={currentSegment.text} level={hintLevel} onLevelChange={(l) => setHintLevel(l)} />
+                  </div>
+                )}
+
+                {segments.length > 0 && (
+                  <div className="mt-5">
+                    <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
+                  </div>
+                )}
+
+                {shouldShowPreviousReview && previousReview && (
+                  <div ref={reviewTextContainerRef} onMouseUp={handleReviewMouseUp} className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2 mt-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Review previous sentence</p>
+                      <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">#{previousReview.segmentIndex + 1}</span>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(["all", "word", "phrase", "sentence"] as SavedFilter[]).map((filter) => (
-                        <button
-                          key={filter}
-                          onClick={() => setSavedFilter(filter)}
-                          className={clsx(
-                            "px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors",
-                            savedFilter === filter
-                              ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                              : "border-slate-300 text-slate-600 hover:bg-slate-50"
-                          )}
-                        >
-                          {getSavedFilterLabel(filter)}
-                        </button>
+                    <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700">
+                      <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
+                      <ComparedSentenceText
+                        tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).expectedTokens}
+                        tone="expected"
+                      />
+                    </div>
+                    <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700">
+                      <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
+                      <ComparedSentenceText
+                        tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).userTokens}
+                        tone="user"
+                        emptyFallback="(No answer provided)"
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <AnimatePresence>
+              {isZenMode && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 20 }}
+                  className="mt-8 flex justify-center"
+                >
+                  <button onClick={() => setIsZenMode(false)} className="group flex flex-col items-center gap-2">
+                    <div className="w-12 h-12 rounded-full bg-white/10 border border-white/20 backdrop-blur-md flex items-center justify-center text-white/50 group-hover:text-white group-hover:bg-white/20 transition-all group-hover:scale-110">
+                      <X size={24} />
+                    </div>
+                    <span className="text-[10px] uppercase font-black tracking-widest text-white/30 group-hover:text-white/60 transition-colors">Exit Zen Mode</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {uxState === "session_completed" && (
+              <div className="rounded-xl border border-indigo-300 bg-indigo-50 p-6 flex flex-col gap-4 mt-6">
+                <div className="text-center">
+                  <p className="text-3xl">🎉</p>
+                  <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
+                  <p className="text-slate-600 text-sm mt-1">Final accuracy: <span className="font-bold">{accuracy}%</span> over {sessionStore.totalAttempts} attempts.</p>
+                </div>
+                {mistakes.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-slate-700 font-semibold text-sm">Mistakes ({mistakes.length} sentence{mistakes.length !== 1 ? "s" : ""}):</p>
+                    <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
+                      {mistakes.map((m) => (
+                        <div key={m.segIdx} className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col gap-1">
+                          <span className="text-xs text-slate-400 font-medium">Sentence {m.segIdx + 1}</span>
+                          <span className="text-sm text-slate-800">{m.expectedText}</span>
+                          <span className="text-xs text-red-500">You typed: {m.userText || <span className="italic text-slate-400">nothing</span>}</span>
+                          <VocabularySaveButton videoId={videoId} segmentIndex={m.segIdx} sentenceContext={m.expectedText} />
+                        </div>
                       ))}
                     </div>
-                    {filteredSavedItems.length === 0 ? (
-                      <p className="text-xs text-slate-500">
-                        {savedFilter === "all"
-                          ? "No saved items yet."
-                          : `No ${getSavedFilterLabel(savedFilter).toLowerCase()} saved yet.`}
-                      </p>
-                    ) : (
-                      <div className="min-h-0 flex-1">
-                        <LessonSavedItemsList
-                          items={filteredSavedItems}
-                          compact
-                          scrollClassName="h-full"
-                          deletingId={learningDeletingId}
-                          updatingId={learningUpdatingId}
-                          onDelete={deleteLessonCapture}
-                          onUpdate={updateLessonCapture}
-                        />
-                      </div>
-                    )}
                   </div>
                 ) : (
-                  <div className={clsx("flex flex-col gap-3", LESSON_PANEL_TAB_HEIGHT_CLASS)}>
-                    <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      Viewing the script may reveal answers.
-                    </div>
-                    <p className="text-[11px] text-slate-500">
-                      Select text to save a word, phrase, or sentence.
-                    </p>
-                    <button
-                      onClick={() => setShowScriptContext((prev) => !prev)}
-                      className="self-start rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      {showScriptContext ? "Hide script context" : "Show script context"}
-                    </button>
-                    {currentSegIdx > 0 && (
-                      <button
-                        onClick={() => setShowPreviousScriptContext((prev) => !prev)}
-                        className="self-start rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                      >
-                        {showPreviousScriptContext
-                          ? "Hide previous context"
-                          : `Show previous ${SCRIPT_CONTEXT_PREVIOUS_COUNT} sentences`}
-                      </button>
-                    )}
-
-                    {scriptContextSegments.length === 0 ? (
-                      <p className="text-xs text-slate-500">Script is not available yet.</p>
-                    ) : !showScriptContext ? (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                        Script context is hidden. Use “Show script context” when you want to reveal it.
-                      </div>
-                    ) : (
-                      <div
-                        ref={scriptTextContainerRef}
-                        onMouseUp={handleScriptMouseUp}
-                        className="relative min-h-0 flex-1 overflow-y-auto pr-1 flex flex-col gap-3"
-                      >
-                        {scriptContextSegments.map((segment) => {
-                          const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
-                          const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
-                          const isNextScriptSentence = segment.segmentIndex === currentSegIdx + 1;
-                          const isUpcomingScriptSentence =
-                            segment.segmentIndex > currentSegIdx &&
-                            segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT;
-                          const sentenceLabel = getScriptSentenceLabel({
-                            isPreviousScriptSentence,
-                            isCurrentScriptSentence,
-                            isNextScriptSentence,
-                            segmentIndex: segment.segmentIndex,
-                          });
-                          return (
-                            <div
-                              key={segment.segmentIndex}
-                              data-script-segment-index={segment.segmentIndex}
-                              className={clsx(
-                                "rounded-lg border p-3 transition-colors",
-                                isCurrentScriptSentence
-                                  ? "border-indigo-300 bg-indigo-50"
-                                  : isPreviousScriptSentence
-                                  ? "border-slate-200 bg-slate-50/40"
-                                  : isNextScriptSentence
-                                  ? "border-sky-200 bg-sky-50/70"
-                                  : isUpcomingScriptSentence
-                                  ? "border-slate-200 bg-slate-50"
-                                  : "border-slate-200 bg-slate-50"
-                              )}
-                            >
-                              <p
-                                className={clsx(
-                                  "text-xs font-semibold mb-1",
-                                  isCurrentScriptSentence
-                                    ? "text-indigo-700"
-                                    : isPreviousScriptSentence
-                                    ? "text-slate-400"
-                                    : isNextScriptSentence
-                                    ? "text-sky-700"
-                                    : "text-slate-500"
-                                )}
-                              >
-                                {sentenceLabel}
-                              </p>
-                              <div
-                                data-script-segment-index={segment.segmentIndex}
-                                className="text-sm leading-7 text-slate-700 select-text"
-                              >
-                                {segment.text}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {learningError && <p className="text-xs text-red-600">{learningError}</p>}
-
-                  </div>
+                  <p className="text-emerald-600 text-sm font-medium text-center">Perfect session - no mistakes!</p>
                 )}
+                <Link href="/" className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center">
+                  Try another video
+                </Link>
               </div>
             )}
           </div>
-        </aside>
+        </motion.div>
+
+        {!isZenMode && (
+          <motion.aside
+            layout
+            transition={{ duration: 0.5, ease: "easeInOut" }}
+            className={clsx(
+              "relative w-full min-w-0 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:max-h-[calc(100vh-2rem)]",
+              showLearningPanel ? "lg:w-[30%]" : "lg:w-0"
+            )}
+          >
+            <motion.div
+              initial={{ x: 100, opacity: 0 }}
+              animate={{ x: showLearningPanel ? 0 : 100, opacity: showLearningPanel ? 1 : 0 }}
+              transition={{ duration: 0.5, ease: "easeInOut" }}
+              className={clsx(
+                "h-full bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl flex flex-col overflow-hidden shadow-lg",
+                showLearningPanel ? "pointer-events-auto" : "pointer-events-none"
+              )}
+            >
+              <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <h2 className="font-semibold text-slate-900 dark:text-white">Lesson panel</h2>
+                  <button
+                    onClick={() => setShowLearningPanel(false)}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/70 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-white"
+                    aria-label="Hide lesson panel"
+                  >
+                    <PanelRightClose size={16} />
+                  </button>
+                </div>
+                <div className="flex bg-white/40 dark:bg-slate-900/40 border border-white/60 dark:border-white/10 p-1 rounded-xl shadow-inner text-slate-900 dark:text-white">
+                <button
+                  onClick={() => setRightPanelTab("script")}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${rightPanelTab === "script" ? "bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-white/60 dark:border-white/10" : "text-slate-500 dark:text-slate-400 hover:text-indigo-600"}`}
+                >
+                  <FileText size={16} /> Script
+                </button>
+                <button
+                  onClick={() => setRightPanelTab("saved")}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${rightPanelTab === "saved" ? "bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-white/60 dark:border-white/10" : "text-slate-500 dark:text-slate-400 hover:text-indigo-600"}`}
+                >
+                  <Bookmark size={16} /> Saved
+                </button>
+              </div>
+                </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+              {rightPanelTab === "saved" ? (
+                <>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(["all", "word", "phrase", "sentence"] as SavedFilter[]).map((filter) => (
+                      <button
+                        key={filter}
+                        onClick={() => setSavedFilter(filter)}
+                        className={clsx(
+                          "px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors",
+                          savedFilter === filter
+                            ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                            : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                        )}
+                      >
+                        {getSavedFilterLabel(filter)}
+                      </button>
+                    ))}
+                  </div>
+                  {filteredSavedItems.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                      <Bookmark size={32} className="text-slate-300 dark:text-slate-600 mb-3" />
+                      <p className="text-slate-500 dark:text-slate-400 text-xs font-medium">
+                        {savedFilter === "all"
+                          ? "No saved vocabulary yet."
+                          : `No ${getSavedFilterLabel(savedFilter).toLowerCase()} saved yet.`}
+                      </p>
+                    </div>
+                  ) : (
+                    <LessonSavedItemsList
+                      items={filteredSavedItems}
+                      compact
+                      scrollClassName="h-full"
+                      deletingId={learningDeletingId}
+                      updatingId={learningUpdatingId}
+                      onDelete={deleteLessonCapture}
+                      onUpdate={updateLessonCapture}
+                    />
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowScriptContext((prev) => !prev)} className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50">
+                      {showScriptContext ? "Hide script" : "Show script"}
+                    </button>
+                    {currentSegIdx > 0 && (
+                      <button onClick={() => setShowPreviousScriptContext((prev) => !prev)} className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50">
+                        {showPreviousScriptContext ? "Hide previous" : "Show previous"}
+                      </button>
+                    )}
+                  </div>
+                  {scriptContextSegments.length === 0 ? (
+                    <p className="text-xs text-slate-500">Script is not available yet.</p>
+                  ) : !showScriptContext ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">Script context is hidden. Use Show script when you want to reveal it.</div>
+                  ) : (
+                    <div ref={scriptTextContainerRef} onMouseUp={handleScriptMouseUp} className="relative min-h-0 flex-1 overflow-y-auto pr-1 flex flex-col gap-3 text-sm">
+                      {scriptContextSegments.map((segment) => {
+                        const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
+                        const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
+                        return (
+                          <div
+                            key={segment.segmentIndex}
+                            data-script-segment-index={segment.segmentIndex}
+                            data-selection-sentence-text={segment.text}
+                            className={`p-4 rounded-xl border transition-colors shadow-sm ${
+                              isCurrentScriptSentence
+                                ? "bg-white/80 dark:bg-slate-700/60 border-indigo-200 dark:border-indigo-500/40 ring-2 ring-indigo-500/20"
+                                : isPreviousScriptSentence
+                                ? "bg-white/40 dark:bg-white/5 border-white/60 dark:border-white/10 opacity-80 hover:opacity-100"
+                                : "bg-white/40 dark:bg-white/5 border-white/60 dark:border-white/10 opacity-80 hover:opacity-100"
+                            }`}
+                          >
+                            <div className={`text-xs font-bold mb-1 flex items-center justify-between ${isCurrentScriptSentence ? "text-indigo-600 dark:text-indigo-400" : isPreviousScriptSentence ? "text-emerald-600" : "text-slate-500"}`}>
+                              <span className="uppercase tracking-widest text-[9px]">Sentence #{segment.segmentIndex + 1}</span>
+                              {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
+                            </div>
+                            <p className={`text-sm leading-relaxed select-text ${isCurrentScriptSentence ? "text-slate-900 dark:text-white font-medium" : "text-slate-600 dark:text-slate-400"}`}>{segment.text}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {learningError && <p className="text-xs text-red-600">{learningError}</p>}
+                </>
+              )}
+                </div>
+            </motion.div>
+            {!showLearningPanel && (
+              <div className="absolute right-0 top-4 z-20 overflow-visible">
+                <button
+                  onClick={() => setShowLearningPanel(true)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
+                  aria-label="Show lesson panel"
+                >
+                  <PanelRightOpen size={16} />
+                </button>
+              </div>
+            )}
+          </motion.aside>
+        )}
+
+        {!isZenMode && !showLearningPanel && (
+          <div className="flex w-full justify-end lg:hidden">
+            <button
+              onClick={() => setShowLearningPanel(true)}
+              className="h-10 w-10 rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
+              aria-label="Show lesson panel"
+            >
+              <PanelRightOpen size={16} className="mx-auto" />
+            </button>
+          </div>
+        )}
 
         {scriptPopover && (
           <div
@@ -1857,6 +1779,38 @@ function StatusCard({
       <p className={clsx("text-2xl", pulse && "animate-pulse")}>{icon}</p>
       <p className="font-semibold text-slate-800">{title}</p>
       <p className="text-sm text-slate-500">{description}</p>
+    </div>
+  );
+}
+
+function ControlButton({
+  icon,
+  shortcut,
+  label,
+  primary,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  shortcut: string;
+  label: string;
+  primary?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1 group">
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        title={shortcut}
+        className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all shadow-sm border border-white/60 dark:border-white/10 disabled:opacity-40 disabled:cursor-not-allowed ${primary ? "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5" : "bg-white/60 dark:bg-white/5 text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-white/10 hover:border-slate-300 dark:hover:border-slate-600"}`}
+      >
+        {icon}
+      </button>
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
+        <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">{label}</span>
+      </div>
     </div>
   );
 }

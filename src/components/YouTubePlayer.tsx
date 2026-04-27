@@ -183,7 +183,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     }));
 
     return (
-      <div className="w-full aspect-video rounded-xl overflow-hidden shadow-lg">
+      <div className="w-full h-full overflow-hidden">
         <div ref={containerRef} className="w-full h-full" />
       </div>
     );
