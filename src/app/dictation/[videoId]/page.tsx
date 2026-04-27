@@ -1154,7 +1154,7 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Render ----
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+    <div className="relative h-screen overflow-hidden flex flex-col w-full bg-[#f4f7ff] font-sans text-slate-900 antialiased">
       <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
       <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
       <AnimatePresence>
@@ -1192,16 +1192,17 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 lg:flex-row lg:items-start">
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-row overflow-hidden px-4 gap-4">
         <motion.div
           layout
           transition={{ type: "tween", ease: "linear", duration: 0.25 }}
           className={clsx(
-            "min-w-0 flex-1 flex flex-col gap-6",
+            "flex-1 flex flex-col overflow-hidden min-h-0",
             isZenMode && "z-50"
           )}
         >
-          <div className="flex flex-wrap items-center justify-start gap-2">
+          <div className="flex-shrink-0 space-y-2 pt-3">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setShowVideo((v) => !v)}
               className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
@@ -1244,7 +1245,7 @@ export default function DictationPage({ params }: PageProps) {
 
           </div>
 
-          <div className={clsx("relative w-full aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
+          <div className={clsx("relative w-full aspect-video max-h-[220px] rounded-3xl overflow-hidden shadow-2xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
             <div className={clsx("absolute inset-0", !showVideo && "opacity-0 pointer-events-none")} aria-hidden={!showVideo}>
               {videoBlock}
             </div>
@@ -1257,8 +1258,28 @@ export default function DictationPage({ params }: PageProps) {
             )}
           </div>
 
-          <div className={`flex-1 bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-6 sm:p-8 flex flex-col shadow-xl transition-all ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
-            
+          {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
+            <div className="flex items-center gap-3 py-1">
+              <div className="flex items-center gap-2 shrink-0">
+                <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
+                <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
+                <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={handleSkip} disabled={currentSegIdx >= segments.length - 1} />
+              </div>
+              {segments.length > 0 && (
+                <div className="flex-1 min-w-0">
+                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
+                </div>
+              )}
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400 shrink-0">
+                <CheckCircle2 size={16} className="text-emerald-500" />
+                <span>Accuracy: {accuracy}%</span>
+              </div>
+            </div>
+          )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto min-h-0 py-3">
+          <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
 
             {uxState === "loading_transcript" && (
               <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
@@ -1307,19 +1328,7 @@ export default function DictationPage({ params }: PageProps) {
 
             {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
               <>
-                <div className="flex items-center justify-between px-2 mb-2">
-                  <div className="flex items-center gap-3">
-                    <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
-                    <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
-                    <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={handleSkip} disabled={currentSegIdx >= segments.length - 1} />
-                  </div>
-                  <div className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400">
-                    <CheckCircle2 size={16} className="text-emerald-500" />
-                    <span>Accuracy: {accuracy}%</span>
-                  </div>
-                </div>
-
-                <div className="relative mt-4">
+                <div className="relative">
                   <div className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
                     workspaceStatus === "success"
                       ? "border-emerald-500 bg-emerald-50/30"
@@ -1419,14 +1428,8 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
 
                 {showHintPanel && currentSegment && !checkResult?.isCorrect && (
-                  <div className="mt-4">
+                  <div>
                     <HintDisplay text={currentSegment.text} level={hintLevel} onLevelChange={(l) => setHintLevel(l)} />
-                  </div>
-                )}
-
-                {segments.length > 0 && (
-                  <div className="mt-5">
-                    <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
                   </div>
                 )}
 
@@ -1504,6 +1507,7 @@ export default function DictationPage({ params }: PageProps) {
               </div>
             )}
           </div>
+          </div>
         </motion.div>
 
         {!isZenMode && (
@@ -1515,7 +1519,7 @@ export default function DictationPage({ params }: PageProps) {
                 animate={{ width: 360 }}
                 exit={{ width: 0 }}
                 transition={{ type: "tween", ease: "linear", duration: 0.25 }}
-                className="overflow-hidden flex-shrink-0 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:max-h-[calc(100vh-2rem)]"
+                className="overflow-hidden flex-shrink-0 h-full"
               >
                 <div className="w-[360px] h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
               <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
@@ -1640,7 +1644,7 @@ export default function DictationPage({ params }: PageProps) {
         )}
 
         {!isZenMode && !showLearningPanel && (
-          <div className="hidden lg:flex lg:sticky lg:top-4 self-start">
+          <div className="hidden lg:flex self-start pt-3">
             <button
               onClick={() => setShowLearningPanel(true)}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
