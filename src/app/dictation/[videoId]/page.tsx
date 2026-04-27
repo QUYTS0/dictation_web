@@ -1245,7 +1245,7 @@ export default function DictationPage({ params }: PageProps) {
 
           </div>
 
-          <div className={clsx("relative w-full aspect-video max-h-[220px] rounded-3xl overflow-hidden shadow-2xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
+          <div className={clsx("relative w-full aspect-video max-h-[320px] rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
             <div className={clsx("absolute inset-0", !showVideo && "opacity-0 pointer-events-none")} aria-hidden={!showVideo}>
               {videoBlock}
             </div>
@@ -1259,7 +1259,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
-            <div className="relative z-10 flex items-center gap-3 py-1">
+            <div className="relative z-10 flex items-center gap-4 py-1 px-4 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-2">
               <div className="flex items-center gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
