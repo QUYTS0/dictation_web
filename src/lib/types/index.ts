@@ -136,6 +136,7 @@ export interface ResolveVideoResponse {
 export interface TranscriptResponse {
   status: "ready" | "processing" | "failed";
   source?: "cache" | "ai" | "manual";
+  title?: string | null;
   segments: TranscriptSegment[];
 }
 

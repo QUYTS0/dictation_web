@@ -56,6 +56,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const transcript = readyTranscript ?? latestTranscript;
 
+    const { data: videoRow } = await supabase
+      .from("videos")
+      .select("title")
+      .eq("youtube_video_id", videoId)
+      .maybeSingle();
+
     if (!transcript) {
       // No transcript at all — return processing to prompt generation
       console.log(`[transcript GET] no transcript found for ${videoId}, triggering generation`);
@@ -120,6 +126,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json<TranscriptResponse>({
       status: "ready",
       source: transcript.source,
+      title: videoRow?.title ?? null,
       segments,
     });
   } catch (err) {
