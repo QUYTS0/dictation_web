@@ -1195,9 +1195,10 @@ export default function DictationPage({ params }: PageProps) {
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 lg:flex-row lg:items-start">
         <motion.div
           layout
+          transition={{ duration: 0.5, ease: "easeInOut" }}
           className={clsx(
             "min-w-0 flex flex-col gap-6 transition-all duration-500",
-            isZenMode ? "z-50 w-full" : showLearningPanel ? "w-full lg:w-[68%]" : "w-full"
+            isZenMode ? "z-50 w-full" : showLearningPanel ? "w-full lg:w-[70%]" : "w-full"
           )}
         >
           <div className="flex flex-wrap items-center justify-start gap-2">
@@ -1241,16 +1242,6 @@ export default function DictationPage({ params }: PageProps) {
               </button>
             </div>
 
-            {!isZenMode && (
-              <button
-                onClick={() => setShowLearningPanel((v) => !v)}
-                className="ml-auto flex items-center gap-2 rounded-lg border border-white/70 bg-white/60 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-white"
-                aria-label={showLearningPanel ? "Hide lesson panel" : "Show lesson panel"}
-              >
-                {showLearningPanel ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
-                {showLearningPanel ? "Hide Panel" : "Show Panel"}
-              </button>
-            )}
           </div>
 
           <div className={clsx("relative w-full aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
@@ -1515,18 +1506,36 @@ export default function DictationPage({ params }: PageProps) {
           </div>
         </motion.div>
 
-        <AnimatePresence initial={false}>
-          {!isZenMode && showLearningPanel && (
-            <motion.aside
+        {!isZenMode && (
+          <motion.aside
+            layout
+            transition={{ duration: 0.5, ease: "easeInOut" }}
+            className={clsx(
+              "relative w-full min-w-0 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:max-h-[calc(100vh-2rem)]",
+              showLearningPanel ? "lg:w-[30%]" : "lg:w-0"
+            )}
+          >
+            <motion.div
               initial={{ x: 100, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 100, opacity: 0 }}
-              className="w-full lg:w-[32%] lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)]"
+              animate={{ x: showLearningPanel ? 0 : 100, opacity: showLearningPanel ? 1 : 0 }}
+              transition={{ duration: 0.5, ease: "easeInOut" }}
+              className={clsx(
+                "h-full bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl flex flex-col overflow-hidden shadow-lg",
+                showLearningPanel ? "pointer-events-auto" : "pointer-events-none"
+              )}
             >
-              <div className="h-full bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl flex flex-col overflow-hidden shadow-lg">
-                <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
-              <h2 className="font-semibold text-slate-900 dark:text-white mb-4">Lesson panel</h2>
-              <div className="flex bg-white/40 dark:bg-slate-900/40 border border-white/60 dark:border-white/10 p-1 rounded-xl shadow-inner text-slate-900 dark:text-white">
+              <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
+                <div className="mb-4 flex items-center justify-between gap-2">
+                  <h2 className="font-semibold text-slate-900 dark:text-white">Lesson panel</h2>
+                  <button
+                    onClick={() => setShowLearningPanel(false)}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/70 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-white"
+                    aria-label="Hide lesson panel"
+                  >
+                    <PanelRightClose size={16} />
+                  </button>
+                </div>
+                <div className="flex bg-white/40 dark:bg-slate-900/40 border border-white/60 dark:border-white/10 p-1 rounded-xl shadow-inner text-slate-900 dark:text-white">
                 <button
                   onClick={() => setRightPanelTab("script")}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${rightPanelTab === "script" ? "bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-white/60 dark:border-white/10" : "text-slate-500 dark:text-slate-400 hover:text-indigo-600"}`}
@@ -1542,7 +1551,7 @@ export default function DictationPage({ params }: PageProps) {
               </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 flex flex-col gap-4">
               {rightPanelTab === "saved" ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
@@ -1630,13 +1639,23 @@ export default function DictationPage({ params }: PageProps) {
                 </>
               )}
                 </div>
+            </motion.div>
+            {!showLearningPanel && (
+              <div className="absolute right-0 top-4 z-20 overflow-visible">
+                <button
+                  onClick={() => setShowLearningPanel(true)}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
+                  aria-label="Show lesson panel"
+                >
+                  <PanelRightOpen size={16} />
+                </button>
               </div>
-            </motion.aside>
-          )}
-        </AnimatePresence>
+            )}
+          </motion.aside>
+        )}
 
         {!isZenMode && !showLearningPanel && (
-          <div className="hidden lg:flex lg:w-[32%] lg:justify-center lg:pt-2">
+          <div className="flex w-full justify-end lg:hidden">
             <button
               onClick={() => setShowLearningPanel(true)}
               className="h-10 w-10 rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
