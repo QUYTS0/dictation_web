@@ -1259,7 +1259,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
-            <div className="flex items-center gap-3 py-1">
+            <div className="relative z-10 flex items-center gap-3 py-1">
               <div className="flex items-center gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
@@ -1270,10 +1270,6 @@ export default function DictationPage({ params }: PageProps) {
                   <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
                 </div>
               )}
-              <div className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400 shrink-0">
-                <CheckCircle2 size={16} className="text-emerald-500" />
-                <span>Accuracy: {accuracy}%</span>
-              </div>
             </div>
           )}
           </div>
