@@ -1422,17 +1422,23 @@ export default function DictationPage({ params }: PageProps) {
                           {checkResult.diff
                             .filter((t) => t.status !== "extra")
                             .map((t, i, arr) => (
-                              <span key={i} className={t.status === "correct" ? "text-emerald-700 font-medium" : "text-slate-400"}>
+                              <span
+                                key={i}
+                                className={clsx(t.status === "correct" ? "text-emerald-700 font-medium" : "text-slate-400")}
+                              >
                                 {t.status === "correct" ? t.word : "***"}
                                 {i < arr.length - 1 ? " " : ""}
                               </span>
                             ))}
                         </p>
-                        {checkResult.diff.filter((t) => t.status === "extra").length > 0 && (
-                          <span className="mt-2 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                            Extra: {checkResult.diff.filter((t) => t.status === "extra").length}
-                          </span>
-                        )}
+                        {(() => {
+                          const extraCount = checkResult.diff.filter((t) => t.status === "extra").length;
+                          return extraCount > 0 ? (
+                            <span className="mt-2 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                              Extra: {extraCount}
+                            </span>
+                          ) : null;
+                        })()}
                       </div>
                     </motion.div>
                   )}
