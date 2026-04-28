@@ -1174,11 +1174,11 @@ export default function DictationPage({ params }: PageProps) {
             initial={{ y: -64, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -64, opacity: 0 }}
-            className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md"
+            className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-4 py-1 backdrop-blur-md"
           >
-            <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
+            <div className="mx-auto flex w-full max-w-none items-center justify-between">
               <div className="flex min-w-0 items-center gap-4">
-                <Link href="/" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100" aria-label="Back to dashboard">
+                <Link href="/" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100" aria-label="Back to dashboard">
                   <ArrowLeft size={18} />
                 </Link>
                 <div className="min-w-0">
@@ -1192,7 +1192,7 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-row overflow-hidden px-4 gap-4">
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-row overflow-hidden px-4 gap-4">
         <motion.div
           layout
           transition={{ type: "tween", ease: "linear", duration: 0.25 }}
@@ -1201,7 +1201,7 @@ export default function DictationPage({ params }: PageProps) {
             isZenMode && "z-50"
           )}
         >
-          <div className="flex-shrink-0 space-y-2 pt-3">
+          <div className="flex-shrink-0 space-y-2 pt-2">
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setShowVideo((v) => !v)}
@@ -1259,7 +1259,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
-            <div className="relative z-10 flex items-center gap-4 py-1 px-4 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-4">
+            <div className="relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-4">
               <div className="flex items-center gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
@@ -1342,7 +1342,7 @@ export default function DictationPage({ params }: PageProps) {
                       }}
                       onKeyDown={handleWorkspaceInputKeyDown}
                       placeholder="Type what you hear..."
-                      className="w-full bg-transparent p-6 pr-36 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      className="w-full bg-transparent p-6 pr-38 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
@@ -1355,7 +1355,7 @@ export default function DictationPage({ params }: PageProps) {
                         onClick={() => setShowHintPanel((prev) => !prev)}
                         title={showHintPanel ? "Hide hint" : "Show hint"}
                         className={clsx(
-                          "h-9 w-9 flex items-center justify-center rounded-xl border transition-all active:scale-95",
+                          "h-9 w-9 flex items-center justify-center rounded-xl border-yellow-500 bg-yellow-100 transition-all active:scale-95" + " hover:bg-yellow-300 hover:border-yellow-300",
                           showHintPanel
                             ? "bg-indigo-100 border-indigo-300 text-indigo-600"
                             : "bg-white/70 border-white/80 text-slate-500 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600"
