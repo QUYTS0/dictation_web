@@ -11,7 +11,7 @@ import {
   SkipBack,
   SkipForward,
   Repeat,
-  HelpCircle,
+  Lightbulb,
   Check,
   X,
   FileText,
@@ -1259,7 +1259,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
-            <div className="relative z-10 flex items-center gap-4 py-1 px-4 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-2">
+            <div className="relative z-10 flex items-center gap-4 py-1 px-4 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-4">
               <div className="flex items-center gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
@@ -1342,14 +1342,27 @@ export default function DictationPage({ params }: PageProps) {
                       }}
                       onKeyDown={handleWorkspaceInputKeyDown}
                       placeholder="Type what you hear..."
-                      className="w-full bg-transparent p-6 pr-24 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      className="w-full bg-transparent p-6 pr-36 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
                       spellCheck={false}
                     />
 
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center">
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowHintPanel((prev) => !prev)}
+                        title={showHintPanel ? "Hide hint" : "Show hint"}
+                        className={clsx(
+                          "h-9 w-9 flex items-center justify-center rounded-xl border transition-all active:scale-95",
+                          showHintPanel
+                            ? "bg-indigo-100 border-indigo-300 text-indigo-600"
+                            : "bg-white/70 border-white/80 text-slate-500 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600"
+                        )}
+                      >
+                        <Lightbulb size={17} />
+                      </button>
                       <AnimatePresence mode="wait">
                         {isCheckingWorkspace ? (
                           <motion.div
@@ -1405,23 +1418,25 @@ export default function DictationPage({ params }: PageProps) {
                     >
                       <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 mt-4">
                         <h4 className="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] mb-3">Correction Needed</h4>
-                        <div className="font-mono text-sm leading-relaxed p-4 bg-white/20 dark:bg-black/20 rounded-xl border border-red-500/20 shadow-inner">
-                          <p className="text-red-500 line-through opacity-60 decoration-2">{checkResult.normalizedUser || "(No answer provided)"}</p>
-                          <p className="text-slate-900 dark:text-white bg-red-500/20 px-2 py-0.5 rounded font-bold underline decoration-red-500/50 decoration-offset-4 mt-2">{checkResult.normalizedExpected}</p>
-                        </div>
+                        <p className="font-mono text-sm leading-relaxed">
+                          {checkResult.diff
+                            .filter((t) => t.status !== "extra")
+                            .map((t, i, arr) => (
+                              <span key={i} className={t.status === "correct" ? "text-emerald-700 font-medium" : "text-slate-400"}>
+                                {t.status === "correct" ? t.word : "***"}
+                                {i < arr.length - 1 ? " " : ""}
+                              </span>
+                            ))}
+                        </p>
+                        {checkResult.diff.filter((t) => t.status === "extra").length > 0 && (
+                          <span className="mt-2 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                            Extra: {checkResult.diff.filter((t) => t.status === "extra").length}
+                          </span>
+                        )}
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
-
-                <div className="flex justify-center mt-6">
-                  <button
-                    onClick={() => setShowHintPanel((prev) => !prev)}
-                    className="flex items-center gap-2 text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 bg-white/60 dark:bg-white/5 hover:bg-white/90 px-6 py-3 rounded-2xl transition-all border border-white/80 dark:border-white/10 shadow-sm active:scale-95"
-                  >
-                    <HelpCircle size={18} /> {showHintPanel ? "Hide hint" : "Need a hint?"}
-                  </button>
-                </div>
 
                 {showHintPanel && currentSegment && !checkResult?.isCorrect && (
                   <div>
