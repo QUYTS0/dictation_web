@@ -1342,7 +1342,7 @@ export default function DictationPage({ params }: PageProps) {
                       }}
                       onKeyDown={handleWorkspaceInputKeyDown}
                       placeholder="Type what you hear..."
-                      className="w-full bg-transparent p-6 pr-38 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      className="w-full bg-transparent p-6 pr-39 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
