@@ -1432,7 +1432,9 @@ export default function DictationPage({ params }: PageProps) {
                             ))}
                         </p>
                         {(() => {
-                          const extraCount = checkResult.diff.filter((t) => t.status === "extra").length;
+                          const userWordCount = checkResult.normalizedUser.split(" ").filter(Boolean).length;
+                          const expectedWordCount = checkResult.normalizedExpected.split(" ").filter(Boolean).length;
+                          const extraCount = userWordCount > expectedWordCount ? userWordCount - expectedWordCount : 0;
                           return extraCount > 0 ? (
                             <span className="mt-2 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
                               Extra: {extraCount}
