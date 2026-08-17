@@ -16,7 +16,6 @@ import {
   X,
   FileText,
   Bookmark,
-  CheckCircle2,
   Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -32,6 +31,7 @@ import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { useAuth, useRequireAuth } from "@/context/auth";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
+import { buildManualSegmentsFromText } from "@/lib/utils/segment";
 import type {
   TranscriptResponse,
   TranscriptSegment,
@@ -297,6 +297,9 @@ export default function DictationPage({ params }: PageProps) {
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [hintLevel, setHintLevel] = useState<HintLevel>(0);
   const [transcriptId, setTranscriptId] = useState<string | undefined>();
+  const [manualPasteText, setManualPasteText] = useState("");
+  const [manualPasteSubmitting, setManualPasteSubmitting] = useState(false);
+  const [manualPasteError, setManualPasteError] = useState<string | null>(null);
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
@@ -635,6 +638,36 @@ export default function DictationPage({ params }: PageProps) {
         .catch(() => {});
     }
   }, [transcriptStatus, transcriptId, videoId]);
+
+  // ---- Manual transcript paste fallback (used when captions aren't available) ----
+  const handleManualTranscriptSubmit = useCallback(async () => {
+    const segments = buildManualSegmentsFromText(manualPasteText);
+    if (segments.length === 0) {
+      setManualPasteError("Paste at least one sentence to continue.");
+      return;
+    }
+
+    setManualPasteSubmitting(true);
+    setManualPasteError(null);
+    try {
+      const res = await fetch("/api/transcript/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, segments, force: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setManualPasteError(data.error ?? "Failed to save transcript.");
+        return;
+      }
+      setTranscriptId(data.transcriptId);
+      await transcriptQuery.refetch();
+    } catch {
+      setManualPasteError("Failed to save transcript. Please try again.");
+    } finally {
+      setManualPasteSubmitting(false);
+    }
+  }, [manualPasteText, videoId, transcriptQuery]);
 
   // ---- Load saved vocabulary for this video ----
   useEffect(() => {
@@ -1291,10 +1324,35 @@ export default function DictationPage({ params }: PageProps) {
             )}
 
             {uxState === "transcript_failed" && (
-              <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-2">
-                <p className="text-2xl">❌</p>
-                <p className="font-semibold text-slate-800">Transcript failed</p>
-                <p className="text-sm text-slate-500">Could not generate a transcript for this video.</p>
+              <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <p className="text-2xl">❌</p>
+                  <p className="font-semibold text-slate-800">Transcript failed</p>
+                  <p className="text-sm text-slate-500">
+                    Could not automatically fetch captions for this video. You can paste the
+                    transcript yourself below to continue — sentence timing will be estimated,
+                    so use Replay to resync as needed.
+                  </p>
+                </div>
+                <textarea
+                  value={manualPasteText}
+                  onChange={(e) => setManualPasteText(e.target.value)}
+                  placeholder="Paste the video's transcript here, as plain sentences..."
+                  rows={6}
+                  className="w-full rounded-lg border border-slate-300 bg-white p-3 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+                {manualPasteError && (
+                  <p className="text-sm text-red-600">{manualPasteError}</p>
+                )}
+                <div>
+                  <button
+                    onClick={handleManualTranscriptSubmit}
+                    disabled={manualPasteSubmitting || manualPasteText.trim().length === 0}
+                    className="px-5 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {manualPasteSubmitting ? "Saving..." : "Use this transcript"}
+                  </button>
+                </div>
               </div>
             )}
 

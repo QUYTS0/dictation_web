@@ -21,6 +21,7 @@ interface DashboardData {
   avgAccuracy: number;
   totalPracticeMinutes: number;
   vocabularyCount: number;
+  streakDays: number;
   recentVocabulary: Array<{
     id: string;
     term: string;
@@ -134,7 +135,11 @@ export default function DashboardPage() {
                 <div className="flex gap-2 rounded-2xl border border-white/80 bg-white/60 p-2 shadow-md backdrop-blur-md">
                   <div className="flex shrink-0 items-center gap-2 rounded-lg bg-orange-50 px-3 py-1.5 text-orange-600">
                     <Flame size={18} className="fill-orange-500/20" />
-                    <span className="text-sm font-semibold">{dashboardData.completedVideos} Videos</span>
+                    <span className="text-sm font-semibold">
+                      {dashboardData.streakDays > 0
+                        ? `${dashboardData.streakDays} day streak`
+                        : "Start a streak"}
+                    </span>
                   </div>
                   <div className="mx-1 my-1 w-px bg-slate-200" />
                   <div className="flex shrink-0 items-center gap-2 rounded-lg bg-yellow-50 px-3 py-1.5 text-yellow-600">

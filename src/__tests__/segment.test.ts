@@ -2,6 +2,7 @@ import {
   findSegmentIndexAtTime,
   getSegmentAtTime,
   getHint,
+  buildManualSegmentsFromText,
 } from "@/lib/utils/segment";
 import type { TranscriptSegment } from "@/lib/types";
 
@@ -88,5 +89,43 @@ describe("getHint", () => {
 
   it("level 4 returns full answer", () => {
     expect(getHint(text, 4).hint).toBe(text);
+  });
+});
+
+describe("buildManualSegmentsFromText", () => {
+  it("splits pasted text into one segment per sentence", () => {
+    const segs = buildManualSegmentsFromText(
+      "How are you doing today? I am doing well. That is great to hear."
+    );
+    expect(segs).toHaveLength(3);
+    expect(segs[0].text).toBe("How are you doing today?");
+    expect(segs[1].text).toBe("I am doing well.");
+    expect(segs[2].text).toBe("That is great to hear.");
+  });
+
+  it("assigns sequential segmentIndex values", () => {
+    const segs = buildManualSegmentsFromText("One. Two. Three.");
+    expect(segs.map((s) => s.segmentIndex)).toEqual([0, 1, 2]);
+  });
+
+  it("produces non-overlapping, increasing timestamps", () => {
+    const segs = buildManualSegmentsFromText("One. Two. Three.");
+    for (let i = 1; i < segs.length; i++) {
+      expect(segs[i].start).toBeGreaterThanOrEqual(segs[i - 1].end);
+    }
+    for (const seg of segs) {
+      expect(seg.end).toBeGreaterThan(seg.start);
+    }
+  });
+
+  it("returns an empty array for blank input", () => {
+    expect(buildManualSegmentsFromText("   ")).toEqual([]);
+  });
+
+  it("gives longer sentences a longer estimated duration", () => {
+    const [short, long] = buildManualSegmentsFromText(
+      "Hi. This is a much longer sentence with many more words in it."
+    );
+    expect(long.end - long.start).toBeGreaterThan(short.end - short.start);
   });
 });

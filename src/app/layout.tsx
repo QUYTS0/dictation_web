@@ -3,7 +3,7 @@ import "./globals.css";
 import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "English Dictation Trainer",
+  title: "DictaLearn — English Dictation Trainer",
   description:
     "Practice English listening & dictation with YouTube videos. Auto-pause, answer checking, AI explanations.",
 };

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { YoutubeTranscript } from "youtube-transcript";
 import { createServiceClient } from "@/lib/supabase/server";
 import { normalizeText } from "@/lib/utils/text";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 interface GenerateRequest {
   videoId: string;
@@ -22,6 +23,12 @@ interface GenerateRequest {
 }
 
 export async function POST(request: NextRequest) {
+  const rateLimitResponse = checkRateLimit(request, "transcript/generate", {
+    limit: 10,
+    windowMs: 60_000,
+  });
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const body: GenerateRequest = await request.json();
     const { videoId, language = "en", segments, force = false } = body;

@@ -101,3 +101,45 @@ export function getHint(text: string, level: HintLevel): HintResult {
       return { level: 0, hint: "" };
   }
 }
+
+// ---- Manual transcript fallback ----
+
+// Average spoken English pace (~150 wpm) used to estimate segment timing
+// when a real transcript can't be fetched (e.g. captions disabled/unavailable).
+const WORDS_PER_SECOND = 2.5;
+const MIN_MANUAL_SEGMENT_SECONDS = 1.5;
+
+export interface ManualSegmentInput {
+  segmentIndex: number;
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Splits a manually pasted transcript into sentence-level segments with
+ * estimated (not real) timestamps, so a dictation session can proceed even
+ * when no real caption timing is available. Timing is approximate — users
+ * can use replay/seek to resync as they go.
+ */
+export function buildManualSegmentsFromText(text: string): ManualSegmentInput[] {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let cursor = 0;
+  return sentences.map((sentenceText, i) => {
+    const wordCount = sentenceText.split(/\s+/).filter(Boolean).length;
+    const duration = Math.max(wordCount / WORDS_PER_SECOND, MIN_MANUAL_SEGMENT_SECONDS);
+    const start = cursor;
+    const end = start + duration;
+    cursor = end;
+    return {
+      segmentIndex: i,
+      start: Math.round(start * 100) / 100,
+      end: Math.round(end * 100) / 100,
+      text: sentenceText,
+    };
+  });
+}

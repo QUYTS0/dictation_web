@@ -202,6 +202,11 @@ export interface VocabularyItem {
   sentence_context: string;
   note: string | null;
   created_at: string;
+  next_review_at: string;
+  interval_days: number;
+  ease_factor: number;
+  repetitions: number;
+  last_reviewed_at: string | null;
 }
 
 export interface VocabularyRequest {
@@ -210,4 +215,17 @@ export interface VocabularyRequest {
   term: string;
   sentenceContext: string;
   note?: string;
+}
+
+// ---- Vocabulary spaced-repetition review ----
+
+export type ReviewGrade = "again" | "hard" | "good" | "easy";
+
+export interface VocabularyReviewSubmitRequest {
+  itemId: string;
+  grade: ReviewGrade;
+}
+
+export interface VocabularyReviewSubmitResponse {
+  item: VocabularyItem;
 }

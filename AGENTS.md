@@ -1,5 +1,3 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# Agent Instructions
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+This project uses standard Next.js 16 (App Router) with TypeScript, Tailwind CSS, Supabase, and Google Gemini. See `Master Plan.md` for the full product spec and `README.md` for setup. After making changes, run `npm run lint`, `npm run build`, and `npm test`.

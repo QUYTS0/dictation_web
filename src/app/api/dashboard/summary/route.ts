@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { computeStreakDays } from "@/lib/utils/streak";
 
 export async function GET() {
   try {
@@ -37,6 +38,23 @@ export async function GET() {
       ((sessions ?? []).reduce((sum, s) => sum + Number(s.video_current_time ?? 0), 0) || 0) /
         60
     );
+    const allSessionIds = (sessions ?? []).map((s) => s.id);
+    const { data: activityAttempts, error: activityAttemptsError } = allSessionIds.length
+      ? await supabase
+          .from("attempt_logs")
+          .select("created_at")
+          .in("session_id", allSessionIds)
+      : { data: [], error: null };
+
+    if (activityAttemptsError) {
+      console.error("[dashboard] activity attempts query error:", activityAttemptsError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+
+    const streakDays = computeStreakDays(
+      (activityAttempts ?? []).map((a) => new Date(a.created_at))
+    );
+
     const { data: vocabulary, error: vocabularyError } = await supabase
       .from("vocabulary_items")
       .select("id, term, sentence_context, created_at")
@@ -124,6 +142,7 @@ export async function GET() {
       avgAccuracy,
       totalPracticeMinutes,
       vocabularyCount: vocabularyCount ?? 0,
+      streakDays,
       recentVocabulary: vocabulary ?? [],
       resumableSessions,
     });

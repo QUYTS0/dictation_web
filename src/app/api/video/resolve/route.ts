@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractYouTubeVideoId, isValidYouTubeUrl } from "@/lib/utils/url";
 import { createServiceClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rateLimit";
 import type { ResolveVideoRequest, ResolveVideoResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
+  const rateLimitResponse = checkRateLimit(request, "video/resolve", {
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const body: ResolveVideoRequest = await request.json();
     const { url } = body;

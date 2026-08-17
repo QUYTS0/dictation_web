@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DictaLearn — English Dictation Trainer
 
-## Getting Started
+Paste a YouTube link, and DictaLearn turns it into a sentence-by-sentence dictation
+exercise: the video auto-pauses after each sentence, you type what you heard, and it's
+checked against the transcript. Wrong answers get a hint ladder and optional AI (Gemini)
+grammar explanations. Signed-in users get autosave/resume, mistake history, a saved
+vocabulary list, and a practice dashboard.
 
-First, run the development server:
+See [`Master Plan.md`](./Master%20Plan.md) for the full product spec, data model, and
+roadmap.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Stack
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Next.js 16 (App Router) · TypeScript · Tailwind CSS · Zustand · TanStack Query ·
+Supabase (Postgres + Auth) · Google Gemini
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Getting started
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Install dependencies:
 
-## Learn More
+   ```bash
+   npm install
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+2. Copy `.env.local.example` to `.env.local` and fill in your Supabase project
+   credentials (Settings → API) and a [Gemini API key](https://aistudio.google.com/app/apikey):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   ```bash
+   cp .env.local.example .env.local
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+3. Apply the database schema. In the Supabase SQL editor (or via the CLI), run the
+   migrations in order:
 
-## Deploy on Vercel
+   - `supabase/migrations/001_initial.sql`
+   - `supabase/migrations/002_auth_features.sql`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+4. Run the dev server:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000).
+
+## Scripts
+
+- `npm run dev` — start the dev server
+- `npm run build` — production build
+- `npm run lint` — ESLint
+- `npm test` — Jest unit tests
+
+CI (`.github/workflows/ci.yml`) runs lint, tests, and build on every push/PR to `main`.
+
+## Deploying
+
+Targets Vercel. Set the same environment variables from `.env.local.example` in your
+Vercel project settings before deploying.

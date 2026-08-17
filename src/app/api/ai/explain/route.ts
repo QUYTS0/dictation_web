@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rateLimit";
 import type { AIExplainRequest, AIExplainResponse } from "@/lib/types";
 
 const MODEL_NAME = "gemini-1.5-flash";
@@ -21,6 +22,12 @@ Please analyze the mistake and respond with a JSON object in this exact format (
 }
 
 export async function POST(request: NextRequest) {
+  const rateLimitResponse = checkRateLimit(request, "ai/explain", {
+    limit: 15,
+    windowMs: 60_000,
+  });
+  if (rateLimitResponse) return rateLimitResponse;
+
   try {
     const body: AIExplainRequest = await request.json();
     const { expectedText, userText, attemptId } = body;
