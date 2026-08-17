@@ -84,6 +84,8 @@ export default function DictationPage({ params }: PageProps) {
     resumeState,
     resumeLoading,
     previousReview,
+    regenerating,
+    regenerateError,
     segments,
     transcriptTitle,
     ytPlayerRef,
@@ -96,7 +98,17 @@ export default function DictationPage({ params }: PageProps) {
     handleResume,
     handleRestart,
     handleManualTranscriptSaved,
+    handleRegenerateTranscript,
   } = useDictationSession({ videoId, user });
+
+  const handleRegenerateClick = useCallback(() => {
+    if (regenerating) return;
+    const confirmed = window.confirm(
+      "Regenerate this video's script from YouTube's captions? The current script and your progress in this session will be replaced."
+    );
+    if (!confirmed) return;
+    void handleRegenerateTranscript();
+  }, [regenerating, handleRegenerateTranscript]);
 
   const handleWorkspaceCheck = useCallback(() => {
     const trimmed = workspaceInputValue.trim();
@@ -743,7 +755,7 @@ export default function DictationPage({ params }: PageProps) {
                 </>
               ) : (
                 <>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button onClick={() => setShowScriptContext((prev) => !prev)} className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50">
                       {showScriptContext ? "Hide script" : "Show script"}
                     </button>
@@ -752,7 +764,16 @@ export default function DictationPage({ params }: PageProps) {
                         {showPreviousScriptContext ? "Hide previous" : "Show previous"}
                       </button>
                     )}
+                    <button
+                      onClick={handleRegenerateClick}
+                      disabled={regenerating}
+                      title="Re-fetch this video's script from YouTube's captions if it doesn't match the audio"
+                      className="rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {regenerating ? "Regenerating…" : "Regenerate script"}
+                    </button>
                   </div>
+                  {regenerateError && <p className="text-xs text-red-600">{regenerateError}</p>}
                   {scriptContextSegments.length === 0 ? (
                     <p className="text-xs text-slate-500">Script is not available yet.</p>
                   ) : !showScriptContext ? (

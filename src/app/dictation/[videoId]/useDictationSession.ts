@@ -7,7 +7,14 @@ import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
 import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState } from "@/lib/types";
 import { RESUME_SEEK_DELAY_MS, CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
-import { fetchTranscript, checkAnswerApi, saveProgress, fetchResumeSession, restartSession } from "./api";
+import {
+  fetchTranscript,
+  checkAnswerApi,
+  saveProgress,
+  fetchResumeSession,
+  restartSession,
+  regenerateTranscript,
+} from "./api";
 import type { MistakeRecord, CompletedSentenceReview, ResumeState } from "./types";
 
 interface UseDictationSessionOptions {
@@ -38,6 +45,8 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -296,6 +305,33 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     [transcriptQuery]
   );
 
+  // ---- Regenerate transcript from YouTube captions (discards the cached script) ----
+  const handleRegenerateTranscript = useCallback(async () => {
+    setRegenerating(true);
+    setRegenerateError(null);
+    ytPlayerRef.current?.pauseVideo();
+    setUxState("transcript_processing");
+    currentSegIdxRef.current = 0;
+    setCurrentSegIdx(0);
+    setCheckResult(null);
+    setWrongAttempts(0);
+    setHintLevel(0);
+    setMistakes([]);
+    setPreviousReview(null);
+    setResumeState(null);
+    firstAttemptBySegmentRef.current = {};
+
+    try {
+      const result = await regenerateTranscript(videoId);
+      if (result.transcriptId) setTranscriptId(result.transcriptId);
+    } catch (err) {
+      setRegenerateError(err instanceof Error ? err.message : "Failed to regenerate transcript.");
+    } finally {
+      await transcriptQuery.refetch();
+      setRegenerating(false);
+    }
+  }, [videoId, transcriptQuery]);
+
   // ---- Load resumable session for authenticated users ----
   useEffect(() => {
     if (!user || transcriptStatus !== "ready" || resumeLoadedRef.current) return;
@@ -372,6 +408,8 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     resumeState,
     resumeLoading,
     previousReview,
+    regenerating,
+    regenerateError,
     segments,
     transcriptStatus,
     transcriptTitle: transcriptQuery.data?.title,
@@ -386,5 +424,6 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     handleResume,
     handleRestart,
     handleManualTranscriptSaved,
+    handleRegenerateTranscript,
   };
 }

@@ -11,6 +11,20 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptRespon
   return res.json();
 }
 
+/** Wipes the cached transcript/segments and re-derives them from YouTube's captions. */
+export async function regenerateTranscript(
+  videoId: string
+): Promise<{ transcriptId?: string; status: string; error?: string }> {
+  const res = await fetch("/api/transcript/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, force: true }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Failed to regenerate transcript");
+  return data;
+}
+
 export async function checkAnswerApi(
   segmentIndex: number,
   userText: string,
