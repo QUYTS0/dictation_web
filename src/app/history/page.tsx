@@ -7,12 +7,11 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
-  Headphones,
   History as ClockIcon,
   PlayCircle,
 } from "lucide-react";
 import { motion } from "motion/react";
-import UserButton from "@/components/UserButton";
+import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
 
 interface DashboardData {
@@ -85,30 +84,9 @@ export default function HistoryPage() {
       <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
 
       <div className="relative z-10 flex flex-1 flex-col">
-        <header className="sticky top-0 z-20 w-full shrink-0 border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md">
-          <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
-            <Link href="/" className="flex cursor-pointer items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
-                <Headphones size={18} />
-              </div>
-              <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
-            </Link>
-            <div className="flex items-center gap-6">
-              <nav className="hidden gap-6 md:flex">
-                <Link href="/" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
-                  Dashboard
-                </Link>
-                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
-                  Vocabulary
-                </Link>
-                <span className="text-sm font-bold text-primary-600">History</span>
-              </nav>
-              <UserButton />
-            </div>
-          </div>
-        </header>
+        <AppHeader active="history" />
 
-        <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 overflow-y-auto px-4 py-8">
+        <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-8">
           {loading ? (
             <p className="text-sm text-slate-500">Loading…</p>
           ) : !user ? (
@@ -130,7 +108,7 @@ export default function HistoryPage() {
             <>
               <section className="flex flex-col items-start justify-between gap-6 border-b border-white/40 pb-6 md:flex-row md:items-end">
                 <div>
-                  <h1 className="mb-2 text-3xl font-bold tracking-tight text-slate-900">Practice History</h1>
+                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">Practice History</h1>
                   <p className="text-sm text-slate-500">Track your dictation sessions and progress.</p>
                 </div>
                 <div className="flex w-full gap-4 md:w-auto">

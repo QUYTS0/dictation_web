@@ -49,9 +49,9 @@ export default function ListeningPage({ params }: PageProps) {
         <div className="mx-auto flex w-full max-w-none items-center justify-between">
           <div className="flex min-w-0 items-center gap-4">
             <Link
-              href="/listening"
+              href="/dashboard"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100"
-              aria-label="Back to listening practice"
+              aria-label="Back to dashboard"
             >
               <ArrowLeft size={18} />
             </Link>
