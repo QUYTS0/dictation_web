@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { YoutubeTranscript } from "youtube-transcript";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { normalizeText } from "@/lib/utils/text";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -23,6 +24,52 @@ interface GenerateRequest {
   }>;
 }
 
+interface ResolvedSegment {
+  segmentIndex: number;
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Records a caption-fetch failure. If a previously "ready" transcript exists
+ * for this video, it's left completely untouched — a failed regenerate must
+ * never leave the video with no usable script at all. Otherwise (nothing
+ * working to lose) the transcript is marked "failed" so the client's GET
+ * polling settles instead of treating it as perpetually "processing".
+ */
+async function reportFetchFailure(
+  supabase: SupabaseClient,
+  canonicalTranscript: { id: string } | null,
+  hasWorkingTranscriptToPreserve: boolean,
+  videoId: string,
+  language: string,
+  userMessage: string
+) {
+  if (hasWorkingTranscriptToPreserve) {
+    return NextResponse.json({ status: "ready", error: userMessage }, { status: 422 });
+  }
+
+  if (canonicalTranscript) {
+    await supabase.from("transcripts").update({ status: "failed" }).eq("id", canonicalTranscript.id);
+    return NextResponse.json(
+      { transcriptId: canonicalTranscript.id, status: "failed", error: userMessage },
+      { status: 422 }
+    );
+  }
+
+  const { data: failedTranscript } = await supabase
+    .from("transcripts")
+    .insert({ youtube_video_id: videoId, language, source: "cache", status: "failed", version: 1 })
+    .select("id")
+    .single();
+
+  return NextResponse.json(
+    { transcriptId: failedTranscript?.id, status: "failed", error: userMessage },
+    { status: 422 }
+  );
+}
+
 export async function POST(request: NextRequest) {
   const rateLimitResponse = await checkRateLimit(request, "transcript/generate", {
     limit: 10,
@@ -32,7 +79,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: GenerateRequest = await request.json();
-    const { videoId, language = "en", segments, force = false } = body;
+    const { videoId, language = "en", segments: providedSegments, force = false } = body;
 
     if (!videoId || typeof videoId !== "string") {
       return NextResponse.json({ error: "videoId is required" }, { status: 400 });
@@ -89,13 +136,78 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    let transcriptId: string | null = null;
+    // A previously-ready transcript is valuable — resolve the replacement
+    // segments first and only touch the DB once they're confirmed good, so a
+    // failed regenerate can't wipe out a script that was working.
+    const hasWorkingTranscriptToPreserve = canonicalTranscript?.status === "ready";
+
+    let resolvedSegments: ResolvedSegment[];
+    let source: "manual" | "cache";
+
+    if (providedSegments && providedSegments.length > 0) {
+      resolvedSegments = providedSegments;
+      source = "manual";
+    } else {
+      let ytItems;
+      try {
+        ytItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+      } catch (captionErr) {
+        console.error("[transcript generate] YouTube caption fetch error:", captionErr);
+        const errMsg = captionErr instanceof Error ? captionErr.message : String(captionErr);
+        const isLangUnavailable = errMsg.toLowerCase().includes("no transcripts") ||
+          errMsg.toLowerCase().includes("language");
+        const userMessage = isLangUnavailable
+          ? `No ${language} captions available. Try a video with English captions enabled.`
+          : "Captions are disabled for this video. Please choose a video with captions enabled.";
+        return reportFetchFailure(supabase, canonicalTranscript, hasWorkingTranscriptToPreserve, videoId, language, userMessage);
+      }
+
+      if (!ytItems || ytItems.length === 0) {
+        return reportFetchFailure(
+          supabase,
+          canonicalTranscript,
+          hasWorkingTranscriptToPreserve,
+          videoId,
+          language,
+          "No captions found for this video."
+        );
+      }
+
+      // Merge very short cue lines into sentence-level segments
+      const merged = mergeIntoSentences(ytItems);
+
+      if (merged.length === 0) {
+        console.error(
+          `[transcript generate] mergeIntoSentences produced 0 segments from ${ytItems.length} cues` +
+          ` (cue texts may be empty or unit detection may have failed)`
+        );
+        return reportFetchFailure(
+          supabase,
+          canonicalTranscript,
+          hasWorkingTranscriptToPreserve,
+          videoId,
+          language,
+          "Could not extract segments from captions."
+        );
+      }
+
+      resolvedSegments = merged.map((seg, i) => ({
+        segmentIndex: i,
+        start: seg.start,
+        end: seg.start + seg.duration,
+        text: seg.text,
+      }));
+      source = "cache";
+    }
+
+    // We now have confirmed-good segments — safe to replace whatever existed.
+    let transcriptId: string;
     if (canonicalTranscript) {
       const { error: canonicalUpdateError } = await supabase
         .from("transcripts")
         .update({
           status: "processing",
-          source: segments ? "manual" : "cache",
+          source,
           full_text: null,
           updated_at: new Date().toISOString(),
         })
@@ -120,7 +232,7 @@ export async function POST(request: NextRequest) {
         .insert({
           youtube_video_id: videoId,
           language,
-          source: segments ? "manual" : "cache",
+          source,
           status: "processing",
           version: 1,
         })
@@ -134,117 +246,26 @@ export async function POST(request: NextRequest) {
       transcriptId = transcript.id;
     }
 
-    if (!transcriptId) {
-      return NextResponse.json({ error: "Failed to initialize transcript" }, { status: 500 });
-    }
-    console.log(`[transcript generate] created transcript ${transcriptId} for video ${videoId}`);
+    console.log(
+      `[transcript generate] writing ${resolvedSegments.length} segments to transcript ${transcriptId} for video ${videoId}`
+    );
 
-    // If segments were provided directly (e.g., from caption API), store them immediately
-    if (segments && segments.length > 0) {
-      const rows = segments.map((seg) => ({
-        transcript_id: transcriptId,
-        segment_index: seg.segmentIndex,
-        start_sec: seg.start,
-        end_sec: seg.end,
-        duration_sec: seg.end - seg.start,
-        text_raw: seg.text,
-        text_normalized: normalizeText(seg.text, "relaxed"),
-      }));
-
-      const { error: insertError } = await supabase
-        .from("transcript_segments")
-        .insert(rows);
-
-      if (insertError) {
-        console.error("[transcript generate] segment insert error:", insertError);
-        await supabase
-          .from("transcripts")
-          .update({ status: "failed" })
-          .eq("id", transcriptId);
-        return NextResponse.json({ error: "Failed to store segments" }, { status: 500 });
-      }
-
-      const fullText = segments.map((s) => s.text).join(" ");
-      await supabase
-        .from("transcripts")
-        .update({ status: "ready", full_text: fullText })
-        .eq("id", transcriptId);
-
-      console.log(`[transcript generate] stored ${segments.length} segments for transcript ${transcriptId}`);
-      return NextResponse.json({
-        transcriptId,
-        status: "ready",
-        segmentCount: segments.length,
-      });
-    }
-
-    // No segments provided — fetch from YouTube captions
-    let ytItems;
-    try {
-      ytItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
-    } catch (captionErr) {
-      console.error("[transcript generate] YouTube caption fetch error:", captionErr);
-      const errMsg = captionErr instanceof Error ? captionErr.message : String(captionErr);
-      const isLangUnavailable = errMsg.toLowerCase().includes("no transcripts") ||
-        errMsg.toLowerCase().includes("language");
-      const userMessage = isLangUnavailable
-        ? `No ${language} captions available. Try a video with English captions enabled.`
-        : "Captions are disabled for this video. Please choose a video with captions enabled.";
-      await supabase
-        .from("transcripts")
-        .update({ status: "failed" })
-        .eq("id", transcriptId);
-      return NextResponse.json(
-        { transcriptId, status: "failed", error: userMessage },
-        { status: 422 }
-      );
-    }
-
-    if (!ytItems || ytItems.length === 0) {
-      await supabase
-        .from("transcripts")
-        .update({ status: "failed" })
-        .eq("id", transcriptId);
-      return NextResponse.json(
-        { transcriptId, status: "failed", error: "No captions found for this video." },
-        { status: 422 }
-      );
-    }
-
-    // Merge very short cue lines into sentence-level segments
-    const merged = mergeIntoSentences(ytItems);
-
-    if (merged.length === 0) {
-      console.error(
-        `[transcript generate] mergeIntoSentences produced 0 segments from ${ytItems.length} cues` +
-        ` (cue texts may be empty or unit detection may have failed)`
-      );
-      await supabase
-        .from("transcripts")
-        .update({ status: "failed" })
-        .eq("id", transcriptId);
-      return NextResponse.json(
-        { transcriptId, status: "failed", error: "Could not extract segments from captions." },
-        { status: 422 }
-      );
-    }
-
-    const rows = merged.map((seg, i) => ({
+    const rows = resolvedSegments.map((seg) => ({
       transcript_id: transcriptId,
-      segment_index: i,
+      segment_index: seg.segmentIndex,
       start_sec: seg.start,
-      end_sec: seg.start + seg.duration,
-      duration_sec: seg.duration,
+      end_sec: seg.end,
+      duration_sec: seg.end - seg.start,
       text_raw: seg.text,
       text_normalized: normalizeText(seg.text, "relaxed"),
     }));
 
-    const { error: segInsertError } = await supabase
+    const { error: insertError } = await supabase
       .from("transcript_segments")
       .insert(rows);
 
-    if (segInsertError) {
-      console.error("[transcript generate] segment insert error:", segInsertError);
+    if (insertError) {
+      console.error("[transcript generate] segment insert error:", insertError);
       await supabase
         .from("transcripts")
         .update({ status: "failed" })
@@ -252,7 +273,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to store segments" }, { status: 500 });
     }
 
-    const fullText = merged.map((s) => s.text).join(" ");
+    const fullText = resolvedSegments.map((s) => s.text).join(" ");
     const { error: updateError } = await supabase
       .from("transcripts")
       .update({ status: "ready", full_text: fullText })
@@ -266,7 +287,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[transcript generate] stored ${rows.length} segments (from ${ytItems.length} cues) for transcript ${transcriptId}`
+      `[transcript generate] stored ${rows.length} segments for transcript ${transcriptId}`
     );
     return NextResponse.json({
       transcriptId,
@@ -278,4 +299,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
-
