@@ -63,7 +63,9 @@ export default function AIExplainer({
   return (
     <div className="rounded-xl border border-violet-300 bg-violet-50 p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-violet-700 font-semibold text-sm">🤖 AI Tutor</span>
+        <span className="text-violet-700 font-semibold text-sm">
+          <span aria-hidden="true">🤖 </span>AI Tutor
+        </span>
         {!explanation && (
           <button
             onClick={handleExplain}
@@ -81,7 +83,19 @@ export default function AIExplainer({
       </div>
 
       {error && (
-        <p className="text-red-600 text-sm">⚠ {error}</p>
+        <p role="alert" className="text-red-600 text-sm flex items-center gap-2">
+          <span>
+            <span aria-hidden="true">⚠ </span>
+            {error}
+          </span>
+          <button
+            onClick={handleExplain}
+            disabled={loading}
+            className="text-xs font-semibold underline text-red-700 hover:text-red-900 disabled:opacity-50"
+          >
+            Retry
+          </button>
+        </p>
       )}
 
       {explanation && (

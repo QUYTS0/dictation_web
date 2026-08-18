@@ -1,17 +1,64 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 interface Props {
   onClose: () => void;
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+
 export default function AuthModal({ onClose }: Props) {
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    return () => {
+      previouslyFocusedRef.current?.focus?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (sent) closeButtonRef.current?.focus();
+  }, [sent]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+
+      const focusable = Array.from(
+        panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const handleGoogle = async () => {
     const supabase = createClient();
@@ -44,10 +91,17 @@ export default function AuthModal({ onClose }: Props) {
       className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-5">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-title"
+        className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-5"
+      >
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-slate-800">Sign in</h2>
+          <h2 id="auth-modal-title" className="text-xl font-bold text-slate-800">Sign in</h2>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             aria-label="Close"
             className="text-slate-400 hover:text-slate-600 text-2xl leading-none"
@@ -100,7 +154,7 @@ export default function AuthModal({ onClose }: Props) {
           </>
         ) : (
           <div className="text-center flex flex-col gap-3 py-2">
-            <p className="text-2xl">📧</p>
+            <p className="text-2xl" aria-hidden="true">📧</p>
             <p className="font-semibold text-slate-800">Check your inbox</p>
             <p className="text-sm text-slate-500">
               We sent a sign-in link to <strong>{email}</strong>. Click the link

@@ -7,6 +7,7 @@ import { ArrowLeft, FileText, Languages, Play } from "lucide-react";
 
 import YouTubePlayer from "@/components/YouTubePlayer";
 import UserButton from "@/components/UserButton";
+import { StatusCard } from "@/components/StatusCard";
 
 import { useListeningSession } from "./useListeningSession";
 import { SubtitleOverlay } from "./components/SubtitleOverlay";
@@ -31,6 +32,8 @@ export default function ListeningPage({ params }: PageProps) {
     translationLoading,
     translationError,
     hasTranslations,
+    refetchTranscript,
+    refetchTranslation,
     ytPlayerRef,
     handleSeekToSegment,
     handleStart,
@@ -103,11 +106,11 @@ export default function ListeningPage({ params }: PageProps) {
           </div>
 
           {loadState === "loading" && (
-            <StatusBlock icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
+            <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
           )}
 
           {loadState === "processing" && (
-            <StatusBlock
+            <StatusCard
               icon="🔄"
               title="Generating transcript…"
               description="This may take a moment. The page will update automatically."
@@ -116,14 +119,13 @@ export default function ListeningPage({ params }: PageProps) {
           )}
 
           {loadState === "failed" && (
-            <div className="flex flex-col gap-2 rounded-xl border border-red-300 bg-red-50 p-5">
-              <p className="text-2xl">❌</p>
-              <p className="font-semibold text-slate-800">Transcript failed</p>
-              <p className="text-sm text-slate-500">
-                Could not automatically fetch captions for this video. Try a different video with captions
-                enabled, or use Dictation mode which supports pasting a transcript manually.
-              </p>
-            </div>
+            <StatusCard
+              icon="❌"
+              title="Transcript failed"
+              description="Could not automatically fetch captions for this video. Try a different video with captions enabled, or use Dictation mode which supports pasting a transcript manually."
+              error
+              onRetry={() => void refetchTranscript()}
+            />
           )}
 
           {loadState === "ready" && (
@@ -139,7 +141,16 @@ export default function ListeningPage({ params }: PageProps) {
                 <span className="text-xs text-slate-500">Fetching Vietnamese translation…</span>
               )}
               {!translationLoading && translationError && !hasTranslations && (
-                <span className="text-xs text-red-500">Translation unavailable right now — showing script only.</span>
+                <span role="alert" className="flex items-center gap-2 text-xs text-red-500">
+                  Translation unavailable right now — showing script only.
+                  <button
+                    type="button"
+                    onClick={() => void refetchTranslation()}
+                    className="font-semibold underline text-red-600 hover:text-red-800"
+                  >
+                    Retry
+                  </button>
+                </span>
               )}
             </div>
           )}
@@ -160,31 +171,6 @@ export default function ListeningPage({ params }: PageProps) {
           </div>
         </div>
       </main>
-    </div>
-  );
-}
-
-function StatusBlock({
-  icon,
-  title,
-  description,
-  pulse,
-}: {
-  icon: string;
-  title: string;
-  description: string;
-  pulse?: boolean;
-}) {
-  return (
-    <div
-      className={clsx(
-        "flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-5",
-        pulse && "animate-pulse"
-      )}
-    >
-      <p className="text-2xl">{icon}</p>
-      <p className="font-semibold text-slate-800">{title}</p>
-      <p className="text-sm text-slate-500">{description}</p>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Calendar,
@@ -13,6 +13,7 @@ import {
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
+import type { ErrorType } from "@/lib/types";
 
 interface DashboardData {
   completedVideos: number;
@@ -37,6 +38,35 @@ interface DashboardData {
   }>;
 }
 
+interface MistakeItem {
+  id: string;
+  sessionId: string;
+  videoId: string;
+  videoTitle: string | null;
+  segmentIndex: number;
+  expectedText: string;
+  userText: string;
+  errorType: ErrorType | null;
+  createdAt: string;
+}
+
+interface MistakesResponse {
+  items: MistakeItem[];
+  hasMore: boolean;
+  total: number;
+}
+
+const ERROR_TYPE_OPTIONS: { value: ErrorType; label: string }[] = [
+  { value: "spelling", label: "Spelling" },
+  { value: "missing_word", label: "Missing word" },
+  { value: "extra_word", label: "Extra word" },
+  { value: "wrong_form", label: "Wrong form" },
+  { value: "punctuation", label: "Punctuation" },
+  { value: "capitalization", label: "Capitalization" },
+];
+
+const MISTAKES_PAGE_SIZE = 10;
+
 function formatPracticeMinutes(totalMinutes: number) {
   if (totalMinutes < 60) return `${totalMinutes}m`;
   const hours = Math.floor(totalMinutes / 60);
@@ -44,10 +74,24 @@ function formatPracticeMinutes(totalMinutes: number) {
   return `${hours}h ${minutes}m`;
 }
 
+function errorTypeLabel(errorType: ErrorType | null) {
+  return ERROR_TYPE_OPTIONS.find((opt) => opt.value === errorType)?.label ?? "Other";
+}
+
 export default function HistoryPage() {
   const { user, loading, openAuthModal } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+
+  const [mistakes, setMistakes] = useState<MistakeItem[]>([]);
+  const [mistakesLoading, setMistakesLoading] = useState(false);
+  const [mistakesError, setMistakesError] = useState<string | null>(null);
+  const [mistakesHasMore, setMistakesHasMore] = useState(false);
+  const [mistakesTotal, setMistakesTotal] = useState(0);
+  const [videoFilter, setVideoFilter] = useState("");
+  const [errorTypeFilter, setErrorTypeFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
 
   useEffect(() => {
     if (!user) return;
@@ -77,6 +121,52 @@ export default function HistoryPage() {
     () => dashboardData?.resumableSessions ?? [],
     [dashboardData]
   );
+
+  const videoOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of historyItems) {
+      map.set(item.videoId, item.videoTitle ?? item.videoId);
+    }
+    for (const item of mistakes) {
+      if (!map.has(item.videoId)) {
+        map.set(item.videoId, item.videoTitle ?? item.videoId);
+      }
+    }
+    return [...map.entries()];
+  }, [historyItems, mistakes]);
+
+  const loadMistakes = useCallback(
+    async (offset: number, append: boolean) => {
+      setMistakesLoading(true);
+      setMistakesError(null);
+      try {
+        const searchParams = new URLSearchParams();
+        if (videoFilter) searchParams.set("videoId", videoFilter);
+        if (errorTypeFilter) searchParams.set("errorType", errorTypeFilter);
+        if (dateFromFilter) searchParams.set("dateFrom", dateFromFilter);
+        if (dateToFilter) searchParams.set("dateTo", dateToFilter);
+        searchParams.set("limit", String(MISTAKES_PAGE_SIZE));
+        searchParams.set("offset", String(offset));
+
+        const res = await fetch(`/api/history/mistakes?${searchParams.toString()}`);
+        if (!res.ok) throw new Error("Failed to fetch mistakes");
+        const data: MistakesResponse = await res.json();
+        setMistakes((prev) => (append ? [...prev, ...data.items] : data.items));
+        setMistakesHasMore(data.hasMore);
+        setMistakesTotal(data.total);
+      } catch {
+        setMistakesError("Failed to load mistakes. Please try again.");
+      } finally {
+        setMistakesLoading(false);
+      }
+    },
+    [videoFilter, errorTypeFilter, dateFromFilter, dateToFilter]
+  );
+
+  useEffect(() => {
+    if (!user) return;
+    loadMistakes(0, false);
+  }, [user, loadMistakes]);
 
   return (
     <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
@@ -131,7 +221,7 @@ export default function HistoryPage() {
                 </div>
               </section>
 
-              <section className="flex flex-col gap-4 pb-12">
+              <section className="flex flex-col gap-4">
                 {historyItems.length === 0 ? (
                   <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-lg backdrop-blur-xl">
                     No recent sessions yet.
@@ -209,6 +299,116 @@ export default function HistoryPage() {
                       </Link>
                     </motion.div>
                   ))
+                )}
+              </section>
+
+              <section className="flex flex-col gap-4 border-t border-white/40 pt-6 pb-12">
+                <div>
+                  <h2 className="mb-1 text-xl font-semibold tracking-tight text-slate-900">Mistakes</h2>
+                  <p className="text-sm text-slate-500">
+                    Revisit past mistakes across every session, filtered by video, date, or error type.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/60 bg-white/40 p-3 shadow-sm backdrop-blur-md">
+                  <select
+                    value={videoFilter}
+                    onChange={(e) => setVideoFilter(e.target.value)}
+                    className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
+                    aria-label="Filter by video"
+                  >
+                    <option value="">All videos</option>
+                    {videoOptions.map(([id, title]) => (
+                      <option key={id} value={id}>
+                        {title}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={errorTypeFilter}
+                    onChange={(e) => setErrorTypeFilter(e.target.value)}
+                    className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
+                    aria-label="Filter by error type"
+                  >
+                    <option value="">All error types</option>
+                    {ERROR_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                    From
+                    <input
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
+                      aria-label="From date"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                    To
+                    <input
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => setDateToFilter(e.target.value)}
+                      className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
+                      aria-label="To date"
+                    />
+                  </label>
+                  {mistakesTotal > 0 && (
+                    <span className="ml-auto text-xs text-slate-500">{mistakesTotal} mistake{mistakesTotal !== 1 ? "s" : ""}</span>
+                  )}
+                </div>
+
+                {mistakesError ? (
+                  <p className="text-sm text-red-600">{mistakesError}</p>
+                ) : mistakes.length === 0 && !mistakesLoading ? (
+                  <div className="rounded-2xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-sm backdrop-blur-md">
+                    No mistakes match these filters.
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {mistakes.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-xl border border-white/60 bg-white/50 p-3 shadow-sm backdrop-blur-md"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <Link
+                            href={`/dictation/${item.videoId}`}
+                            className="text-xs font-semibold text-primary-600 hover:underline"
+                          >
+                            {item.videoTitle ?? item.videoId}
+                          </Link>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                              {errorTypeLabel(item.errorType)}
+                            </span>
+                            <span className="text-[11px] text-slate-400">
+                              {new Date(item.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-400">Sentence {item.segmentIndex + 1}</p>
+                        <p className="text-sm text-slate-800">{item.expectedText}</p>
+                        <p className="text-xs text-red-500">
+                          You typed: {item.userText || <span className="italic text-slate-400">nothing</span>}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {mistakesHasMore && (
+                  <button
+                    onClick={() => loadMistakes(mistakes.length, true)}
+                    disabled={mistakesLoading}
+                    className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
+                  >
+                    {mistakesLoading ? "Loading…" : "Load more"}
+                  </button>
                 )}
               </section>
             </>

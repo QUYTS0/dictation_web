@@ -128,6 +128,8 @@ export function useListeningSession({ videoId }: UseListeningSessionOptions) {
     translationLoading: translationQuery.isFetching,
     translationError: translationQuery.isError,
     hasTranslations: combinedSegments.some((s) => s.textVi !== null),
+    refetchTranscript: transcriptQuery.refetch,
+    refetchTranslation: translationQuery.refetch,
     ytPlayerRef,
     handleSeekToSegment,
     handleStart,

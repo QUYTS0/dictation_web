@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
+import { VocabularyEditForm } from "@/components/VocabularyEditForm";
 import { useAuth } from "@/context/auth";
 import type { VocabularyItem } from "@/lib/types";
 
@@ -260,46 +261,18 @@ export default function VocabularyPage() {
 
                       <div className="mb-4 flex-1">
                         {editingId === item.id ? (
-                          <div className="flex flex-col gap-2">
-                            <input
-                              value={editingTerm}
-                              onChange={(e) => setEditingTerm(e.target.value)}
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
-                              placeholder="Saved text"
-                              aria-label="Edit saved text"
-                              autoFocus
-                            />
-                            <input
-                              value={editingSentenceContext}
-                              onChange={(e) => setEditingSentenceContext(e.target.value)}
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
-                              placeholder="Sentence context"
-                              aria-label="Edit sentence context"
-                            />
-                            <input
-                              value={editingNote}
-                              onChange={(e) => setEditingNote(e.target.value)}
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
-                              placeholder="Optional note"
-                              aria-label="Edit note"
-                            />
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={handleUpdate}
-                                disabled={updatingId === item.id}
-                                className="rounded-md bg-primary-600 px-2 py-1 text-xs text-white disabled:opacity-40"
-                              >
-                                {updatingId === item.id ? "Saving…" : "Save"}
-                              </button>
-                              <button
-                                onClick={cancelEdit}
-                                disabled={updatingId === item.id}
-                                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-600 disabled:opacity-40"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
+                          <VocabularyEditForm
+                            term={editingTerm}
+                            onTermChange={setEditingTerm}
+                            sentenceContext={editingSentenceContext}
+                            onSentenceContextChange={setEditingSentenceContext}
+                            note={editingNote}
+                            onNoteChange={setEditingNote}
+                            onSave={handleUpdate}
+                            onCancel={cancelEdit}
+                            saving={updatingId === item.id}
+                            autoFocusTerm
+                          />
                         ) : (
                           <>
                             {item.note ? <p className="font-medium leading-relaxed text-slate-700">{item.note}</p> : null}

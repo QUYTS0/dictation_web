@@ -47,6 +47,7 @@ export function useLessonCapture({
 }: UseLessonCaptureOptions) {
   const [learningItems, setLearningItems] = useState<LessonSavedItem[]>([]);
   const [learningError, setLearningError] = useState<string | null>(null);
+  const [learningErrorRetry, setLearningErrorRetry] = useState<(() => void) | null>(null);
   const [learningSaving, setLearningSaving] = useState(false);
   const [learningDeletingId, setLearningDeletingId] = useState<string | null>(null);
   const [learningUpdatingId, setLearningUpdatingId] = useState<string | null>(null);
@@ -63,6 +64,17 @@ export function useLessonCapture({
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
   const reviewTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
+  // Latest-callback refs so a failed action's retry closure (built inside the
+  // action's own catch block) can call the current implementation without a
+  // temporal-dead-zone self-reference.
+  const saveLessonCaptureAtSegmentRef = useRef<
+    (text: string, type: LessonItemType, segmentIndex: number, sentenceContext: string) => void
+  >(() => {});
+  const deleteLessonCaptureRef = useRef<(itemId: string) => void>(() => {});
+  const updateLessonCaptureRef = useRef<
+    (itemId: string, values: { term: string; sentenceContext: string; note: string }) => void
+  >(() => {});
+  const fetchSavedItemsRef = useRef<() => void>(() => {});
 
   const segmentsByIndex = useMemo(
     () => new Map(segments.map((segment) => [segment.segmentIndex, segment])),
@@ -70,15 +82,10 @@ export function useLessonCapture({
   );
 
   // ---- Load saved vocabulary for this video ----
-  useEffect(() => {
-    if (!user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLearningItems([]);
-      return;
-    }
-
+  const fetchSavedItems = useCallback(() => {
     let isCancelled = false;
     setLearningError(null);
+    setLearningErrorRetry(null);
 
     void fetch(`/api/vocabulary?videoId=${encodeURIComponent(videoId)}`)
       .then(async (res) => {
@@ -99,12 +106,25 @@ export function useLessonCapture({
             ? err.message
             : "Failed to load saved items for this video.";
         setLearningError(message);
+        setLearningErrorRetry(() => () => fetchSavedItemsRef.current());
       });
 
     return () => {
       isCancelled = true;
     };
-  }, [user, videoId]);
+  }, [videoId]);
+  useEffect(() => {
+    fetchSavedItemsRef.current = fetchSavedItems;
+  }, [fetchSavedItems]);
+
+  useEffect(() => {
+    if (!user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLearningItems([]);
+      return;
+    }
+    return fetchSavedItems();
+  }, [user, videoId, fetchSavedItems]);
 
   const lessonSavedInCurrentVideo = useMemo(
     () => learningItems.filter((item) => item.video_id === videoId),
@@ -148,6 +168,7 @@ export function useLessonCapture({
       requireAuth(() => {
         setLearningSaving(true);
         setLearningError(null);
+        setLearningErrorRetry(null);
         void fetch("/api/vocabulary", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -188,6 +209,9 @@ export function useLessonCapture({
                 ? err.message
                 : "Failed to save learning item. Please try again.";
             setLearningError(message);
+            setLearningErrorRetry(
+              () => () => saveLessonCaptureAtSegmentRef.current(text, type, segmentIndex, sentenceContext)
+            );
           })
           .finally(() => {
             setLearningSaving(false);
@@ -196,12 +220,16 @@ export function useLessonCapture({
     },
     [clearLearningNoteInputs, clearScriptSelection, onAfterSave, requireAuth, videoId]
   );
+  useEffect(() => {
+    saveLessonCaptureAtSegmentRef.current = saveLessonCaptureAtSegment;
+  }, [saveLessonCaptureAtSegment]);
 
   const deleteLessonCapture = useCallback(
     (itemId: string) => {
       requireAuth(() => {
         setLearningDeletingId(itemId);
         setLearningError(null);
+        setLearningErrorRetry(null);
         void fetch(`/api/vocabulary?id=${encodeURIComponent(itemId)}`, {
           method: "DELETE",
         })
@@ -218,6 +246,7 @@ export function useLessonCapture({
                 ? err.message
                 : "Failed to delete saved item. Please try again.";
             setLearningError(message);
+            setLearningErrorRetry(() => () => deleteLessonCaptureRef.current(itemId));
           })
           .finally(() => {
             setLearningDeletingId(null);
@@ -226,6 +255,9 @@ export function useLessonCapture({
     },
     [requireAuth]
   );
+  useEffect(() => {
+    deleteLessonCaptureRef.current = deleteLessonCapture;
+  }, [deleteLessonCapture]);
 
   const updateLessonCapture = useCallback(
     (itemId: string, values: { term: string; sentenceContext: string; note: string }) => {
@@ -234,6 +266,7 @@ export function useLessonCapture({
       requireAuth(() => {
         setLearningUpdatingId(itemId);
         setLearningError(null);
+        setLearningErrorRetry(null);
         void fetch("/api/vocabulary", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -271,6 +304,7 @@ export function useLessonCapture({
                 ? err.message
                 : "Failed to update saved item. Please try again.";
             setLearningError(message);
+            setLearningErrorRetry(() => () => updateLessonCaptureRef.current(itemId, values));
           })
           .finally(() => {
             setLearningUpdatingId(null);
@@ -279,6 +313,9 @@ export function useLessonCapture({
     },
     [requireAuth]
   );
+  useEffect(() => {
+    updateLessonCaptureRef.current = updateLessonCapture;
+  }, [updateLessonCapture]);
 
   const handleSelectionMouseUp = useCallback(
     (container: HTMLDivElement | null) => {
@@ -427,6 +464,7 @@ export function useLessonCapture({
   return {
     learningItems,
     learningError,
+    learningErrorRetry,
     learningSaving,
     learningDeletingId,
     learningUpdatingId,

@@ -25,6 +25,7 @@ import AIExplainer from "@/components/AIExplainer";
 import ProgressBar from "@/components/ProgressBar";
 import UserButton from "@/components/UserButton";
 import VocabularySaveButton from "@/components/VocabularySaveButton";
+import { StatusCard } from "@/components/StatusCard";
 
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
@@ -35,7 +36,6 @@ import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
 
-import { StatusCard } from "./components/StatusCard";
 import { ControlButton } from "./components/ControlButton";
 import { LessonSavedItemsList } from "./components/LessonSavedItemsList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
@@ -86,6 +86,7 @@ export default function DictationPage({ params }: PageProps) {
     previousReview,
     regenerating,
     regenerateError,
+    checkAnswerError,
     segments,
     transcriptTitle,
     ytPlayerRef,
@@ -201,6 +202,7 @@ export default function DictationPage({ params }: PageProps) {
 
   const {
     learningError,
+    learningErrorRetry,
     learningSaving,
     learningDeletingId,
     learningUpdatingId,
@@ -312,12 +314,12 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-row overflow-hidden px-4 gap-4">
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col overflow-y-auto px-4 gap-4 lg:flex-row lg:overflow-hidden">
         <motion.div
           layout
           transition={{ type: "tween", ease: "linear", duration: 0.25 }}
           className={clsx(
-            "flex-1 flex flex-col overflow-hidden min-h-0",
+            "flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden",
             isZenMode && "z-50"
           )}
         >
@@ -394,7 +396,7 @@ export default function DictationPage({ params }: PageProps) {
           )}
           </div>
 
-          <div className="flex-1 overflow-y-auto min-h-0 py-3">
+          <div className="py-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
           <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
 
             {uxState === "loading_transcript" && (
@@ -411,9 +413,9 @@ export default function DictationPage({ params }: PageProps) {
             )}
 
             {uxState === "transcript_failed" && (
-              <div className="rounded-xl border border-red-300 bg-red-50 p-5 flex flex-col gap-3">
+              <div role="alert" className="rounded-xl border border-red-300/60 bg-red-50/50 backdrop-blur-md p-5 flex flex-col gap-3">
                 <div className="flex flex-col gap-2">
-                  <p className="text-2xl">❌</p>
+                  <p className="text-2xl" aria-hidden="true">❌</p>
                   <p className="font-semibold text-slate-800">Transcript failed</p>
                   <p className="text-sm text-slate-500">
                     Could not automatically fetch captions for this video. You can paste the
@@ -444,7 +446,7 @@ export default function DictationPage({ params }: PageProps) {
             )}
 
             {uxState === "transcript_ready" && segments.length > 0 && (
-              <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4 flex flex-col gap-3 mb-4">
+              <div className="rounded-xl border border-emerald-300/60 bg-emerald-50/50 backdrop-blur-md p-4 flex flex-col gap-3 mb-4">
                 <p className="text-emerald-700 font-semibold">Transcript ready - {segments.length} sentences</p>
                 <p className="text-sm text-slate-600">Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.</p>
                 <div className="flex items-center gap-3 mt-1">
@@ -499,6 +501,8 @@ export default function DictationPage({ params }: PageProps) {
                         type="button"
                         onClick={() => setShowHintPanel((prev) => !prev)}
                         title={showHintPanel ? "Hide hint" : "Show hint"}
+                        aria-label={showHintPanel ? "Hide hint" : "Show hint"}
+                        aria-pressed={showHintPanel}
                         className={clsx(
                           "h-9 w-9 flex items-center justify-center rounded-xl border-yellow-500 bg-yellow-100 transition-all active:scale-95" + " hover:bg-yellow-300 hover:border-yellow-300",
                           showHintPanel
@@ -512,19 +516,26 @@ export default function DictationPage({ params }: PageProps) {
                         {isCheckingWorkspace ? (
                           <motion.div
                             key="loading"
+                            role="status"
+                            aria-live="polite"
                             initial={{ opacity: 0, scale: 0.8 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.8 }}
                             className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin"
-                          />
+                          >
+                            <span className="sr-only">Checking…</span>
+                          </motion.div>
                         ) : workspaceStatus === "success" ? (
                           <motion.div
                             key="success"
+                            role="status"
+                            aria-live="polite"
                             initial={{ opacity: 0, scale: 0.8 }}
                             animate={{ opacity: 1, scale: 1 }}
                             className="bg-emerald-500 text-white p-2 rounded-xl flex items-center shadow-lg"
                           >
                             <Check size={20} strokeWidth={3} />
+                            <span className="sr-only">Correct</span>
                           </motion.div>
                         ) : workspaceStatus === "error" ? (
                           <motion.button
@@ -552,6 +563,19 @@ export default function DictationPage({ params }: PageProps) {
                     </div>
                   </div>
                 </div>
+
+                {checkAnswerError && (
+                  <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-red-600">
+                    {checkAnswerError}
+                    <button
+                      type="button"
+                      onClick={handleWorkspaceCheck}
+                      className="font-semibold underline text-red-700 hover:text-red-900"
+                    >
+                      Retry
+                    </button>
+                  </p>
+                )}
 
                 <AnimatePresence>
                   {workspaceStatus === "error" && checkResult && (
@@ -598,7 +622,7 @@ export default function DictationPage({ params }: PageProps) {
                 )}
 
                 {shouldShowPreviousReview && previousReview && (
-                  <div ref={reviewTextContainerRef} onMouseUp={handleReviewMouseUp} className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-2 mt-4">
+                  <div ref={reviewTextContainerRef} onMouseUp={handleReviewMouseUp} className="rounded-xl border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-2 mt-4">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Review previous sentence</p>
                       <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">#{previousReview.segmentIndex + 1}</span>
@@ -642,7 +666,7 @@ export default function DictationPage({ params }: PageProps) {
             </AnimatePresence>
 
             {uxState === "session_completed" && (
-              <div className="rounded-xl border border-indigo-300 bg-indigo-50 p-6 flex flex-col gap-4 mt-6">
+              <div className="rounded-xl border border-indigo-300/60 bg-indigo-50/50 backdrop-blur-md p-6 flex flex-col gap-4 mt-6">
                 <div className="text-center">
                   <p className="text-3xl">🎉</p>
                   <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
@@ -653,7 +677,7 @@ export default function DictationPage({ params }: PageProps) {
                     <p className="text-slate-700 font-semibold text-sm">Mistakes ({mistakes.length} sentence{mistakes.length !== 1 ? "s" : ""}):</p>
                     <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
                       {mistakes.map((m) => (
-                        <div key={m.segIdx} className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col gap-1">
+                        <div key={m.segIdx} className="bg-white/50 backdrop-blur-md rounded-lg border border-white/60 p-3 flex flex-col gap-1">
                           <span className="text-xs text-slate-400 font-medium">Sentence {m.segIdx + 1}</span>
                           <span className="text-sm text-slate-800">{m.expectedText}</span>
                           <span className="text-xs text-red-500">You typed: {m.userText || <span className="italic text-slate-400">nothing</span>}</span>
@@ -679,13 +703,13 @@ export default function DictationPage({ params }: PageProps) {
             {showLearningPanel && (
               <motion.div
                 key="learning-panel"
-                initial={{ width: 0 }}
-                animate={{ width: 360 }}
-                exit={{ width: 0 }}
-                transition={{ type: "tween", ease: "linear", duration: 0.25 }}
-                className="overflow-hidden flex-shrink-0 h-full"
+                initial={{ opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 16 }}
+                transition={{ duration: 0.2 }}
+                className="w-full shrink-0 overflow-hidden lg:h-full lg:w-[360px]"
               >
-                <div className="w-[360px] h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
+                <div className="w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
               <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
                 <div className="mb-4 flex items-center justify-between gap-2">
                   <h2 className="font-semibold text-slate-900 dark:text-white">Lesson panel</h2>
@@ -713,7 +737,7 @@ export default function DictationPage({ params }: PageProps) {
               </div>
                 </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+              <div className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
               {rightPanelTab === "saved" ? (
                 <>
                   <div className="flex flex-wrap gap-1.5">
@@ -779,7 +803,7 @@ export default function DictationPage({ params }: PageProps) {
                   ) : !showScriptContext ? (
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">Script context is hidden. Use Show script when you want to reveal it.</div>
                   ) : (
-                    <div ref={scriptTextContainerRef} onMouseUp={handleScriptMouseUp} className="relative min-h-0 flex-1 overflow-y-auto pr-1 flex flex-col gap-3 text-sm">
+                    <div ref={scriptTextContainerRef} onMouseUp={handleScriptMouseUp} className="relative flex flex-col gap-3 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
                       {scriptContextSegments.map((segment) => {
                         const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
                         const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
@@ -806,7 +830,20 @@ export default function DictationPage({ params }: PageProps) {
                       })}
                     </div>
                   )}
-                  {learningError && <p className="text-xs text-red-600">{learningError}</p>}
+                  {learningError && (
+                    <p role="alert" className="flex items-center gap-2 text-xs text-red-600">
+                      {learningError}
+                      {learningErrorRetry && (
+                        <button
+                          type="button"
+                          onClick={() => learningErrorRetry()}
+                          className="font-semibold underline text-red-700 hover:text-red-900"
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </p>
+                  )}
                 </>
               )}
                 </div>
@@ -817,25 +854,13 @@ export default function DictationPage({ params }: PageProps) {
         )}
 
         {!isZenMode && !showLearningPanel && (
-          <div className="hidden lg:flex self-start pt-3">
+          <div className="flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3">
             <button
               onClick={() => setShowLearningPanel(true)}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
               aria-label="Show lesson panel"
             >
               <PanelRightOpen size={16} />
-            </button>
-          </div>
-        )}
-
-        {!isZenMode && !showLearningPanel && (
-          <div className="flex w-full justify-end lg:hidden">
-            <button
-              onClick={() => setShowLearningPanel(true)}
-              className="h-10 w-10 rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
-              aria-label="Show lesson panel"
-            >
-              <PanelRightOpen size={16} className="mx-auto" />
             </button>
           </div>
         )}

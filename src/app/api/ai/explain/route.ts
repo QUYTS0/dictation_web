@@ -3,9 +3,8 @@ import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { ownsAttempt } from "@/lib/supabase/ownership";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type { AIExplainRequest, AIExplainResponse } from "@/lib/types";
-
-const MODEL_NAME = "gemini-1.5-flash";
 
 const EXPLAIN_RESPONSE_SCHEMA: Schema = {
   type: SchemaType.OBJECT,
@@ -96,7 +95,7 @@ export async function POST(request: NextRequest) {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: MODEL_NAME,
+      model: GEMINI_MODEL_NAME,
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: EXPLAIN_RESPONSE_SCHEMA,

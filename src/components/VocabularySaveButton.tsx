@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRequireAuth } from "@/context/auth";
+import { VocabularyEditForm } from "@/components/VocabularyEditForm";
 
 interface VocabularySaveButtonProps {
   videoId: string;
@@ -60,31 +61,30 @@ export default function VocabularySaveButton({
             setError(null);
           })
         }
-        className="self-start text-xs text-indigo-600 hover:text-indigo-800 underline"
+        className="self-start text-xs text-primary-600 hover:text-primary-800 underline"
       >
-        {saved ? "✅ Saved" : "Save vocabulary"}
+        {saved ? (
+          <>
+            <span aria-hidden="true">✅ </span>Saved
+          </>
+        ) : (
+          "Save vocabulary"
+        )}
       </button>
       {open && (
         <div className="flex flex-col gap-2 mt-1 p-2 border rounded-md bg-slate-50">
-          <input
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            placeholder="Word or short phrase"
-            className="rounded border border-slate-300 px-2 py-1 text-xs"
+          <VocabularyEditForm
+            size="default"
+            term={term}
+            onTermChange={setTerm}
+            note={note}
+            onNoteChange={setNote}
+            onSave={handleSave}
+            saving={saving}
+            saveDisabled={!term.trim()}
+            saveLabel="Save"
+            savingLabel="Saving..."
           />
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Note (optional)"
-            className="rounded border border-slate-300 px-2 py-1 text-xs"
-          />
-          <button
-            onClick={handleSave}
-            disabled={saving || !term.trim()}
-            className="self-start px-2 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50"
-          >
-            {saving ? "Saving..." : "Save"}
-          </button>
           {error && <span className="text-xs text-red-600">{error}</span>}
         </div>
       )}

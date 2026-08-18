@@ -173,7 +173,6 @@ Display:
 **Relevant files**
 - 001_initial.sql — reference schema for new migration  
 - [src/app/dictation/[videoId]/page.tsx](src/app/dictation/%5BvideoId%5D/page.tsx) — continuous typing, autosave, resume, completion UI  
-- DictationInput.tsx — input enablement/reset behavior  
 - route.ts — auth-aware save + timestamp  
 - route.ts — log normalized texts  
 - text.ts — enhanced word diff  

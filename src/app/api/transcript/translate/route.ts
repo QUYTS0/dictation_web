@@ -5,6 +5,7 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
+import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type {
   TranslateTranscriptRequest,
   TranslateTranscriptResponse,
@@ -12,7 +13,6 @@ import type {
   TranslationSource,
 } from "@/lib/types";
 
-const GEMINI_MODEL_NAME = "gemini-1.5-flash";
 const GEMINI_TIMEOUT_MS = 20_000;
 
 const TRANSLATION_RESPONSE_SCHEMA = {

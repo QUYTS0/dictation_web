@@ -47,6 +47,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [checkAnswerError, setCheckAnswerError] = useState<string | null>(null);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -158,6 +159,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
         firstAttemptBySegmentRef.current[currentSegIdx] = userText;
       }
       setUxState("checking_answer");
+      setCheckAnswerError(null);
 
       try {
         const result = await checkAnswerApi(
@@ -223,7 +225,8 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
           ytPlayerRef.current?.pauseVideo();
           setUxState("paused_waiting_input");
         }
-      } catch {
+      } catch (err) {
+        setCheckAnswerError(err instanceof Error ? err.message : "Failed to check your answer.");
         setUxState("paused_waiting_input");
       }
     },
@@ -410,6 +413,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     previousReview,
     regenerating,
     regenerateError,
+    checkAnswerError,
     segments,
     transcriptStatus,
     transcriptTitle: transcriptQuery.data?.title,

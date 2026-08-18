@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { clsx } from "clsx";
+import { VocabularyEditForm } from "@/components/VocabularyEditForm";
 import type { LessonSavedItem } from "../types";
 
 export function LessonSavedItemsList({
@@ -50,7 +51,7 @@ export function LessonSavedItemsList({
         <div
           key={item.id}
           className={clsx(
-            "rounded-lg border border-slate-200 bg-white p-3 flex flex-col gap-1",
+            "rounded-lg border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-1",
             compact && "p-2 rounded-md"
           )}
         >
@@ -125,51 +126,26 @@ export function LessonSavedItemsList({
             <span className={clsx("text-xs text-slate-700", compact && "text-[11px]")}>📝 {item.note}</span>
           )}
           {editingId === item.id && (
-            <div className="mt-1 flex flex-col gap-1.5">
-              <input
-                value={editingTerm}
-                onChange={(e) => setEditingTerm(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
-                placeholder="Saved text"
-                aria-label="Edit saved text"
-                autoFocus
+            <div className="mt-1">
+              <VocabularyEditForm
+                size="compact"
+                term={editingTerm}
+                onTermChange={setEditingTerm}
+                sentenceContext={editingSentenceContext}
+                onSentenceContextChange={setEditingSentenceContext}
+                note={editingNote}
+                onNoteChange={setEditingNote}
+                onSave={() =>
+                  onUpdate(item.id, {
+                    term: editingTerm,
+                    sentenceContext: editingSentenceContext,
+                    note: editingNote,
+                  })
+                }
+                onCancel={cancelEdit}
+                saving={updatingId === item.id}
+                autoFocusTerm
               />
-              <input
-                value={editingSentenceContext}
-                onChange={(e) => setEditingSentenceContext(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
-                placeholder="Sentence context"
-                aria-label="Edit sentence context"
-              />
-              <input
-                value={editingNote}
-                onChange={(e) => setEditingNote(e.target.value)}
-                className="rounded border border-slate-300 px-2 py-1 text-[11px]"
-                placeholder="Optional note"
-                aria-label="Edit note"
-              />
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => {
-                    onUpdate(item.id, {
-                      term: editingTerm,
-                      sentenceContext: editingSentenceContext,
-                      note: editingNote,
-                    });
-                  }}
-                  disabled={updatingId === item.id}
-                  className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-40"
-                >
-                  {updatingId === item.id ? "Saving…" : "Save"}
-                </button>
-                <button
-                  onClick={cancelEdit}
-                  disabled={updatingId === item.id}
-                  className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 disabled:opacity-40"
-                >
-                  Cancel
-                </button>
-              </div>
             </div>
           )}
         </div>
