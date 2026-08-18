@@ -39,44 +39,6 @@ export async function GET() {
         60
     );
     const allSessionIds = (sessions ?? []).map((s) => s.id);
-    const { data: activityAttempts, error: activityAttemptsError } = allSessionIds.length
-      ? await supabase
-          .from("attempt_logs")
-          .select("created_at")
-          .in("session_id", allSessionIds)
-      : { data: [], error: null };
-
-    if (activityAttemptsError) {
-      console.error("[dashboard] activity attempts query error:", activityAttemptsError);
-      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
-    }
-
-    const streakDays = computeStreakDays(
-      (activityAttempts ?? []).map((a) => new Date(a.created_at))
-    );
-
-    const { data: vocabulary, error: vocabularyError } = await supabase
-      .from("vocabulary_items")
-      .select("id, term, sentence_context, created_at")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(6);
-
-    if (vocabularyError) {
-      console.error("[dashboard] vocabulary query error:", vocabularyError);
-      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
-    }
-
-    const { count: vocabularyCount, error: vocabularyCountError } = await supabase
-      .from("vocabulary_items")
-      .select("id", { head: true, count: "exact" })
-      .eq("user_id", user.id);
-
-    if (vocabularyCountError) {
-      console.error("[dashboard] vocabulary count error:", vocabularyCountError);
-      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
-    }
-
     const activeSessions = (sessions ?? [])
       .filter((s) => s.status === "active")
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
@@ -90,30 +52,63 @@ export async function GET() {
     const recentVideoIds = [...new Set(recentSessions.map((s) => s.youtube_video_id))];
     const recentSessionIds = recentSessions.map((s) => s.id);
 
-    const { data: recentVideos, error: recentVideosError } = recentVideoIds.length
-      ? await supabase
-          .from("videos")
-          .select("youtube_video_id, title")
-          .in("youtube_video_id", recentVideoIds)
-      : { data: [], error: null };
+    // None of these depend on each other's results (only on `sessions`,
+    // already resolved above) — run them concurrently instead of awaiting
+    // one at a time, which was turning every dashboard load into a 5-deep
+    // waterfall of round-trips.
+    const [
+      { data: activityAttempts, error: activityAttemptsError },
+      { data: vocabulary, error: vocabularyError },
+      { count: vocabularyCount, error: vocabularyCountError },
+      { data: recentVideos, error: recentVideosError },
+      { data: recentMistakeAttempts, error: recentMistakeAttemptsError },
+    ] = await Promise.all([
+      allSessionIds.length
+        ? supabase.from("attempt_logs").select("created_at").in("session_id", allSessionIds)
+        : Promise.resolve({ data: [], error: null }),
+      supabase
+        .from("vocabulary_items")
+        .select("id, term, sentence_context, created_at")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(6),
+      supabase.from("vocabulary_items").select("id", { head: true, count: "exact" }).eq("user_id", user.id),
+      recentVideoIds.length
+        ? supabase.from("videos").select("youtube_video_id, title").in("youtube_video_id", recentVideoIds)
+        : Promise.resolve({ data: [], error: null }),
+      recentSessionIds.length
+        ? supabase
+            .from("attempt_logs")
+            .select("session_id")
+            .in("session_id", recentSessionIds)
+            .eq("is_correct", false)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
 
+    if (activityAttemptsError) {
+      console.error("[dashboard] activity attempts query error:", activityAttemptsError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+    if (vocabularyError) {
+      console.error("[dashboard] vocabulary query error:", vocabularyError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
+    if (vocabularyCountError) {
+      console.error("[dashboard] vocabulary count error:", vocabularyCountError);
+      return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
+    }
     if (recentVideosError) {
       console.error("[dashboard] recent videos query error:", recentVideosError);
       return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
     }
-
-    const { data: recentMistakeAttempts, error: recentMistakeAttemptsError } = recentSessionIds.length
-      ? await supabase
-          .from("attempt_logs")
-          .select("session_id")
-          .in("session_id", recentSessionIds)
-          .eq("is_correct", false)
-      : { data: [], error: null };
-
     if (recentMistakeAttemptsError) {
       console.error("[dashboard] recent mistakes count query error:", recentMistakeAttemptsError);
       return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
     }
+
+    const streakDays = computeStreakDays(
+      (activityAttempts ?? []).map((a) => new Date(a.created_at))
+    );
 
     const titleByVideoId = new Map(
       (recentVideos ?? []).map((video) => [video.youtube_video_id, video.title])

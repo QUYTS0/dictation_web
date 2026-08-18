@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   ArrowRight,
@@ -117,8 +118,6 @@ const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading, openAuthModal } = useAuth();
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [studyMode, setStudyMode] = useState<StudyMode>("dictation");
   const [url, setUrl] = useState("");
   const [startError, setStartError] = useState<string | null>(null);
@@ -163,22 +162,21 @@ export default function DashboardPage() {
     }
   };
 
-  useEffect(() => {
-    if (!userId) return;
-
-    fetch("/api/dashboard/summary")
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Failed to fetch dashboard summary");
-        return res.json();
-      })
-      .then((data: DashboardData) => {
-        setDashboardData(data);
-        setDashboardError(null);
-      })
-      .catch(() => {
-        setDashboardError("Failed to load dashboard data. Please refresh and try again.");
-      });
-  }, [userId]);
+  // useQuery caches by key across navigations, so leaving /dashboard and
+  // coming back shows the last-fetched data instantly instead of refetching
+  // from a blank state every time.
+  const { data: dashboardData, isError: hasDashboardError } = useQuery({
+    queryKey: ["dashboard-summary", userId],
+    queryFn: async (): Promise<DashboardData> => {
+      const res = await fetch("/api/dashboard/summary");
+      if (!res.ok) throw new Error("Failed to fetch dashboard summary");
+      return res.json();
+    },
+    enabled: !!userId,
+  });
+  const dashboardError = hasDashboardError
+    ? "Failed to load dashboard data. Please refresh and try again."
+    : null;
 
   const firstSession = dashboardData?.resumableSessions[0] ?? null;
   const latestMistakeSession = useMemo(
