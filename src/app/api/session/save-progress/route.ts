@@ -38,11 +38,9 @@ export async function POST(request: NextRequest) {
         .from("learning_sessions")
         .update({
           current_segment_index: currentSegmentIndex,
-          active_segment_index: currentSegmentIndex,
           video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
-          attempt_count: totalAttempts,
           status,
           updated_at: new Date().toISOString(),
         })
@@ -88,11 +86,9 @@ export async function POST(request: NextRequest) {
           .update({
             transcript_id: transcriptId ?? existingActiveSession.transcript_id ?? null,
             current_segment_index: currentSegmentIndex,
-            active_segment_index: currentSegmentIndex,
             video_current_time: videoCurrentTimeSec,
             accuracy,
             total_attempts: totalAttempts,
-            attempt_count: totalAttempts,
             status,
             updated_at: new Date().toISOString(),
           })
@@ -119,11 +115,9 @@ export async function POST(request: NextRequest) {
           youtube_video_id: youtubeVideoId,
           transcript_id: transcriptId ?? null,
           current_segment_index: currentSegmentIndex,
-          active_segment_index: currentSegmentIndex,
           video_current_time: videoCurrentTimeSec,
           accuracy,
           total_attempts: totalAttempts,
-          attempt_count: totalAttempts,
           status,
         })
         .select("id")

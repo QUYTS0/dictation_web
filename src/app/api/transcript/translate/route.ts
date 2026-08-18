@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { YoutubeTranscript } from "youtube-transcript";
 import { translate } from "@vitalets/google-translate-api";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
@@ -14,6 +14,11 @@ import type {
 
 const GEMINI_MODEL_NAME = "gemini-1.5-flash";
 const GEMINI_TIMEOUT_MS = 20_000;
+
+const TRANSLATION_RESPONSE_SCHEMA = {
+  type: SchemaType.ARRAY,
+  items: { type: SchemaType.STRING },
+} as const;
 
 interface EnglishSegmentRow {
   segment_index: number;
@@ -31,7 +36,7 @@ interface EnglishSegmentRow {
  *   3. Gemini, for whatever segments are still untranslated after 1 and 2.
  */
 export async function POST(request: NextRequest) {
-  const rateLimitResponse = checkRateLimit(request, "transcript/translate", {
+  const rateLimitResponse = await checkRateLimit(request, "transcript/translate", {
     limit: 5,
     windowMs: 60_000,
   });
@@ -149,37 +154,65 @@ export async function POST(request: NextRequest) {
       if (!apiKey) {
         console.error("[transcript translate] GEMINI_API_KEY not set; cannot translate remaining segments");
       } else {
-        try {
-          const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_NAME });
-          const prompt = buildTranslationPrompt(
-            finalMissing.map((s) => s.text_raw),
-            language
-          );
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({
+          model: GEMINI_MODEL_NAME,
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: TRANSLATION_RESPONSE_SCHEMA,
+          },
+        });
+        const prompt = buildTranslationPrompt(
+          finalMissing.map((s) => s.text_raw),
+          language
+        );
 
-          const result = await Promise.race([
-            model.generateContent(prompt),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("Gemini translation timed out")), GEMINI_TIMEOUT_MS)
-            ),
-          ]);
-
-          const rawText = result.response.text().trim();
-          const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
-          const parsed: unknown = JSON.parse(jsonStr);
-
-          if (Array.isArray(parsed) && parsed.length === finalMissing.length) {
-            finalMissing.forEach((seg, i) => {
-              const translated = parsed[i];
-              if (typeof translated === "string" && translated.trim()) {
-                results.set(seg.segment_index, { text: translated.trim(), source: "gemini" });
-              }
-            });
-          } else {
-            console.error("[transcript translate] Gemini returned unexpected shape:", rawText);
+        let translated: string[] | null = null;
+        for (let attempt = 0; attempt < 2 && !translated; attempt++) {
+          let rawText: string;
+          try {
+            const result = await Promise.race([
+              model.generateContent(prompt),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("Gemini translation timed out")), GEMINI_TIMEOUT_MS)
+              ),
+            ]);
+            rawText = result.response.text().trim();
+          } catch (geminiErr) {
+            console.error("[transcript translate] Gemini translation error:", geminiErr);
+            break;
           }
-        } catch (geminiErr) {
-          console.error("[transcript translate] Gemini translation error:", geminiErr);
+
+          try {
+            const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
+            const parsed: unknown = JSON.parse(jsonStr);
+            if (Array.isArray(parsed) && parsed.length === finalMissing.length) {
+              translated = parsed as string[];
+            } else {
+              console.warn(
+                `[transcript translate] Gemini returned unexpected shape on attempt ${attempt + 1}:`,
+                rawText
+              );
+            }
+          } catch {
+            console.warn(
+              `[transcript translate] failed to parse Gemini response on attempt ${attempt + 1}:`,
+              rawText
+            );
+          }
+        }
+
+        if (translated) {
+          finalMissing.forEach((seg, i) => {
+            const text = translated![i];
+            if (typeof text === "string" && text.trim()) {
+              results.set(seg.segment_index, { text: text.trim(), source: "gemini" });
+            }
+          });
+        } else {
+          console.error(
+            `[transcript translate] giving up on Gemini translation for ${finalMissing.length} segment(s) after retry`
+          );
         }
       }
     }

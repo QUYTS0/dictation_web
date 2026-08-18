@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("learning_sessions")
       .select(
-        "id, current_segment_index, active_segment_index, video_current_time, accuracy, total_attempts, attempt_count, updated_at"
+        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at"
       )
       .eq("user_id", user.id)
       .eq("youtube_video_id", videoId)
@@ -39,11 +39,10 @@ export async function GET(request: NextRequest) {
       session: data
         ? {
             sessionId: data.id,
-            currentSegmentIndex:
-              data.active_segment_index ?? data.current_segment_index ?? 0,
+            currentSegmentIndex: data.current_segment_index ?? 0,
             videoCurrentTimeSec: Number(data.video_current_time ?? 0),
             accuracy: Number(data.accuracy ?? 0),
-            totalAttempts: data.attempt_count ?? data.total_attempts ?? 0,
+            totalAttempts: data.total_attempts ?? 0,
             updatedAt: data.updated_at,
           }
         : null,

@@ -5,7 +5,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import type { ResolveVideoRequest, ResolveVideoResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
-  const rateLimitResponse = checkRateLimit(request, "video/resolve", {
+  const rateLimitResponse = await checkRateLimit(request, "video/resolve", {
     limit: 20,
     windowMs: 60_000,
   });

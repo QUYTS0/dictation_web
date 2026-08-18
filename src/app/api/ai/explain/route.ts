@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { createServiceClient } from "@/lib/supabase/server";
+import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-ai";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { ownsAttempt } from "@/lib/supabase/ownership";
 import { checkRateLimit } from "@/lib/rateLimit";
 import type { AIExplainRequest, AIExplainResponse } from "@/lib/types";
 
 const MODEL_NAME = "gemini-1.5-flash";
+
+const EXPLAIN_RESPONSE_SCHEMA: Schema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    explanation: { type: SchemaType.STRING },
+    correctedText: { type: SchemaType.STRING },
+    example: { type: SchemaType.STRING },
+    tip: { type: SchemaType.STRING },
+  },
+  required: ["explanation", "correctedText", "example"],
+};
 
 function buildPrompt(expectedText: string, userText: string): string {
   return `You are an English language tutor. A student made a mistake while doing a dictation exercise.
@@ -12,17 +24,15 @@ function buildPrompt(expectedText: string, userText: string): string {
 Expected sentence: "${expectedText}"
 Student wrote: "${userText}"
 
-Please analyze the mistake and respond with a JSON object in this exact format (no markdown, just raw JSON):
-{
-  "explanation": "A clear, encouraging explanation of what went wrong and why (1-2 sentences)",
-  "correctedText": "The correct sentence",
-  "example": "A similar sentence showing the correct usage",
-  "tip": "A short memory tip or grammar rule to help remember"
-}`;
+Please analyze the mistake and respond with a JSON object with these fields:
+- explanation: A clear, encouraging explanation of what went wrong and why (1-2 sentences)
+- correctedText: The correct sentence
+- example: A similar sentence showing the correct usage
+- tip: A short memory tip or grammar rule to help remember`;
 }
 
 export async function POST(request: NextRequest) {
-  const rateLimitResponse = checkRateLimit(request, "ai/explain", {
+  const rateLimitResponse = await checkRateLimit(request, "ai/explain", {
     limit: 15,
     windowMs: 60_000,
   });
@@ -48,17 +58,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check for cached AI feedback for this attempt
+    // An attemptId only unlocks caching if the caller actually owns that
+    // attempt (via its session) — otherwise we quietly fall back to
+    // generating a fresh, uncached explanation instead of trusting it.
+    let ownedAttemptId: string | null = null;
     if (attemptId) {
+      const authClient = await createClient();
+      const {
+        data: { user },
+      } = await authClient.auth.getUser();
+      if (user && (await ownsAttempt(authClient, attemptId))) {
+        ownedAttemptId = attemptId;
+      } else {
+        console.warn(
+          `[ai/explain] ignoring attemptId=${attemptId} — not owned by caller`
+        );
+      }
+    }
+
+    if (ownedAttemptId) {
       const supabase = createServiceClient();
       const { data: cached } = await supabase
         .from("ai_feedback")
         .select("explanation, corrected_text, example_text")
-        .eq("attempt_id", attemptId)
+        .eq("attempt_id", ownedAttemptId)
         .maybeSingle();
 
       if (cached) {
-        console.log(`[ai/explain] cache hit for attemptId=${attemptId}`);
+        console.log(`[ai/explain] cache hit for attemptId=${ownedAttemptId}`);
         return NextResponse.json<AIExplainResponse>({
           explanation: cached.explanation ?? "",
           correctedText: cached.corrected_text ?? expectedText,
@@ -68,36 +95,53 @@ export async function POST(request: NextRequest) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+    const model = genAI.getGenerativeModel({
+      model: MODEL_NAME,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: EXPLAIN_RESPONSE_SCHEMA,
+      },
+    });
 
     const prompt = buildPrompt(expectedText, userText);
     console.log(`[ai/explain] calling Gemini for expected="${expectedText}"`);
 
-    let result;
-    try {
-      result = await Promise.race([
-        model.generateContent(prompt),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("AI request timed out")), 15000)
-        ),
-      ]);
-    } catch (aiErr) {
-      console.error("[ai/explain] Gemini error:", aiErr);
-      return NextResponse.json(
-        { error: "AI service failed. Please try again." },
-        { status: 502 }
-      );
+    let parsed: AIExplainResponse | null = null;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      let rawText: string;
+      try {
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("AI request timed out")), 15000)
+          ),
+        ]);
+        rawText = result.response.text().trim();
+      } catch (aiErr) {
+        console.error("[ai/explain] Gemini error:", aiErr);
+        return NextResponse.json(
+          { error: "AI service failed. Please try again." },
+          { status: 502 }
+        );
+      }
+
+      try {
+        // responseSchema keeps this raw in the common case; the fence-strip
+        // is a safety net for any stray ```json wrapper.
+        const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
+        parsed = JSON.parse(jsonStr);
+      } catch (parseErr) {
+        lastError = parseErr;
+        console.warn(
+          `[ai/explain] failed to parse Gemini response on attempt ${attempt + 1}:`,
+          rawText
+        );
+      }
     }
 
-    const rawText = result.response.text().trim();
-
-    let parsed: AIExplainResponse;
-    try {
-      // Strip optional ```json ... ``` wrapper
-      const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      console.error("[ai/explain] failed to parse Gemini response:", rawText);
+    if (!parsed) {
+      console.error("[ai/explain] Gemini response unparseable after retry:", lastError);
       return NextResponse.json(
         { error: "AI returned an unexpected format." },
         { status: 502 }
@@ -111,12 +155,12 @@ export async function POST(request: NextRequest) {
       tip: parsed.tip,
     };
 
-    // Cache the feedback if we have an attemptId
-    if (attemptId) {
+    // Cache the feedback if we have a verified-owned attemptId
+    if (ownedAttemptId) {
       try {
         const supabase = createServiceClient();
         await supabase.from("ai_feedback").insert({
-          attempt_id: attemptId,
+          attempt_id: ownedAttemptId,
           explanation: response.explanation,
           corrected_text: response.correctedText,
           example_text: response.example,

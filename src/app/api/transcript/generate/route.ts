@@ -24,7 +24,7 @@ interface GenerateRequest {
 }
 
 export async function POST(request: NextRequest) {
-  const rateLimitResponse = checkRateLimit(request, "transcript/generate", {
+  const rateLimitResponse = await checkRateLimit(request, "transcript/generate", {
     limit: 10,
     windowMs: 60_000,
   });

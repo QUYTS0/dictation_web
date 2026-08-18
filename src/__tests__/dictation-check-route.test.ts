@@ -3,8 +3,24 @@ import { NextRequest } from "next/server";
 const insertMock = jest.fn().mockResolvedValue({ error: null });
 const fromMock = jest.fn().mockReturnValue({ insert: insertMock });
 
+const getUserMock = jest.fn().mockResolvedValue({ data: { user: { id: "user-1" } } });
+const maybeSingleMock = jest.fn().mockResolvedValue({ data: { id: "session-1" } });
+const ownershipFromMock = jest.fn().mockReturnValue({
+  select: jest.fn().mockReturnValue({
+    eq: jest.fn().mockReturnValue({
+      eq: jest.fn().mockReturnValue({
+        maybeSingle: maybeSingleMock,
+      }),
+    }),
+  }),
+});
+
 jest.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({ from: fromMock }),
+  createClient: async () => ({
+    auth: { getUser: getUserMock },
+    from: ownershipFromMock,
+  }),
 }));
 
 import { POST } from "@/app/api/dictation/check/route";
@@ -21,6 +37,11 @@ describe("POST /api/dictation/check", () => {
   beforeEach(() => {
     insertMock.mockClear();
     fromMock.mockClear();
+    ownershipFromMock.mockClear();
+    getUserMock.mockClear();
+    getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
+    maybeSingleMock.mockClear();
+    maybeSingleMock.mockResolvedValue({ data: { id: "session-1" } });
   });
 
   it("returns 400 when userText/expectedText are missing", async () => {
@@ -63,7 +84,7 @@ describe("POST /api/dictation/check", () => {
     expect(body.matchMode).toBe("relaxed");
   });
 
-  it("logs the attempt when sessionId is provided", async () => {
+  it("logs the attempt when sessionId is provided and owned by the caller", async () => {
     await POST(
       makeRequest({
         sessionId: "session-1",
@@ -81,6 +102,32 @@ describe("POST /api/dictation/check", () => {
   it("does not log an attempt when sessionId is absent", async () => {
     await POST(
       makeRequest({
+        segmentIndex: 0,
+        userText: "hello",
+        expectedText: "hello",
+      })
+    );
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("does not log an attempt when the session is not owned by the caller", async () => {
+    maybeSingleMock.mockResolvedValueOnce({ data: null });
+    await POST(
+      makeRequest({
+        sessionId: "someone-elses-session",
+        segmentIndex: 0,
+        userText: "hello",
+        expectedText: "hello",
+      })
+    );
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("does not log an attempt when the caller is unauthenticated", async () => {
+    getUserMock.mockResolvedValueOnce({ data: { user: null } });
+    await POST(
+      makeRequest({
+        sessionId: "session-1",
         segmentIndex: 0,
         userText: "hello",
         expectedText: "hello",

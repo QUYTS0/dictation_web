@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkAnswer } from "@/lib/utils/text";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { ownsSession } from "@/lib/supabase/ownership";
 import type {
   CheckAnswerRequest,
   CheckAnswerResponse,
@@ -43,23 +44,37 @@ export async function POST(request: NextRequest) {
       `[dictation/check] segmentIndex=${segmentIndex} mode=${mode} isCorrect=${result.isCorrect} errorType=${result.errorType}`
     );
 
-    // Persist the attempt if we have a session
+    // Persist the attempt if we have a session that the caller actually owns.
+    // Checking an answer never requires ownership — only persisting it does —
+    // so an unowned/unauthenticated sessionId just skips the insert below.
     if (sessionId) {
-      try {
-        const supabase = createServiceClient();
-        await supabase.from("attempt_logs").insert({
-          session_id: sessionId,
-          segment_index: segmentIndex,
-          expected_text: expectedText,
-          user_text: userText,
-          normalized_expected_text: result.normalizedExpected,
-          normalized_user_text: result.normalizedUser,
-          is_correct: result.isCorrect,
-          error_type: result.errorType === "none" ? null : result.errorType,
-        });
-      } catch (dbErr) {
-        // Non-fatal — log and continue
-        console.error("[dictation/check] attempt log error:", dbErr);
+      const authClient = await createClient();
+      const {
+        data: { user },
+      } = await authClient.auth.getUser();
+      const owned = user ? await ownsSession(authClient, user.id, sessionId) : false;
+
+      if (owned) {
+        try {
+          const supabase = createServiceClient();
+          await supabase.from("attempt_logs").insert({
+            session_id: sessionId,
+            segment_index: segmentIndex,
+            expected_text: expectedText,
+            user_text: userText,
+            normalized_expected_text: result.normalizedExpected,
+            normalized_user_text: result.normalizedUser,
+            is_correct: result.isCorrect,
+            error_type: result.errorType === "none" ? null : result.errorType,
+          });
+        } catch (dbErr) {
+          // Non-fatal — log and continue
+          console.error("[dictation/check] attempt log error:", dbErr);
+        }
+      } else {
+        console.warn(
+          `[dictation/check] skipped attempt log — sessionId=${sessionId} not owned by caller`
+        );
       }
     }
 
