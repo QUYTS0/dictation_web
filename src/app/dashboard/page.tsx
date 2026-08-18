@@ -1,19 +1,19 @@
 "use client";
 
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import clsx from "clsx";
 import {
   BookOpen,
   CheckCircle2,
   Clock,
   Flame,
-  Headphones,
   PlayCircle,
   Sparkles,
   Trophy,
 } from "lucide-react";
-import UserButton from "@/components/UserButton";
+import AppHeader from "@/components/AppHeader";
+import MetricCard from "@/components/MetricCard";
+import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
 
 interface DashboardData {
@@ -75,28 +75,7 @@ export default function DashboardPage() {
       <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
 
       <div className="relative z-10 flex flex-1 flex-col">
-        <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md">
-          <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
-            <Link href="/" className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
-                <Headphones size={18} />
-              </div>
-              <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
-            </Link>
-            <div className="flex items-center gap-6">
-              <nav className="hidden gap-6 md:flex">
-                <span className="text-sm font-bold text-primary-600">Dashboard</span>
-                <Link href="/vocabulary" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
-                  Vocabulary
-                </Link>
-                <Link href="/history" className="text-sm font-medium text-slate-500 transition-colors hover:text-primary-600">
-                  History
-                </Link>
-              </nav>
-              <UserButton />
-            </div>
-          </div>
-        </header>
+        <AppHeader active="dashboard" />
 
         <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-8">
           {loading ? (
@@ -246,7 +225,7 @@ export default function DashboardPage() {
                     ) : (
                       <ul className="space-y-2">
                         {dashboardData.resumableSessions.slice(0, MAX_DASHBOARD_HISTORY_SESSIONS).map((session) => (
-                          <li key={session.sessionId} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                          <li key={session.sessionId} className="rounded-xl border border-white/60 bg-white/50 p-3 text-sm backdrop-blur-md">
                             <p className="font-medium text-slate-800">{session.videoTitle ?? `Video ${session.videoId}`}</p>
                             <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
                           </li>
@@ -297,48 +276,3 @@ export default function DashboardPage() {
   );
 }
 
-function MetricCard({
-  title,
-  value,
-  icon,
-  trend,
-  positive,
-}: {
-  title: string;
-  value: string;
-  icon: ReactNode;
-  trend?: string;
-  positive?: boolean;
-}) {
-  return (
-    <div className="flex flex-col rounded-3xl border border-white/60 bg-white/50 p-5 shadow-xl transition-all hover:-translate-y-1 backdrop-blur-md">
-      <div className="mb-2 flex items-start justify-between">
-        <div className="text-slate-500">{icon}</div>
-        {trend && (
-          <div
-            className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", positive ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-600")}
-          >
-            {trend}
-          </div>
-        )}
-      </div>
-      <div className="mt-auto">
-        <div className="text-2xl font-semibold tracking-tight text-slate-900">{value}</div>
-        <div className="mt-0.5 text-xs font-medium uppercase text-slate-500">{title}</div>
-      </div>
-    </div>
-  );
-}
-
-function VocabRow({ word, context }: { word: string; context: string }) {
-  return (
-    <tr className="group cursor-pointer transition-colors hover:bg-white/40">
-      <td className="w-1/3 px-4 py-3 align-top">
-        <div className="font-semibold text-slate-900">{word}</div>
-      </td>
-      <td className="px-4 py-3 align-top">
-        <div className="line-clamp-2 text-xs italic text-slate-500 transition-colors group-hover:text-slate-700">&quot;{context}&quot;</div>
-      </td>
-    </tr>
-  );
-}

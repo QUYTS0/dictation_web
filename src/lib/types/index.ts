@@ -140,6 +140,29 @@ export interface TranscriptResponse {
   segments: TranscriptSegment[];
 }
 
+// ---- Listening practice / translation types ----
+
+export type TranslationSource = "youtube_captions" | "free_library" | "gemini";
+
+export interface TranslationSegment {
+  segmentIndex: number;
+  textTranslated: string;
+  source: TranslationSource;
+}
+
+export interface TranslateTranscriptRequest {
+  videoId: string;
+  transcriptId: string;
+  language?: string;
+}
+
+export interface TranslateTranscriptResponse {
+  status: "ready" | "error";
+  language: string;
+  translations: TranslationSegment[];
+  error?: string;
+}
+
 export interface CheckAnswerRequest {
   sessionId?: string;
   segmentIndex: number;
