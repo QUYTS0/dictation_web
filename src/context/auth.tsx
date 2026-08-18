@@ -47,10 +47,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
 
-    // Stay in sync with sign-in / sign-out events
+    // Stay in sync with sign-in / sign-out events. Supabase re-emits this
+    // (e.g. TOKEN_REFRESHED) whenever the tab regains focus/visibility, with
+    // a freshly parsed user object each time — keep the same reference when
+    // the signed-in user hasn't actually changed so effects keyed on `user`
+    // (like dashboard data fetches) don't spuriously re-run on tab switches.
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setUser(session?.user ?? null);
+        setUser((prev) => (prev?.id === session?.user?.id ? prev : session?.user ?? null));
         // Close the modal on successful sign-in
         if (session?.user) setModalOpen(false);
       }

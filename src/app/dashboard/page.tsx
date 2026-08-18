@@ -1,20 +1,93 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import clsx from "clsx";
 import {
+  ArrowRight,
   BookOpen,
   CheckCircle2,
   Clock,
   Flame,
+  Headphones,
+  Keyboard,
   PlayCircle,
   Sparkles,
   Trophy,
+  Video,
 } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import MetricCard from "@/components/MetricCard";
 import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
+import { isValidYouTubeUrl } from "@/lib/utils/url";
+
+type StudyMode = "dictation" | "listening";
+
+const STUDY_MODES: Array<{
+  mode: StudyMode;
+  title: string;
+  description: string;
+  icon: typeof Keyboard;
+}> = [
+  {
+    mode: "dictation",
+    title: "Dictation Practice",
+    description: "Type what you hear, sentence by sentence.",
+    icon: Keyboard,
+  },
+  {
+    mode: "listening",
+    title: "Listening Practice",
+    description: "Follow along with script + translation.",
+    icon: Headphones,
+  },
+];
+
+function ModeCard({
+  active,
+  title,
+  description,
+  icon: Icon,
+  onSelect,
+}: {
+  active: boolean;
+  title: string;
+  description: string;
+  icon: typeof Keyboard;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={active}
+      className={clsx(
+        "flex flex-1 items-start gap-3 rounded-2xl border p-4 text-left transition-all",
+        active
+          ? "border-primary-500 bg-primary-50/80 shadow-md ring-1 ring-primary-500/30"
+          : "border-white/60 bg-white/50 hover:border-primary-200 hover:bg-white/70"
+      )}
+    >
+      <div
+        className={clsx(
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
+          active ? "bg-primary-600 text-white" : "bg-white/80 text-slate-500"
+        )}
+      >
+        <Icon size={20} />
+      </div>
+      <div className="flex-1">
+        <div className="flex items-center gap-2">
+          <h3 className="font-semibold text-slate-900">{title}</h3>
+          {active && <CheckCircle2 size={16} className="text-primary-600" />}
+        </div>
+        <p className="mt-0.5 text-xs text-slate-500">{description}</p>
+      </div>
+    </button>
+  );
+}
 
 interface DashboardData {
   completedVideos: number;
@@ -42,12 +115,56 @@ interface DashboardData {
 const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { user, loading, openAuthModal } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [studyMode, setStudyMode] = useState<StudyMode>("dictation");
+  const [url, setUrl] = useState("");
+  const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  const userId = user?.id;
+
+  const handleStart = async (e: FormEvent) => {
+    e.preventDefault();
+    setStartError(null);
+
+    if (!url.trim()) {
+      setStartError("Please paste a YouTube URL.");
+      return;
+    }
+
+    if (!isValidYouTubeUrl(url.trim())) {
+      setStartError("That doesn't look like a valid YouTube URL.");
+      return;
+    }
+
+    setStarting(true);
+    try {
+      const res = await fetch("/api/video/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: url.trim() }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.status !== "ok") {
+        setStartError(data.message ?? "Failed to resolve the video. Please try again.");
+        return;
+      }
+
+      router.push(`/${studyMode}/${data.videoId}`);
+    } catch {
+      setStartError("Network error. Please check your connection and try again.");
+    } finally {
+      setStarting(false);
+    }
+  };
 
   useEffect(() => {
-    if (!user) return;
+    if (!userId) return;
 
     fetch("/api/dashboard/summary")
       .then(async (res) => {
@@ -61,7 +178,7 @@ export default function DashboardPage() {
       .catch(() => {
         setDashboardError("Failed to load dashboard data. Please refresh and try again.");
       });
-  }, [user]);
+  }, [userId]);
 
   const firstSession = dashboardData?.resumableSessions[0] ?? null;
   const latestMistakeSession = useMemo(
@@ -91,16 +208,60 @@ export default function DashboardPage() {
                 Sign in
               </button>
             </section>
-          ) : !dashboardData && !dashboardError ? (
-            <p className="text-sm text-slate-500">Loading dashboard…</p>
-          ) : dashboardError ? (
-            <p className="text-sm text-red-600">{dashboardError}</p>
-          ) : !dashboardData ? (
-            <p className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
-              No dashboard data yet.
-            </p>
           ) : (
             <>
+              <section className="rounded-3xl border border-white/60 bg-white/40 p-5 shadow-xl backdrop-blur-xl">
+                <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-900">
+                  Start a new session
+                </h2>
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row">
+                  {STUDY_MODES.map((m) => (
+                    <ModeCard
+                      key={m.mode}
+                      active={studyMode === m.mode}
+                      title={m.title}
+                      description={m.description}
+                      icon={m.icon}
+                      onSelect={() => setStudyMode(m.mode)}
+                    />
+                  ))}
+                </div>
+                <form onSubmit={handleStart} className="flex flex-col gap-3 sm:flex-row">
+                  <div className="relative flex flex-1 items-center">
+                    <Video className="absolute left-4 text-slate-400" size={20} />
+                    <input
+                      type="text"
+                      value={url}
+                      onChange={(e) => {
+                        setUrl(e.target.value);
+                        setStartError(null);
+                      }}
+                      placeholder="Paste YouTube URL here (e.g. https://www.youtube.com/...)"
+                      className="w-full rounded-xl border border-white/60 bg-white/60 py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-primary-500/30"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={starting}
+                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-8 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {starting ? "Loading…" : studyMode === "dictation" ? "Start Dictation" : "Start Listening"}{" "}
+                    {!starting && <ArrowRight size={18} />}
+                  </button>
+                </form>
+                {startError && <p className="mt-3 text-sm text-red-600">⚠ {startError}</p>}
+              </section>
+
+              {!dashboardData && !dashboardError ? (
+                <p className="text-sm text-slate-500">Loading dashboard…</p>
+              ) : dashboardError ? (
+                <p className="text-sm text-red-600">{dashboardError}</p>
+              ) : !dashboardData ? (
+                <p className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
+                  No dashboard data yet.
+                </p>
+              ) : (
+                <>
               <section className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
                 <div>
                   <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">
@@ -268,6 +429,8 @@ export default function DashboardPage() {
                   </section>
                 </div>
               </div>
+                </>
+              )}
             </>
           )}
         </main>

@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { Headphones } from "lucide-react";
+import clsx from "clsx";
+import { BookOpen, Headphones, History, LayoutDashboard } from "lucide-react";
 import UserButton from "@/components/UserButton";
 
 const NAV_LINKS = [
-  { key: "dashboard", href: "/dashboard", label: "Dashboard" },
-  { key: "listening", href: "/listening", label: "Listening" },
-  { key: "vocabulary", href: "/vocabulary", label: "Vocabulary" },
-  { key: "history", href: "/history", label: "History" },
+  { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "listening", href: "/listening", label: "Listening", icon: Headphones },
+  { key: "vocabulary", href: "/vocabulary", label: "Vocabulary", icon: BookOpen },
+  { key: "history", href: "/history", label: "History", icon: History },
 ] as const;
 
 type NavKey = (typeof NAV_LINKS)[number]["key"];
@@ -34,21 +35,27 @@ export default function AppHeader({ active }: AppHeaderProps) {
           </div>
           <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
         </Link>
-        <div className="flex items-center gap-6">
-          <nav className="hidden gap-6 md:flex">
-            {NAV_LINKS.map((link) => (
-              <Link
-                key={link.key}
-                href={link.href}
-                className={
-                  active === link.key
-                    ? "text-sm font-bold text-primary-600"
-                    : "text-sm font-medium text-slate-500 transition-colors hover:text-primary-600"
-                }
-              >
-                {link.label}
-              </Link>
-            ))}
+        <div className="flex items-center gap-4">
+          <nav className="hidden items-center gap-1 rounded-full border border-white/60 bg-white/40 p-1 shadow-sm backdrop-blur-md md:flex">
+            {NAV_LINKS.map((link) => {
+              const Icon = link.icon;
+              const isActive = active === link.key;
+              return (
+                <Link
+                  key={link.key}
+                  href={link.href}
+                  className={clsx(
+                    "flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
+                    isActive
+                      ? "bg-primary-600 text-white shadow-sm"
+                      : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
+                  )}
+                >
+                  <Icon size={16} />
+                  {link.label}
+                </Link>
+              );
+            })}
           </nav>
           <UserButton />
         </div>
