@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import clsx from "clsx";
+import { Bookmark } from "lucide-react";
 import type { ListeningSegment } from "../types";
 
 interface TranscriptPanelProps {
@@ -10,6 +11,8 @@ interface TranscriptPanelProps {
   showScript: boolean;
   showTranslation: boolean;
   onSeek: (segment: ListeningSegment) => void;
+  bookmarkedSegmentIndexes?: Set<number>;
+  onToggleBookmark?: (segment: ListeningSegment) => void;
 }
 
 export function TranscriptPanel({
@@ -18,6 +21,8 @@ export function TranscriptPanel({
   showScript,
   showTranslation,
   onSeek,
+  bookmarkedSegmentIndexes,
+  onToggleBookmark,
 }: TranscriptPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -38,12 +43,11 @@ export function TranscriptPanel({
     <div ref={containerRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
       {segments.map((segment) => {
         const isActive = segment.segmentIndex === activeSegmentIndex;
+        const isBookmarked = bookmarkedSegmentIndexes?.has(segment.segmentIndex) ?? false;
         return (
-          <button
+          <div
             key={segment.segmentIndex}
-            type="button"
             data-listening-segment-index={segment.segmentIndex}
-            onClick={() => onSeek(segment)}
             className={clsx(
               "w-full rounded-xl border p-3 text-left shadow-sm transition-colors",
               isActive
@@ -51,26 +55,45 @@ export function TranscriptPanel({
                 : "border-white/60 bg-white/40 opacity-80 hover:opacity-100"
             )}
           >
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
-                Sentence #{segment.segmentIndex + 1}
-              </span>
-              {isActive && <div className="h-2 w-2 animate-pulse rounded-full bg-primary-500" />}
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <button type="button" onClick={() => onSeek(segment)} className="flex flex-1 items-center gap-2 text-left">
+                <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
+                  Sentence #{segment.segmentIndex + 1}
+                </span>
+                {isActive && <div className="h-2 w-2 animate-pulse rounded-full bg-primary-500" />}
+              </button>
+              {onToggleBookmark && (
+                <button
+                  type="button"
+                  onClick={() => onToggleBookmark(segment)}
+                  aria-pressed={isBookmarked}
+                  aria-label={isBookmarked ? "Remove bookmark" : "Bookmark this sentence"}
+                  title={isBookmarked ? "Remove bookmark" : "Bookmark this sentence"}
+                  className={clsx(
+                    "shrink-0 rounded-md p-1 transition-colors",
+                    isBookmarked ? "text-amber-500" : "text-slate-300 hover:text-amber-500"
+                  )}
+                >
+                  <Bookmark size={14} className={isBookmarked ? "fill-amber-500" : undefined} />
+                </button>
+              )}
             </div>
-            {showScript && (
-              <p
-                className={clsx(
-                  "text-sm leading-relaxed",
-                  isActive ? "font-medium text-slate-900" : "text-slate-600"
-                )}
-              >
-                {segment.textEn}
-              </p>
-            )}
-            {showTranslation && (
-              <p className="mt-1 text-sm leading-relaxed text-primary-700">{segment.textVi ?? "…"}</p>
-            )}
-          </button>
+            <button type="button" onClick={() => onSeek(segment)} className="w-full text-left">
+              {showScript && (
+                <p
+                  className={clsx(
+                    "text-sm leading-relaxed",
+                    isActive ? "font-medium text-slate-900" : "text-slate-600"
+                  )}
+                >
+                  {segment.textEn}
+                </p>
+              )}
+              {showTranslation && (
+                <p className="mt-1 text-sm leading-relaxed text-primary-700">{segment.textVi ?? "…"}</p>
+              )}
+            </button>
+          </div>
         );
       })}
     </div>

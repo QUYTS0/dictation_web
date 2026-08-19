@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import clsx from "clsx";
-import { BookOpen, Headphones, History, LayoutDashboard } from "lucide-react";
+import { BookOpen, Headphones, History, LayoutDashboard, MapPin } from "lucide-react";
 import UserButton from "@/components/UserButton";
 
 const NAV_LINKS = [
   { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "vocabulary", href: "/vocabulary", label: "Vocabulary", icon: BookOpen },
+  { key: "bookmarks", href: "/bookmarks", label: "Bookmarks", icon: MapPin },
   { key: "history", href: "/history", label: "History", icon: History },
 ] as const;
 
@@ -20,7 +21,7 @@ interface AppHeaderProps {
 
 /**
  * Shared app-shell header (logo + primary nav + UserButton) used by every
- * signed-in page (dashboard, vocabulary, history). The dictation/listening
+ * signed-in page (dashboard, vocabulary, bookmarks, history). The dictation/listening
  * workspace pages use their own compact title-bar header instead, since
  * that's a distinct pattern (back button + progress label, zen-mode aware).
  */

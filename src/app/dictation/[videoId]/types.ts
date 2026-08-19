@@ -9,7 +9,7 @@ export interface MistakeRecord {
 
 export type LessonItemType = "word" | "phrase" | "sentence";
 export type SavedFilter = "all" | LessonItemType;
-export type RightPanelTab = "saved" | "script";
+export type RightPanelTab = "saved" | "script" | "bookmarks";
 export type VideoSizeMode = "standard" | "large";
 
 export type LessonSavedItem = VocabularyItem & { type: LessonItemType };

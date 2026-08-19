@@ -14,6 +14,7 @@ import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
 import type { ErrorType } from "@/lib/types";
+import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
 
 interface DashboardData {
   completedVideos: number;
@@ -56,15 +57,6 @@ interface MistakesResponse {
   total: number;
 }
 
-const ERROR_TYPE_OPTIONS: { value: ErrorType; label: string }[] = [
-  { value: "spelling", label: "Spelling" },
-  { value: "missing_word", label: "Missing word" },
-  { value: "extra_word", label: "Extra word" },
-  { value: "wrong_form", label: "Wrong form" },
-  { value: "punctuation", label: "Punctuation" },
-  { value: "capitalization", label: "Capitalization" },
-];
-
 const MISTAKES_PAGE_SIZE = 10;
 
 function formatPracticeMinutes(totalMinutes: number) {
@@ -72,10 +64,6 @@ function formatPracticeMinutes(totalMinutes: number) {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours}h ${minutes}m`;
-}
-
-function errorTypeLabel(errorType: ErrorType | null) {
-  return ERROR_TYPE_OPTIONS.find((opt) => opt.value === errorType)?.label ?? "Other";
 }
 
 export default function HistoryPage() {

@@ -388,6 +388,22 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     }
   }, [resumeState, segments.length, sessionStore]);
 
+  // ---- Jump directly to an arbitrary segment (e.g. from a bookmark deep link) ----
+  const jumpToSegment = useCallback(
+    (segIdx: number) => {
+      if (segIdx < 0 || segIdx >= segments.length) return;
+      currentSegIdxRef.current = segIdx;
+      setCurrentSegIdx(segIdx);
+      setCheckResult(null);
+      setWrongAttempts(0);
+      setHintLevel(0);
+      setUxState("playing");
+      ytPlayerRef.current?.playSegment(segIdx);
+      triggerAutoSave(segIdx, "active");
+    },
+    [segments.length, triggerAutoSave]
+  );
+
   const handleRestart = useCallback(() => {
     if (!user) return;
     void restartSession(videoId, resumeState?.sessionId)
@@ -427,6 +443,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     handlePrevious,
     handleResume,
     handleRestart,
+    jumpToSegment,
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
   };

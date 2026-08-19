@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useRef } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { ArrowLeft, FileText, Languages, Play } from "lucide-react";
@@ -9,6 +9,8 @@ import YouTubePlayer from "@/components/YouTubePlayer";
 import UserButton from "@/components/UserButton";
 import { StatusCard } from "@/components/StatusCard";
 
+import { useAuth, useRequireAuth } from "@/context/auth";
+import { useBookmarks } from "@/hooks/useBookmarks";
 import { useListeningSession } from "./useListeningSession";
 import { SubtitleOverlay } from "./components/SubtitleOverlay";
 import { TranscriptPanel } from "./components/TranscriptPanel";
@@ -19,6 +21,8 @@ interface PageProps {
 
 export default function ListeningPage({ params }: PageProps) {
   const { videoId } = use(params);
+  const { user } = useAuth();
+  const requireAuth = useRequireAuth();
 
   const {
     loadState,
@@ -39,6 +43,27 @@ export default function ListeningPage({ params }: PageProps) {
     handleStart,
     handleSegmentEnd,
   } = useListeningSession({ videoId });
+
+  const { bookmarkedSegmentIndexes, toggleBookmark } = useBookmarks(videoId, user);
+
+  const handleToggleBookmark = (segment: { segmentIndex: number; start: number; textEn: string }) => {
+    requireAuth(() => {
+      void toggleBookmark(segment.segmentIndex, segment.start, segment.textEn).catch(() => {});
+    });
+  };
+
+  // ---- Deep-link jump: "?segment=" opens the video directly at a bookmarked sentence. ----
+  const segmentJumpAppliedRef = useRef(false);
+  useEffect(() => {
+    if (segmentJumpAppliedRef.current) return;
+    if (loadState !== "ready" || segments.length === 0) return;
+    const segmentParam = new URLSearchParams(window.location.search).get("segment");
+    if (!segmentParam) return;
+    const segIdx = Number(segmentParam);
+    if (!Number.isInteger(segIdx) || segIdx < 0 || segIdx >= segments.length) return;
+    segmentJumpAppliedRef.current = true;
+    handleSeekToSegment(segments[segIdx]);
+  }, [loadState, segments, handleSeekToSegment]);
 
   const activeSegment = activeSegmentIndex >= 0 ? segments[activeSegmentIndex] : null;
   const workspaceTitle = transcriptTitle ?? `Video ${videoId}`;
@@ -167,6 +192,8 @@ export default function ListeningPage({ params }: PageProps) {
               showScript={showScript}
               showTranslation={showTranslation}
               onSeek={handleSeekToSegment}
+              bookmarkedSegmentIndexes={bookmarkedSegmentIndexes}
+              onToggleBookmark={handleToggleBookmark}
             />
           </div>
         </div>

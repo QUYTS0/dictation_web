@@ -15,6 +15,7 @@ import {
   X,
   FileText,
   Bookmark,
+  MapPin,
   Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -35,9 +36,11 @@ import { useVideoSizeMode } from "./useVideoSizeMode";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
+import { useBookmarks } from "@/hooks/useBookmarks";
 
 import { ControlButton } from "./components/ControlButton";
 import { LessonSavedItemsList } from "./components/LessonSavedItemsList";
+import { BookmarksList } from "./components/BookmarksList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
 import { SCRIPT_POPOVER_MAX_WIDTH_PX, SCRIPT_CONTEXT_NEXT_COUNT, SCRIPT_CONTEXT_PREVIOUS_COUNT, VIDEO_SIZE_MODE_CLASS } from "./constants";
 import { getSavedFilterLabel, buildComparedTokens } from "./helpers";
@@ -67,6 +70,7 @@ export default function DictationPage({ params }: PageProps) {
   const [workspaceInputValue, setWorkspaceInputValue] = useState("");
   const [isZenMode, setIsZenMode] = useState(false);
   const [showHintPanel, setShowHintPanel] = useState(false);
+  const [bookmarkDeletingId, setBookmarkDeletingId] = useState<string | null>(null);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
 
@@ -100,7 +104,36 @@ export default function DictationPage({ params }: PageProps) {
     handleRestart,
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
+    jumpToSegment,
   } = useDictationSession({ videoId, user });
+
+  const {
+    bookmarkedSegmentIndexes,
+    bookmarks,
+    loading: bookmarksLoading,
+    error: bookmarksError,
+    errorRetry: bookmarksErrorRetry,
+    toggleBookmark,
+    deleteBookmark,
+    updateBookmarkNote,
+  } = useBookmarks(videoId, user);
+
+  // ---- Deep-link jump: "?segment=" opens the video directly at a bookmarked
+  // sentence. Resume-from-last-position takes priority if both apply, and we
+  // wait for the resume check to finish first to avoid racing it.
+  const segmentJumpAppliedRef = useRef(false);
+  useEffect(() => {
+    if (segmentJumpAppliedRef.current) return;
+    if (resumeLoading || resumeState) return;
+    if (uxState !== "transcript_ready" && uxState !== "paused_waiting_input" && uxState !== "playing") return;
+    if (segments.length === 0) return;
+    const segmentParam = new URLSearchParams(window.location.search).get("segment");
+    if (!segmentParam) return;
+    const segIdx = Number(segmentParam);
+    if (!Number.isInteger(segIdx) || segIdx < 0 || segIdx >= segments.length) return;
+    segmentJumpAppliedRef.current = true;
+    jumpToSegment(segIdx);
+  }, [resumeLoading, resumeState, uxState, segments.length, jumpToSegment]);
 
   const handleRegenerateClick = useCallback(() => {
     if (regenerating) return;
@@ -147,6 +180,20 @@ export default function DictationPage({ params }: PageProps) {
   });
 
   const currentSegment = segments[currentSegIdx];
+
+  const handleToggleCurrentBookmark = useCallback(() => {
+    if (!currentSegment) return;
+    requireAuth(() => {
+      void toggleBookmark(currentSegment.segmentIndex, currentSegment.start, currentSegment.text).catch(() => {});
+    });
+  }, [currentSegment, requireAuth, toggleBookmark]);
+
+  const handleBookmarkJump = useCallback(
+    (segmentIndex: number) => {
+      jumpToSegment(segmentIndex);
+    },
+    [jumpToSegment]
+  );
 
   // Derived flag: show dictation input during playback and while paused/checking
   const shouldShowInput =
@@ -386,6 +433,14 @@ export default function DictationPage({ params }: PageProps) {
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
                 <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={handleSkip} disabled={currentSegIdx >= segments.length - 1} />
+                <ControlButton
+                  icon={<Bookmark size={18} className={bookmarkedSegmentIndexes.has(currentSegIdx) ? "fill-amber-500" : undefined} />}
+                  shortcut="Bookmark"
+                  label={bookmarkedSegmentIndexes.has(currentSegIdx) ? "Bookmarked" : "Bookmark"}
+                  active={bookmarkedSegmentIndexes.has(currentSegIdx)}
+                  onClick={handleToggleCurrentBookmark}
+                  disabled={!currentSegment}
+                />
               </div>
               {segments.length > 0 && (
                 <div className="flex-1 min-w-0">
@@ -734,6 +789,12 @@ export default function DictationPage({ params }: PageProps) {
                 >
                   <Bookmark size={16} /> Saved
                 </button>
+                <button
+                  onClick={() => setRightPanelTab("bookmarks")}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${rightPanelTab === "bookmarks" ? "bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-white/60 dark:border-white/10" : "text-slate-500 dark:text-slate-400 hover:text-indigo-600"}`}
+                >
+                  <MapPin size={16} /> Bookmarks
+                </button>
               </div>
                 </div>
 
@@ -774,6 +835,47 @@ export default function DictationPage({ params }: PageProps) {
                       updatingId={learningUpdatingId}
                       onDelete={deleteLessonCapture}
                       onUpdate={updateLessonCapture}
+                    />
+                  )}
+                </>
+              ) : rightPanelTab === "bookmarks" ? (
+                <>
+                  {bookmarksError ? (
+                    <p role="alert" className="flex items-center gap-2 text-xs text-red-600">
+                      {bookmarksError}
+                      {bookmarksErrorRetry && (
+                        <button
+                          type="button"
+                          onClick={() => bookmarksErrorRetry()}
+                          className="font-semibold underline text-red-700 hover:text-red-900"
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </p>
+                  ) : bookmarksLoading ? (
+                    <p className="text-xs text-slate-500">Loading bookmarks…</p>
+                  ) : bookmarks.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                      <MapPin size={32} className="text-slate-300 dark:text-slate-600 mb-3" />
+                      <p className="text-slate-500 dark:text-slate-400 text-xs font-medium">
+                        No bookmarks yet. Use the bookmark button to save a sentence for later.
+                      </p>
+                    </div>
+                  ) : (
+                    <BookmarksList
+                      items={bookmarks}
+                      compact
+                      scrollClassName="h-full"
+                      deletingId={bookmarkDeletingId}
+                      onDelete={(id) => {
+                        setBookmarkDeletingId(id);
+                        void deleteBookmark(id)
+                          .catch(() => {})
+                          .finally(() => setBookmarkDeletingId(null));
+                      }}
+                      onUpdateNote={(id, note) => void updateBookmarkNote(id, note).catch(() => {})}
+                      onJump={handleBookmarkJump}
                     />
                   )}
                 </>
@@ -896,6 +998,23 @@ export default function DictationPage({ params }: PageProps) {
               className="px-2 py-1 text-[11px] rounded border border-slate-300"
             >
               Save sentence
+            </button>
+            <button
+              onClick={() => {
+                const segment = segments.find((s) => s.segmentIndex === scriptPopover.segmentIndex);
+                if (!segment) return;
+                requireAuth(() => {
+                  void toggleBookmark(segment.segmentIndex, segment.start, segment.text).catch(() => {});
+                });
+              }}
+              className={clsx(
+                "px-2 py-1 text-[11px] rounded border",
+                bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex)
+                  ? "border-amber-300 text-amber-700 bg-amber-50"
+                  : "border-slate-300"
+              )}
+            >
+              {bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex) ? "Bookmarked" : "Bookmark"}
             </button>
             <button
               onClick={() => handleScriptPopoverAction("explain")}

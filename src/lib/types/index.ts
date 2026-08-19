@@ -240,6 +240,25 @@ export interface VocabularyRequest {
   note?: string;
 }
 
+export interface Bookmark {
+  id: string;
+  user_id: string;
+  video_id: string;
+  segment_index: number;
+  start_sec: number;
+  sentence_text: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface BookmarkRequest {
+  videoId: string;
+  segmentIndex: number;
+  startSec: number;
+  sentenceText: string;
+  note?: string;
+}
+
 // ---- Vocabulary spaced-repetition review ----
 
 export type ReviewGrade = "again" | "hard" | "good" | "easy";

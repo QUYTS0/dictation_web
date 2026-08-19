@@ -19,10 +19,12 @@ import {
   Video,
 } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
+import ErrorPatternsPanel from "@/components/ErrorPatternsPanel";
 import MetricCard from "@/components/MetricCard";
 import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
+import type { ErrorType } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
 
@@ -115,6 +117,11 @@ interface DashboardData {
 }
 const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
 
+interface ErrorPatternsData {
+  total: number;
+  patterns: Array<{ errorType: ErrorType; count: number; percentage: number }>;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { user, loading, openAuthModal } = useAuth();
@@ -177,6 +184,16 @@ export default function DashboardPage() {
   const dashboardError = hasDashboardError
     ? "Failed to load dashboard data. Please refresh and try again."
     : null;
+
+  const { data: errorPatternsData, isLoading: errorPatternsLoading } = useQuery({
+    queryKey: ["dashboard-error-patterns", userId],
+    queryFn: async (): Promise<ErrorPatternsData> => {
+      const res = await fetch("/api/dashboard/error-patterns");
+      if (!res.ok) throw new Error("Failed to fetch error patterns");
+      return res.json();
+    },
+    enabled: !!userId,
+  });
 
   const firstSession = dashboardData?.resumableSessions[0] ?? null;
   const latestMistakeSession = useMemo(
@@ -425,6 +442,11 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </section>
+
+                  <ErrorPatternsPanel
+                    patterns={errorPatternsData?.patterns ?? []}
+                    loading={errorPatternsLoading}
+                  />
                 </div>
               </div>
                 </>
