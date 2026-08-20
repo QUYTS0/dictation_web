@@ -95,11 +95,10 @@ export async function POST(request: NextRequest) {
     // The popover's live preview usually already fetched these — reuse them
     // instead of looking everything up again. Falls back to a fresh
     // best-effort, free-only lookup (never blocks the save) if the caller
-    // didn't send them — Gemini is opt-in via the popover's "Look up with
-    // AI" button, never spent automatically on save.
+    // didn't send them.
     const translation = precomputedTranslation
       ? { text: precomputedTranslation, source: precomputedTranslationSource ?? "free_library" }
-      : await translateText(term.trim(), VOCABULARY_TRANSLATION_LANGUAGE, false).catch(() => null);
+      : await translateText(term.trim(), VOCABULARY_TRANSLATION_LANGUAGE).catch(() => null);
 
     const wordDetails = precomputedDefinition
       ? {
@@ -108,7 +107,7 @@ export async function POST(request: NextRequest) {
           definition: precomputedDefinition,
           source: precomputedDefinitionSource ?? "free_dictionary",
         }
-      : await lookupWordDetails(term.trim(), false).catch(() => null);
+      : await lookupWordDetails(term.trim()).catch(() => null);
 
     // Images are always free (Openverse, no key) — no gating needed.
     const image = precomputedImageUrl

@@ -86,29 +86,3 @@ export function buildComparedTokens({
 
   return { expectedTokens, userTokens };
 }
-
-export function buildAiExplainPayload({
-  selectedType,
-  selectedText,
-  sentenceText,
-  userText,
-}: {
-  selectedType: LessonItemType | null;
-  selectedText: string;
-  sentenceText: string;
-  userText: string;
-}) {
-  if (selectedType && selectedText) {
-    return {
-      buttonLabel: `Explain selected ${selectedType}`,
-      expectedText: `Explain this ${selectedType} from a dictation lesson: "${selectedText}". Source sentence: "${sentenceText}"`,
-      userText: selectedText,
-    };
-  }
-
-  return {
-    buttonLabel: "Explain this sentence",
-    expectedText: sentenceText,
-    userText,
-  };
-}

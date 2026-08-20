@@ -1,29 +1,40 @@
 import { translate } from "@vitalets/google-translate-api";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 
-const GEMINI_TIMEOUT_MS = 4_000;
-
-export type TranslationSource = "free_library" | "gemini";
+export type TranslationSource = "free_library";
 
 export interface TranslateResult {
   text: string;
   source: TranslationSource;
 }
 
+export class TranslationUnavailableError extends Error {
+  constructor() {
+    super("Translation attempt failed");
+    this.name = "TranslationUnavailableError";
+  }
+}
+
 /**
  * Best-effort translation for short, standalone text (a word, phrase, or
- * sentence) — not tied to a cached transcript. Tries the free, no-API-key
- * library first. Gemini is opt-in only (`allowGemini`) — it's a paid API, so
- * callers must not use it as a silent, automatic fallback; the caller decides
- * when the user has actually asked for AI help. Never throws: callers should
- * treat a null result as "translation unavailable" and continue without
- * blocking on it.
+ * sentence) — not tied to a cached transcript. Uses the free, no-API-key
+ * library only; Gemini was removed from this path (2026-08) because it was
+ * the worst-value consumer of a very small free-tier Gemini budget (up to 2
+ * calls per single-word lookup, never cached) — see transcript translation
+ * and /api/ai/explain for where Gemini is actually worth spending it.
+ *
+ * By default never throws: callers should treat a null result as
+ * "translation unavailable" and continue without blocking on it (this is
+ * what the vocabulary-save route relies on — a translation hiccup must never
+ * block saving the word itself). Pass `throwOnFailure: true` to instead
+ * throw TranslationUnavailableError when the attempt errored out (as opposed
+ * to a clean run that just found nothing) — used by the preview route so it
+ * can tell the client "this failed, try again" instead of silently returning
+ * an empty result indistinguishable from "no translation exists".
  */
 export async function translateText(
   text: string,
   language: string,
-  allowGemini = false
+  { throwOnFailure = false }: { throwOnFailure?: boolean } = {}
 ): Promise<TranslateResult | null> {
   const trimmed = text.trim();
   if (!trimmed) return null;
@@ -36,32 +47,7 @@ export async function translateText(
       "[translate] free translation library failed:",
       err instanceof Error ? err.message : err
     );
-  }
-
-  if (!allowGemini) return null;
-
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error("[translate] GEMINI_API_KEY not set; cannot fall back to Gemini");
-    return null;
-  }
-
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_NAME });
-    const languageName = language === "vi" ? "Vietnamese" : language;
-    const prompt = `Translate the following English text into natural, conversational ${languageName}. Respond with only the translation, no commentary, no quotes.\n\n${trimmed}`;
-
-    const result = await Promise.race([
-      model.generateContent(prompt),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Gemini translation timed out")), GEMINI_TIMEOUT_MS)
-      ),
-    ]);
-    const translated = result.response.text().trim();
-    if (translated) return { text: translated, source: "gemini" };
-  } catch (err) {
-    console.error("[translate] Gemini translation error:", err instanceof Error ? err.message : err);
+    if (throwOnFailure) throw new TranslationUnavailableError();
   }
 
   return null;

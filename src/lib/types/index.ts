@@ -276,19 +276,24 @@ export interface VocabularyUpdateRequest {
 export interface VocabularyPreviewRequest {
   text: string;
   isWord: boolean;
-  /** Explicit opt-in to spend a Gemini call when free sources have nothing. */
-  useAI?: boolean;
 }
 
 export interface VocabularyPreviewResponse {
-  translation: { text: string; source: "free_library" | "gemini" } | null;
+  translation: { text: string; source: "free_library" } | null;
+  /**
+   * True when a translation was attempted but failed (e.g. the free
+   * Google-Translate scraper got rate-limited/blocked), as opposed to
+   * `translation` being null because there's genuinely nothing to show.
+   * Lets the client tell "temporarily unavailable" apart from "no result".
+   */
+  translationFailed?: boolean;
   wordDetails: {
     phonetic: string | null;
     partOfSpeech: string | null;
     definition: string | null;
     example: string | null;
     audioUrl: string | null;
-    source: "free_dictionary" | "gemini";
+    source: "free_dictionary";
   } | null;
   image: {
     url: string;

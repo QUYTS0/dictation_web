@@ -29,7 +29,6 @@ import { motion, AnimatePresence } from "motion/react";
 
 import YouTubePlayer from "@/components/YouTubePlayer";
 import HintDisplay from "@/components/HintDisplay";
-import AIExplainer from "@/components/AIExplainer";
 import ProgressBar from "@/components/ProgressBar";
 import UserButton from "@/components/UserButton";
 import VocabularySaveButton from "@/components/VocabularySaveButton";
@@ -264,12 +263,8 @@ export default function DictationPage({ params }: PageProps) {
     setSavedFilter,
     filteredSavedItems,
     scriptPopover,
-    scriptShowAI,
-    scriptAiReady,
-    setScriptAiReady,
     scriptPopoverNoteMode,
     setScriptPopoverNoteMode,
-    scriptAiPayload,
     scriptPopoverNoteInputRef,
     scriptTextContainerRef,
     reviewTextContainerRef,
@@ -285,11 +280,10 @@ export default function DictationPage({ params }: PageProps) {
     handleScriptPopoverAction,
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
-    scriptPopoverAiLoading,
+    scriptPopoverPreviewError,
     scriptPopoverSavedItem,
     scriptPopoverSavedFeedback,
     scriptSelectedType,
-    requestAiLookup,
   } = useLessonCapture({
     videoId,
     user,
@@ -1019,100 +1013,81 @@ export default function DictationPage({ params }: PageProps) {
                   <Check size={12} /> Already saved as {scriptPopoverSavedItem.type}
                 </div>
               )}
-              {(() => {
-                const isWordSelection = scriptPopover.selectedWordCount === 1;
-                const missingFreeResult =
-                  !scriptPopoverPreviewLoading &&
-                  (!scriptPopoverPreview?.translation || (isWordSelection && !scriptPopoverPreview?.wordDetails));
-
-                return (
-                  <div className="w-full rounded-xl bg-slate-50/80 px-2.5 py-2 dark:bg-white/5">
-                    {scriptPopoverPreviewLoading ? (
-                      <div className="h-3.5 w-24 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
-                    ) : scriptPopoverPreview?.wordDetails ? (
-                      <div className="flex items-start gap-2">
-                        {scriptPopoverPreview.image && (
-                          <img
-                            src={scriptPopoverPreview.image.thumbnailUrl}
-                            alt={scriptPopover.selectedText}
-                            className="h-12 w-12 shrink-0 rounded-lg object-cover"
-                          />
-                        )}
-                        <div className="flex min-w-0 flex-1 flex-col gap-1">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="text-sm font-semibold text-slate-800 dark:text-white">
-                              {scriptPopover.selectedText}
-                            </span>
-                            {scriptPopoverPreview.wordDetails.phonetic && (
-                              <span className="text-xs text-slate-500 dark:text-slate-400">
-                                {scriptPopoverPreview.wordDetails.phonetic}
-                              </span>
-                            )}
-                            {scriptPopoverPreview.wordDetails.audioUrl && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const audioUrl = scriptPopoverPreview.wordDetails?.audioUrl;
-                                  if (audioUrl) void new Audio(audioUrl).play().catch(() => {});
-                                }}
-                                className="text-slate-400 transition-colors hover:text-primary-600"
-                                aria-label="Play pronunciation"
-                              >
-                                <Volume2 size={13} />
-                              </button>
-                            )}
-                            {scriptPopoverPreview.wordDetails.partOfSpeech && (
-                              <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
-                                {scriptPopoverPreview.wordDetails.partOfSpeech}
-                              </span>
-                            )}
-                          </div>
-                          {scriptPopoverPreview.wordDetails.definition && (
-                            <p className="line-clamp-2 text-xs leading-snug text-slate-600 dark:text-slate-300">
-                              {scriptPopoverPreview.wordDetails.definition}
-                            </p>
-                          )}
-                          {scriptPopoverPreview.translation && (
-                            <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
-                              {scriptPopoverPreview.translation.text}
-                            </p>
-                          )}
-                          {scriptPopoverPreview.image && (
-                            <a
-                              href={scriptPopoverPreview.image.sourceUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="truncate text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-                            >
-                              {scriptPopoverPreview.image.attribution}
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    ) : scriptPopoverPreview?.translation ? (
-                      <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
-                        {scriptPopoverPreview.translation.text}
-                      </p>
-                    ) : null}
-
-                    {missingFreeResult && (
-                      <button
-                        type="button"
-                        onClick={requestAiLookup}
-                        disabled={scriptPopoverAiLoading}
-                        className="mt-1 flex items-center gap-1 text-xs font-medium text-violet-600 transition-colors hover:text-violet-800 disabled:opacity-50 dark:text-violet-400"
-                      >
-                        {scriptPopoverAiLoading ? (
-                          <Loader2 size={12} className="animate-spin" />
-                        ) : (
-                          <Sparkles size={12} />
-                        )}
-                        {scriptPopoverAiLoading ? "Looking up…" : "Look up with AI"}
-                      </button>
+              <div className="w-full rounded-xl bg-slate-50/80 px-2.5 py-2 dark:bg-white/5">
+                {scriptPopoverPreviewLoading ? (
+                  <div className="h-3.5 w-24 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
+                ) : scriptPopoverPreview?.wordDetails ? (
+                  <div className="flex items-start gap-2">
+                    {scriptPopoverPreview.image && (
+                      <img
+                        src={scriptPopoverPreview.image.thumbnailUrl}
+                        alt={scriptPopover.selectedText}
+                        className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                      />
                     )}
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-sm font-semibold text-slate-800 dark:text-white">
+                          {scriptPopover.selectedText}
+                        </span>
+                        {scriptPopoverPreview.wordDetails.phonetic && (
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            {scriptPopoverPreview.wordDetails.phonetic}
+                          </span>
+                        )}
+                        {scriptPopoverPreview.wordDetails.audioUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const audioUrl = scriptPopoverPreview.wordDetails?.audioUrl;
+                              if (audioUrl) void new Audio(audioUrl).play().catch(() => {});
+                            }}
+                            className="text-slate-400 transition-colors hover:text-primary-600"
+                            aria-label="Play pronunciation"
+                          >
+                            <Volume2 size={13} />
+                          </button>
+                        )}
+                        {scriptPopoverPreview.wordDetails.partOfSpeech && (
+                          <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
+                            {scriptPopoverPreview.wordDetails.partOfSpeech}
+                          </span>
+                        )}
+                      </div>
+                      {scriptPopoverPreview.wordDetails.definition && (
+                        <p className="line-clamp-2 text-xs leading-snug text-slate-600 dark:text-slate-300">
+                          {scriptPopoverPreview.wordDetails.definition}
+                        </p>
+                      )}
+                      {scriptPopoverPreview.translation && (
+                        <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
+                          {scriptPopoverPreview.translation.text}
+                        </p>
+                      )}
+                      {scriptPopoverPreview.image && (
+                        <a
+                          href={scriptPopoverPreview.image.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                        >
+                          {scriptPopoverPreview.image.attribution}
+                        </a>
+                      )}
+                    </div>
                   </div>
-                );
-              })()}
+                ) : scriptPopoverPreview?.translation ? (
+                  <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
+                    {scriptPopoverPreview.translation.text}
+                  </p>
+                ) : null}
+
+                {!scriptPopoverPreviewLoading && scriptPopoverPreviewError && (
+                  <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                    Translation unavailable, try again shortly.
+                  </p>
+                )}
+              </div>
               <div className="flex items-center gap-1 rounded-xl bg-slate-100/70 p-1 dark:bg-white/5">
                 {scriptPopoverSavedFeedback ? (
                   <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
@@ -1183,13 +1158,6 @@ export default function DictationPage({ params }: PageProps) {
               </button>
 
               <button
-                onClick={() => handleScriptPopoverAction("explain")}
-                className="flex items-center gap-1 rounded-xl border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
-              >
-                <Sparkles size={13} /> Explain
-              </button>
-
-              <button
                 onClick={() => handleScriptPopoverAction("note")}
                 className="flex items-center gap-1 rounded-xl border border-white/60 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
               >
@@ -1213,29 +1181,13 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
               )}
               <span id="script-selection-actions-help" className="sr-only">
-                Actions for selected script text: save word, phrase, sentence, explain, or add note. Keyboard
+                Actions for selected script text: save word, phrase, sentence, or add note. Keyboard
                 shortcuts W, P, and S save word, phrase, and sentence respectively.
               </span>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
-
-      {scriptShowAI && scriptPopover && (
-        <div className="mx-auto w-full max-w-7xl px-4 lg:px-6 pb-4">
-          <AIExplainer
-            expectedText={scriptAiPayload.expectedText}
-            userText={scriptAiPayload.userText}
-            buttonLabel={scriptAiPayload.buttonLabel}
-            onExplanationReady={setScriptAiReady}
-          />
-          {scriptAiReady && (
-            <p className="mt-2 text-xs text-slate-500">
-              Selection: <span className="font-medium text-slate-700">{scriptPopover.selectedText}</span>
-            </p>
-          )}
-        </div>
-      )}
 
       <AnimatePresence>
         {pendingDeleteItem && (

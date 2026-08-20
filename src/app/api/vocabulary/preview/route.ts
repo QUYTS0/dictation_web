@@ -10,9 +10,11 @@ const PREVIEW_TRANSLATION_LANGUAGE = "vi";
 /**
  * Live preview for the selection popover — translation, and for a single
  * word, dictionary details and an illustrative photo — shown before the
- * user decides to save anything. Read-only and not tied to any user data,
- * so unlike /api/vocabulary it doesn't require auth; it's rate-limited
- * instead since it fires on every selection rather than only on save.
+ * user decides to save anything. Free sources only (no Gemini — see
+ * translate.ts for why it was removed from this path). Read-only and not
+ * tied to any user data, so unlike /api/vocabulary it doesn't require auth;
+ * it's rate-limited instead since it fires on every selection rather than
+ * only on save.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -28,23 +30,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "text is required" }, { status: 400 });
     }
 
-    // Gemini is opt-in (paid) — gate it behind its own, tighter rate limit
-    // so it can't be hammered even by a legitimate client bug.
-    if (body.useAI) {
-      const aiRateLimitResponse = await checkRateLimit(request, "vocabulary/preview-ai", {
-        limit: 10,
-        windowMs: 60_000,
-      });
-      if (aiRateLimitResponse) return aiRateLimitResponse;
-    }
-
-    const [translation, wordDetails, image] = await Promise.all([
-      translateText(text, PREVIEW_TRANSLATION_LANGUAGE, body.useAI).catch(() => null),
-      body.isWord ? lookupWordDetails(text, body.useAI).catch(() => null) : Promise.resolve(null),
+    // All three fire concurrently; translation's outcome is captured via
+    // .then's two callbacks (rather than a plain .catch) so a failure can be
+    // reported back as `translationFailed` instead of collapsing into the
+    // same null as "nothing to translate" — see translateText's throwOnFailure.
+    const [{ translation, translationFailed }, wordDetails, image] = await Promise.all([
+      translateText(text, PREVIEW_TRANSLATION_LANGUAGE, { throwOnFailure: true }).then(
+        (value) => ({ translation: value, translationFailed: false }),
+        () => ({ translation: null, translationFailed: true })
+      ),
+      body.isWord ? lookupWordDetails(text).catch(() => null) : Promise.resolve(null),
       body.isWord ? lookupWordImage(text).catch(() => null) : Promise.resolve(null),
     ]);
 
-    return NextResponse.json<VocabularyPreviewResponse>({ translation, wordDetails, image });
+    return NextResponse.json<VocabularyPreviewResponse>({ translation, translationFailed, wordDetails, image });
   } catch (err) {
     console.error("[vocabulary/preview] unexpected error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

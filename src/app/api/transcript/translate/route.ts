@@ -3,7 +3,7 @@ import { YoutubeTranscript } from "youtube-transcript";
 import { translate } from "@vitalets/google-translate-api";
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
-import { checkRateLimit } from "@/lib/rateLimit";
+import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type {
@@ -151,8 +151,14 @@ export async function POST(request: NextRequest) {
     const finalMissing = englishSegments.filter((s) => !results.has(s.segment_index));
     if (finalMissing.length > 0) {
       const apiKey = process.env.GEMINI_API_KEY;
+      const quota = apiKey ? await checkGeminiQuota() : null;
       if (!apiKey) {
         console.error("[transcript translate] GEMINI_API_KEY not set; cannot translate remaining segments");
+      } else if (!quota?.allowed) {
+        // Same shared budget as /api/ai/explain — skip this tier rather than
+        // failing the whole request; whatever tiers 1-2 already found still
+        // gets returned below.
+        console.warn(`[transcript translate] skipping Gemini tier — quota exceeded (${quota?.reason})`);
       } else {
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({

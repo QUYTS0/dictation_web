@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { clsx } from "clsx";
 import type { AIExplainResponse } from "@/lib/types";
+
+interface GeminiQuotaStatus {
+  configured: boolean;
+  rpdUsed: number;
+  rpdLimit: number;
+}
 
 interface AIExplainerProps {
   expectedText: string;
@@ -27,13 +33,30 @@ export default function AIExplainer({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quota, setQuota] = useState<GeminiQuotaStatus | null>(null);
 
   useEffect(() => {
     onExplanationReady?.(Boolean(explanation));
   }, [explanation, onExplanationReady]);
 
+  // Shared daily budget with /api/transcript/translate — checked so the
+  // button can be disabled proactively instead of letting the user spend a
+  // click on a request that's just going to 429.
+  const refreshQuota = useCallback(() => {
+    void fetch("/api/ai/quota")
+      .then((res) => (res.ok ? (res.json() as Promise<GeminiQuotaStatus>) : null))
+      .then((data) => setQuota(data))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!explanation) refreshQuota();
+  }, [explanation, refreshQuota]);
+
+  const quotaExhausted = Boolean(quota?.configured && quota.rpdUsed >= quota.rpdLimit);
+
   const handleExplain = async () => {
-    if (explanation || loading) return;
+    if (explanation || loading || quotaExhausted) return;
     setLoading(true);
     setError(null);
 
@@ -57,6 +80,7 @@ export default function AIExplainer({
       );
     } finally {
       setLoading(false);
+      refreshQuota();
     }
   };
 
@@ -69,18 +93,29 @@ export default function AIExplainer({
         {!explanation && (
           <button
             onClick={handleExplain}
-            disabled={loading}
+            disabled={loading || quotaExhausted}
+            title={quotaExhausted ? "Daily AI quota reached — try again tomorrow" : undefined}
             className={clsx(
               "text-xs px-3 py-1 rounded-full font-medium transition-colors",
               loading
                 ? "bg-violet-200 text-violet-400 cursor-wait"
-                : "bg-violet-200 text-violet-800 hover:bg-violet-300"
+                : quotaExhausted
+                  ? "bg-violet-100 text-violet-300 cursor-not-allowed"
+                  : "bg-violet-200 text-violet-800 hover:bg-violet-300"
             )}
           >
-            {loading ? "Thinking…" : buttonLabel}
+            {loading ? "Thinking…" : quotaExhausted ? "Quota reached" : buttonLabel}
           </button>
         )}
       </div>
+
+      {!explanation && quota?.configured && (
+        <p className="text-[11px] text-violet-500">
+          {quotaExhausted
+            ? "Daily AI quota reached — try again tomorrow."
+            : `${Math.max(quota.rpdLimit - quota.rpdUsed, 0)}/${quota.rpdLimit} AI calls left today`}
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="text-red-600 text-sm flex items-center gap-2">

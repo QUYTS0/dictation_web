@@ -8,12 +8,7 @@ import {
   SCRIPT_POPOVER_VERTICAL_OFFSET_PX,
   SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR,
 } from "./constants";
-import {
-  getSelectedType,
-  splitSentenceIntoWords,
-  inferSavedItemType,
-  buildAiExplainPayload,
-} from "./helpers";
+import { getSelectedType, splitSentenceIntoWords, inferSavedItemType } from "./helpers";
 import type { LessonItemType, LessonSavedItem, SavedFilter, ScriptSelectionPopoverState } from "./types";
 
 interface UseLessonCaptureOptions {
@@ -30,7 +25,7 @@ interface UseLessonCaptureOptions {
 
 /**
  * Everything related to capturing vocabulary from the transcript script:
- * selecting text to open the save/explain popover, saving words/phrases/
+ * selecting text to open the save popover, saving words/phrases/
  * sentences (with an optional note) to the vocabulary bank, and managing
  * the saved-items list for the current video. The popover and the saved
  * list are two ends of the same feature (selecting text saves into the
@@ -56,9 +51,10 @@ export function useLessonCapture({
   const [scriptPopover, setScriptPopover] = useState<ScriptSelectionPopoverState | null>(null);
   const [scriptPopoverPreview, setScriptPopoverPreview] = useState<VocabularyPreviewResponse | null>(null);
   const [scriptPopoverPreviewLoading, setScriptPopoverPreviewLoading] = useState(false);
-  const [scriptPopoverAiLoading, setScriptPopoverAiLoading] = useState(false);
-  const [scriptShowAI, setScriptShowAI] = useState(false);
-  const [scriptAiReady, setScriptAiReady] = useState(false);
+  // True when the preview request itself failed (network error, rate limit,
+  // or the server reporting translationFailed) — distinct from a clean
+  // response that simply found nothing to show.
+  const [scriptPopoverPreviewError, setScriptPopoverPreviewError] = useState(false);
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [scriptPopoverSavedFeedback, setScriptPopoverSavedFeedback] = useState<LessonItemType | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -234,8 +230,6 @@ export function useLessonCapture({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     dismissScriptSelection();
     setScriptPopoverNoteMode(false);
-    setScriptShowAI(false);
-    setScriptAiReady(false);
   }, [dismissScriptSelection, showScriptContext]);
 
   const saveLessonCaptureAtSegment = useCallback(
@@ -536,8 +530,6 @@ export function useLessonCapture({
       );
       const y = Math.max(rect.top - SCRIPT_POPOVER_VERTICAL_OFFSET_PX, SCRIPT_POPOVER_VERTICAL_OFFSET_PX);
 
-      setScriptShowAI(false);
-      setScriptAiReady(false);
       setScriptPopoverNoteMode(false);
       clearLearningNoteInputs();
       clearScriptPopoverSavedFeedback();
@@ -602,14 +594,14 @@ export function useLessonCapture({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setScriptPopoverPreview(null);
       setScriptPopoverPreviewLoading(false);
-      setScriptPopoverAiLoading(false);
+      setScriptPopoverPreviewError(false);
       return;
     }
 
     const controller = new AbortController();
     setScriptPopoverPreview(null);
     setScriptPopoverPreviewLoading(true);
-    setScriptPopoverAiLoading(false);
+    setScriptPopoverPreviewError(false);
 
     const timer = window.setTimeout(() => {
       void fetch("/api/vocabulary/preview", {
@@ -618,15 +610,18 @@ export function useLessonCapture({
         body: JSON.stringify({
           text: scriptPopover.selectedText,
           isWord: scriptPopover.selectedWordCount === 1,
-          useAI: false,
         }),
         signal: controller.signal,
       })
-        .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : null))
-        .then((data) => setScriptPopoverPreview(data ?? null))
+        .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : Promise.reject(res)))
+        .then((data: VocabularyPreviewResponse) => {
+          setScriptPopoverPreview(data);
+          setScriptPopoverPreviewError(Boolean(data.translationFailed));
+        })
         .catch((err: unknown) => {
           if (err instanceof DOMException && err.name === "AbortError") return;
           setScriptPopoverPreview(null);
+          setScriptPopoverPreviewError(true);
         })
         .finally(() => setScriptPopoverPreviewLoading(false));
     }, 150);
@@ -637,39 +632,12 @@ export function useLessonCapture({
     };
   }, [scriptPopover]);
 
-  // Explicit opt-in: only spends a Gemini call when the user clicks
-  // "Look up with AI" because the free sources above came back empty.
-  const requestAiLookup = useCallback(() => {
-    if (!scriptPopover) return;
-    setScriptPopoverAiLoading(true);
-    void fetch("/api/vocabulary/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: scriptPopover.selectedText,
-        isWord: scriptPopover.selectedWordCount === 1,
-        useAI: true,
-      }),
-    })
-      .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : null))
-      .then((data) => {
-        if (data) setScriptPopoverPreview(data);
-      })
-      .catch(() => {})
-      .finally(() => setScriptPopoverAiLoading(false));
-  }, [scriptPopover]);
-
   const handleScriptPopoverAction = useCallback(
-    (type: "word" | "phrase" | "sentence" | "explain" | "note") => {
+    (type: "word" | "phrase" | "sentence" | "note") => {
       if (!scriptPopover) return;
       const segment = segmentsByIndex.get(scriptPopover.segmentIndex);
       if (!segment) return;
 
-      if (type === "explain") {
-        setScriptPopoverNoteMode(false);
-        setScriptShowAI(true);
-        return;
-      }
       if (type === "note") {
         setScriptPopoverNoteMode(true);
         window.setTimeout(() => scriptPopoverNoteInputRef.current?.focus(), 10);
@@ -677,7 +645,6 @@ export function useLessonCapture({
       }
 
       setScriptPopoverNoteMode(false);
-      setScriptShowAI(false);
       const textToSave = type === "sentence" ? segment.text : scriptPopover.selectedText;
       // Only reuse the preview when it was fetched for exactly this text —
       // "Save sentence" ignores the selection and saves the whole segment,
@@ -704,8 +671,6 @@ export function useLessonCapture({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     dismissScriptSelection();
-    setScriptShowAI(false);
-    setScriptAiReady(false);
     setScriptPopoverNoteMode(false);
     // A pending delete belongs to the video being left — finalize it rather
     // than silently dropping it just because the user navigated away during
@@ -717,11 +682,6 @@ export function useLessonCapture({
       setPendingDeleteId(null);
     }
   }, [dismissScriptSelection, videoId]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!scriptShowAI) setScriptAiReady(false);
-  }, [scriptShowAI]);
 
   useEffect(() => {
     if (!scriptPopover) return;
@@ -801,12 +761,6 @@ export function useLessonCapture({
   }, [scriptPopover]);
 
   const scriptSelectedType = getSelectedType(scriptPopover?.selectedWordCount ?? 0);
-  const scriptAiPayload = buildAiExplainPayload({
-    selectedType: scriptSelectedType,
-    selectedText: scriptPopover?.selectedText ?? "",
-    sentenceText: scriptPopover?.sentenceText ?? "",
-    userText: scriptPopover?.selectedText ?? "",
-  });
 
   return {
     learningItems,
@@ -822,17 +776,12 @@ export function useLessonCapture({
     scriptPopover,
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
-    scriptPopoverAiLoading,
+    scriptPopoverPreviewError,
     scriptPopoverSavedItem,
     scriptPopoverSavedFeedback,
-    requestAiLookup,
-    scriptShowAI,
-    scriptAiReady,
-    setScriptAiReady,
     scriptPopoverNoteMode,
     setScriptPopoverNoteMode,
     scriptSelectedType,
-    scriptAiPayload,
     scriptPopoverNoteInputRef,
     scriptTextContainerRef,
     reviewTextContainerRef,

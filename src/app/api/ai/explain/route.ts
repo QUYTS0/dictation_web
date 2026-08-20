@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-ai";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { ownsAttempt } from "@/lib/supabase/ownership";
-import { checkRateLimit } from "@/lib/rateLimit";
+import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type { AIExplainRequest, AIExplainResponse } from "@/lib/types";
 
@@ -91,6 +91,20 @@ export async function POST(request: NextRequest) {
           example: cached.example_text ?? "",
         });
       }
+    }
+
+    // Checked here (after the cache lookup above), not at the top of the
+    // route, so a cache hit never spends any of the shared daily budget.
+    const quota = await checkGeminiQuota();
+    if (!quota.allowed) {
+      const message =
+        quota.reason === "rpd"
+          ? "Daily AI quota reached. Try again tomorrow."
+          : "AI is handling too many requests right now. Try again in a moment.";
+      return NextResponse.json(
+        { error: message },
+        { status: 429, headers: quota.retryAfterSec ? { "Retry-After": String(quota.retryAfterSec) } : undefined }
+      );
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
