@@ -180,18 +180,18 @@ export function useLessonCapture({
     [learningItems, pendingDeleteId]
   );
 
-  // Matches the backend's dedupe key (video + segment + normalized term, see
-  // POST /api/vocabulary) so "already saved" only lights up when a save
-  // would actually upsert rather than create a new row.
+  // Case/punctuation-insensitive match (same normalizeVocabularyTerm the
+  // backend dedupes with, see POST /api/vocabulary) against ANY segment in
+  // this video, not just the one currently selected — the point is "have I
+  // already saved this word", which doesn't depend on which sentence it
+  // showed up in this time. Saving again still works normally: the backend
+  // dedupes per-segment, so a match in a different segment just creates a
+  // second row scoped to that sentence rather than blocking anything.
   const scriptPopoverSavedItem = useMemo(() => {
     if (!scriptPopover) return null;
     const normalized = normalizeVocabularyTerm(scriptPopover.selectedText);
     if (!normalized) return null;
-    return (
-      lessonSavedInCurrentVideo.find(
-        (item) => item.segment_index === scriptPopover.segmentIndex && item.normalized_term === normalized
-      ) ?? null
-    );
+    return lessonSavedInCurrentVideo.find((item) => item.normalized_term === normalized) ?? null;
   }, [lessonSavedInCurrentVideo, scriptPopover]);
 
   const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
