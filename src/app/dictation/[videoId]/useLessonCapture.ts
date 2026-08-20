@@ -155,21 +155,6 @@ export function useLessonCapture({
     return lessonSavedInCurrentVideo.filter((item) => item.type === savedFilter);
   }, [lessonSavedInCurrentVideo, savedFilter]);
 
-  const clearScriptSelection = useCallback(() => {
-    const selection = window.getSelection();
-    if (selection && selection.rangeCount > 0) selection.removeAllRanges();
-    setScriptPopover(null);
-  }, []);
-
-  useEffect(() => {
-    if (showScriptContext) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    clearScriptSelection();
-    setScriptPopoverNoteMode(false);
-    setScriptShowAI(false);
-    setScriptAiReady(false);
-  }, [clearScriptSelection, showScriptContext]);
-
   const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     learningNoteDraftRef.current = event.target.value;
   }, []);
@@ -178,6 +163,32 @@ export function useLessonCapture({
     learningNoteDraftRef.current = "";
     if (scriptPopoverNoteInputRef.current) scriptPopoverNoteInputRef.current.value = "";
   }, []);
+
+  const clearScriptSelection = useCallback(() => {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) selection.removeAllRanges();
+    setScriptPopover(null);
+  }, []);
+
+  // Dismissing the popover without saving invalidates any note draft typed
+  // for it — otherwise a note started for one selection can silently leak
+  // onto a later, unrelated save (the draft lives in a ref so it survives
+  // on its own). NOT used from the save action itself: an unauthenticated
+  // save defers through the auth modal, and the draft must still be there
+  // when that deferred save finally runs.
+  const dismissScriptSelection = useCallback(() => {
+    clearScriptSelection();
+    clearLearningNoteInputs();
+  }, [clearScriptSelection, clearLearningNoteInputs]);
+
+  useEffect(() => {
+    if (showScriptContext) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    dismissScriptSelection();
+    setScriptPopoverNoteMode(false);
+    setScriptShowAI(false);
+    setScriptAiReady(false);
+  }, [dismissScriptSelection, showScriptContext]);
 
   const saveLessonCaptureAtSegment = useCallback(
     (
@@ -376,12 +387,14 @@ export function useLessonCapture({
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
         setScriptPopover(null);
+        clearLearningNoteInputs();
         return;
       }
 
       const selectedText = selection.toString().replace(/\s+/g, " ").trim();
       if (!selectedText) {
         setScriptPopover(null);
+        clearLearningNoteInputs();
         return;
       }
 
@@ -419,6 +432,7 @@ export function useLessonCapture({
       setScriptShowAI(false);
       setScriptAiReady(false);
       setScriptPopoverNoteMode(false);
+      clearLearningNoteInputs();
       setScriptPopover({
         segmentIndex,
         selectedText,
@@ -428,7 +442,7 @@ export function useLessonCapture({
         y,
       });
     },
-    [segmentsByIndex]
+    [clearLearningNoteInputs, segmentsByIndex]
   );
 
   const handleScriptMouseUp = useCallback(() => {
@@ -579,11 +593,11 @@ export function useLessonCapture({
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    clearScriptSelection();
+    dismissScriptSelection();
     setScriptShowAI(false);
     setScriptAiReady(false);
     setScriptPopoverNoteMode(false);
-  }, [clearScriptSelection, videoId]);
+  }, [dismissScriptSelection, videoId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -596,13 +610,36 @@ export function useLessonCapture({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        clearScriptSelection();
+        dismissScriptSelection();
         setScriptPopoverNoteMode(false);
       }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [clearScriptSelection, scriptPopover]);
+  }, [dismissScriptSelection, scriptPopover]);
+
+  // Otherwise the popover stays open indefinitely once the user clicks
+  // anywhere that isn't itself (the video, sidebar, background, etc.).
+  useEffect(() => {
+    if (!scriptPopover) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (scriptPopoverRef.current?.contains(event.target as Node)) return;
+      dismissScriptSelection();
+    };
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [dismissScriptSelection, scriptPopover]);
+
+  // The popover's x/y is captured once from the selection's bounding rect at
+  // mouseup time and never recomputed, so scrolling the transcript panel (or
+  // the page) leaves it floating over the wrong line. Capture-phase so it
+  // also catches scroll on nested scrollable containers, which don't bubble.
+  useEffect(() => {
+    if (!scriptPopover) return;
+    const handleScroll = () => dismissScriptSelection();
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", handleScroll, { capture: true });
+  }, [dismissScriptSelection, scriptPopover]);
 
   useEffect(() => {
     if (scriptPopover) {
