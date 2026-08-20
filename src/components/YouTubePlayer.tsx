@@ -17,6 +17,10 @@ interface YouTubePlayerProps {
   onSegmentEnd: (segmentIndex: number) => void;
 }
 
+// Small safety margin subtracted from a segment's start time before seeking, so that
+// YouTube's keyframe-snapping jitter on seekTo() can't clip the first spoken word.
+const SEGMENT_START_PRE_ROLL_SEC = 0.2;
+
 declare global {
   interface Window {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,11 +70,17 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         const seg = segs[idx];
         if (!seg) return;
 
-        // Auto-pause when we reach the end of the active segment
+        // Auto-pause when we reach the end of the active segment. Parked position
+        // matches SEGMENT_START_PRE_ROLL_SEC (not a smaller offset) so that when the
+        // next segment starts — which begins exactly where this one ends — playSegment
+        // doesn't need a small backward seek to reach its pre-roll point. Tiny backward
+        // seeks near the current position are unreliable in YouTube's IFrame API (no
+        // buffering state change fires, so playVideo() can silently resume from the old
+        // position instead), which was clipping the next segment's first word on auto-advance.
         if (time >= seg.end && !isPausedRef.current) {
           isPausedRef.current = true;
           player.pauseVideo();
-          player.seekTo(seg.end - 0.05, true);
+          player.seekTo(Math.max(0, seg.end - SEGMENT_START_PRE_ROLL_SEC), true);
           setCurrentSegmentIndex(idx);
           onSegmentEndRef.current(idx);
         }
@@ -164,7 +174,10 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         if (!seg || !playerRef.current || !playerReadyRef.current) return;
         activeSegmentIdxRef.current = segIdx;
         isPausedRef.current = false;
-        playerRef.current.seekTo(seg.start, true);
+        // YouTube's seekTo() snaps to the nearest keyframe with run-to-run jitter, so
+        // seeking exactly to seg.start sometimes lands a beat past it and clips the
+        // first word. Seeking slightly earlier keeps that jitter on the silent side.
+        playerRef.current.seekTo(Math.max(0, seg.start - SEGMENT_START_PRE_ROLL_SEC), true);
         playerRef.current.playVideo();
       },
       []
