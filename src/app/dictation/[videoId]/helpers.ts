@@ -18,6 +18,15 @@ export function splitSentenceIntoWords(sentence: string) {
   return sentence.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Splits a sentence into alternating word/whitespace tokens (unlike
+ * splitSentenceIntoWords, whitespace is preserved) so each word can be
+ * rendered as its own clickable span while reproducing the original text.
+ */
+export function splitSentenceIntoTokens(sentence: string) {
+  return sentence.split(/(\s+)/).filter((token) => token.length > 0);
+}
+
 export function normalizeComparableText(text: string) {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }

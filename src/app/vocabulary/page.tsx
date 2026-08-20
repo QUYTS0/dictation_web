@@ -29,6 +29,10 @@ export default function VocabularyPage() {
   const [editingTerm, setEditingTerm] = useState("");
   const [editingSentenceContext, setEditingSentenceContext] = useState("");
   const [editingNote, setEditingNote] = useState("");
+  const [editingTranslation, setEditingTranslation] = useState("");
+  const [editingPhonetic, setEditingPhonetic] = useState("");
+  const [editingPartOfSpeech, setEditingPartOfSpeech] = useState("");
+  const [editingDefinition, setEditingDefinition] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
@@ -69,6 +73,10 @@ export default function VocabularyPage() {
     setEditingTerm(item.term);
     setEditingSentenceContext(item.sentence_context);
     setEditingNote(item.note ?? "");
+    setEditingTranslation(item.translation ?? "");
+    setEditingPhonetic(item.phonetic ?? "");
+    setEditingPartOfSpeech(item.part_of_speech ?? "");
+    setEditingDefinition(item.definition ?? "");
   };
 
   const cancelEdit = () => {
@@ -76,6 +84,10 @@ export default function VocabularyPage() {
     setEditingTerm("");
     setEditingSentenceContext("");
     setEditingNote("");
+    setEditingTranslation("");
+    setEditingPhonetic("");
+    setEditingPartOfSpeech("");
+    setEditingDefinition("");
   };
 
   const handleUpdate = async () => {
@@ -91,6 +103,10 @@ export default function VocabularyPage() {
           term: editingTerm,
           sentenceContext: editingSentenceContext,
           note: editingNote,
+          translation: editingTranslation,
+          phonetic: editingPhonetic,
+          partOfSpeech: editingPartOfSpeech,
+          definition: editingDefinition,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; item?: VocabularyItem };
@@ -115,7 +131,9 @@ export default function VocabularyPage() {
       return (
         item.term.toLowerCase().includes(query) ||
         item.sentence_context.toLowerCase().includes(query) ||
-        (item.note ?? "").toLowerCase().includes(query)
+        (item.note ?? "").toLowerCase().includes(query) ||
+        (item.translation ?? "").toLowerCase().includes(query) ||
+        (item.definition ?? "").toLowerCase().includes(query)
       );
     });
   }, [items, searchTerm]);
@@ -229,11 +247,20 @@ export default function VocabularyPage() {
                       className="group flex h-full flex-col rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1"
                     >
                       <div className="mb-4 flex items-start justify-between">
-                        <div>
-                          <h3 className="text-xl font-bold text-slate-900 transition-colors group-hover:text-primary-600">
-                            {item.term}
-                          </h3>
-                          <div className="mt-1 flex items-center gap-2">
+                        <div className="flex items-start gap-3">
+                          {item.image_thumbnail_url && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={item.image_thumbnail_url}
+                              alt=""
+                              className="h-12 w-12 shrink-0 rounded-xl object-cover"
+                            />
+                          )}
+                          <div>
+                            <h3 className="text-xl font-bold text-slate-900 transition-colors group-hover:text-primary-600">
+                              {item.term}
+                            </h3>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
                             <button
                               type="button"
                               className="rounded-md border border-white/40 bg-white/50 p-1 text-slate-400 shadow-sm transition-colors hover:text-primary-500"
@@ -241,9 +268,18 @@ export default function VocabularyPage() {
                             >
                               <Volume2 size={14} />
                             </button>
+                            {item.phonetic && (
+                              <span className="text-xs text-slate-500">{item.phonetic}</span>
+                            )}
+                            {item.part_of_speech && (
+                              <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-700">
+                                {item.part_of_speech}
+                              </span>
+                            )}
                             <span className="rounded-md border border-emerald-200/50 bg-emerald-100/50 px-2 py-0.5 text-xs font-bold text-emerald-600">
                               Saved
                             </span>
+                          </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -277,6 +313,14 @@ export default function VocabularyPage() {
                             onTermChange={setEditingTerm}
                             sentenceContext={editingSentenceContext}
                             onSentenceContextChange={setEditingSentenceContext}
+                            translation={editingTranslation}
+                            onTranslationChange={setEditingTranslation}
+                            phonetic={editingPhonetic}
+                            onPhoneticChange={setEditingPhonetic}
+                            partOfSpeech={editingPartOfSpeech}
+                            onPartOfSpeechChange={setEditingPartOfSpeech}
+                            definition={editingDefinition}
+                            onDefinitionChange={setEditingDefinition}
                             note={editingNote}
                             onNoteChange={setEditingNote}
                             onSave={handleUpdate}
@@ -286,7 +330,15 @@ export default function VocabularyPage() {
                           />
                         ) : (
                           <>
-                            {item.note ? <p className="font-medium leading-relaxed text-slate-700">{item.note}</p> : null}
+                            {item.definition ? (
+                              <p className="text-sm leading-relaxed text-slate-600">{item.definition}</p>
+                            ) : null}
+                            {item.translation ? (
+                              <p className="mt-1 font-medium leading-relaxed text-slate-700">{item.translation}</p>
+                            ) : null}
+                            {item.note ? (
+                              <p className="mt-1 text-sm leading-relaxed text-slate-500">📝 {item.note}</p>
+                            ) : null}
                             <div className="mt-3 rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
                               <p className="line-clamp-3 text-sm italic leading-relaxed text-slate-500">
                                 &quot;{item.sentence_context}&quot;

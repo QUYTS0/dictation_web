@@ -224,6 +224,17 @@ export interface VocabularyItem {
   normalized_term: string;
   sentence_context: string;
   note: string | null;
+  translation: string | null;
+  translation_language: string;
+  translation_source: "free_library" | "gemini" | null;
+  phonetic: string | null;
+  part_of_speech: string | null;
+  definition: string | null;
+  definition_source: "free_dictionary" | "gemini" | null;
+  image_url: string | null;
+  image_thumbnail_url: string | null;
+  image_attribution: string | null;
+  image_source_url: string | null;
   created_at: string;
   next_review_at: string;
   interval_days: number;
@@ -238,6 +249,54 @@ export interface VocabularyRequest {
   term: string;
   sentenceContext: string;
   note?: string;
+  /** Pre-computed by the popover's live preview, to skip a duplicate lookup on save. */
+  translation?: string;
+  translationSource?: "free_library" | "gemini";
+  phonetic?: string;
+  partOfSpeech?: string;
+  definition?: string;
+  definitionSource?: "free_dictionary" | "gemini";
+  imageUrl?: string;
+  imageThumbnailUrl?: string;
+  imageAttribution?: string;
+  imageSourceUrl?: string;
+}
+
+export interface VocabularyUpdateRequest {
+  id: string;
+  term?: string;
+  sentenceContext?: string;
+  note?: string | null;
+  translation?: string | null;
+  phonetic?: string | null;
+  partOfSpeech?: string | null;
+  definition?: string | null;
+}
+
+export interface VocabularyPreviewRequest {
+  text: string;
+  isWord: boolean;
+  /** Explicit opt-in to spend a Gemini call when free sources have nothing. */
+  useAI?: boolean;
+}
+
+export interface VocabularyPreviewResponse {
+  translation: { text: string; source: "free_library" | "gemini" } | null;
+  wordDetails: {
+    phonetic: string | null;
+    partOfSpeech: string | null;
+    definition: string | null;
+    example: string | null;
+    audioUrl: string | null;
+    source: "free_dictionary" | "gemini";
+  } | null;
+  image: {
+    url: string;
+    thumbnailUrl: string;
+    attribution: string;
+    sourceUrl: string;
+    license: string;
+  } | null;
 }
 
 export interface Bookmark {

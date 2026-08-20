@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import type { TranscriptSegment, VocabularyItem } from "@/lib/types";
+import type { TranscriptSegment, VocabularyItem, VocabularyPreviewResponse } from "@/lib/types";
 import {
   SCRIPT_POPOVER_MAX_SIDE_MARGIN_PX,
   SCRIPT_POPOVER_MIN_SIDE_MARGIN_PX,
@@ -53,6 +53,9 @@ export function useLessonCapture({
   const [learningUpdatingId, setLearningUpdatingId] = useState<string | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter>("all");
   const [scriptPopover, setScriptPopover] = useState<ScriptSelectionPopoverState | null>(null);
+  const [scriptPopoverPreview, setScriptPopoverPreview] = useState<VocabularyPreviewResponse | null>(null);
+  const [scriptPopoverPreviewLoading, setScriptPopoverPreviewLoading] = useState(false);
+  const [scriptPopoverAiLoading, setScriptPopoverAiLoading] = useState(false);
   const [scriptShowAI, setScriptShowAI] = useState(false);
   const [scriptAiReady, setScriptAiReady] = useState(false);
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
@@ -68,11 +71,28 @@ export function useLessonCapture({
   // action's own catch block) can call the current implementation without a
   // temporal-dead-zone self-reference.
   const saveLessonCaptureAtSegmentRef = useRef<
-    (text: string, type: LessonItemType, segmentIndex: number, sentenceContext: string) => void
+    (
+      text: string,
+      type: LessonItemType,
+      segmentIndex: number,
+      sentenceContext: string,
+      preview?: VocabularyPreviewResponse | null
+    ) => void
   >(() => {});
   const deleteLessonCaptureRef = useRef<(itemId: string) => void>(() => {});
   const updateLessonCaptureRef = useRef<
-    (itemId: string, values: { term: string; sentenceContext: string; note: string }) => void
+    (
+      itemId: string,
+      values: {
+        term: string;
+        sentenceContext: string;
+        note: string;
+        translation: string;
+        phonetic: string;
+        partOfSpeech: string;
+        definition: string;
+      }
+    ) => void
   >(() => {});
   const fetchSavedItemsRef = useRef<() => void>(() => {});
 
@@ -160,7 +180,13 @@ export function useLessonCapture({
   }, []);
 
   const saveLessonCaptureAtSegment = useCallback(
-    (text: string, type: LessonItemType, segmentIndex: number, sentenceContext: string) => {
+    (
+      text: string,
+      type: LessonItemType,
+      segmentIndex: number,
+      sentenceContext: string,
+      preview?: VocabularyPreviewResponse | null
+    ) => {
       const trimmedText = text.trim();
       if (!trimmedText) return;
 
@@ -178,6 +204,16 @@ export function useLessonCapture({
             term: trimmedText,
             sentenceContext,
             note: saveNote || undefined,
+            translation: preview?.translation?.text,
+            translationSource: preview?.translation?.source,
+            phonetic: preview?.wordDetails?.phonetic ?? undefined,
+            partOfSpeech: preview?.wordDetails?.partOfSpeech ?? undefined,
+            definition: preview?.wordDetails?.definition ?? undefined,
+            definitionSource: preview?.wordDetails?.source,
+            imageUrl: preview?.image?.url,
+            imageThumbnailUrl: preview?.image?.thumbnailUrl,
+            imageAttribution: preview?.image?.attribution,
+            imageSourceUrl: preview?.image?.sourceUrl,
           }),
         })
           .then(async (res) => {
@@ -210,7 +246,8 @@ export function useLessonCapture({
                 : "Failed to save learning item. Please try again.";
             setLearningError(message);
             setLearningErrorRetry(
-              () => () => saveLessonCaptureAtSegmentRef.current(text, type, segmentIndex, sentenceContext)
+              () => () =>
+                saveLessonCaptureAtSegmentRef.current(text, type, segmentIndex, sentenceContext, preview)
             );
           })
           .finally(() => {
@@ -260,7 +297,18 @@ export function useLessonCapture({
   }, [deleteLessonCapture]);
 
   const updateLessonCapture = useCallback(
-    (itemId: string, values: { term: string; sentenceContext: string; note: string }) => {
+    (
+      itemId: string,
+      values: {
+        term: string;
+        sentenceContext: string;
+        note: string;
+        translation: string;
+        phonetic: string;
+        partOfSpeech: string;
+        definition: string;
+      }
+    ) => {
       const nextTerm = values.term.trim();
       const nextSentenceContext = values.sentenceContext.trim();
       requireAuth(() => {
@@ -275,6 +323,10 @@ export function useLessonCapture({
             term: nextTerm,
             sentenceContext: nextSentenceContext,
             note: values.note,
+            translation: values.translation,
+            phonetic: values.phonetic,
+            partOfSpeech: values.partOfSpeech,
+            definition: values.definition,
           }),
         })
           .then(async (res) => {
@@ -387,6 +439,104 @@ export function useLessonCapture({
     handleSelectionMouseUp(reviewTextContainerRef.current);
   }, [handleSelectionMouseUp]);
 
+  /**
+   * A tap (no drag) on a single word should always select just that word,
+   * without needing pixel-precise dragging. If the browser already produced
+   * a real drag selection by the time this fires (mouseup happens after the
+   * selection has already been extended), leave it alone and let the
+   * container's own mouseup handler process it normally — this is what
+   * keeps multi-word phrase/sentence dragging working unchanged.
+   */
+  const handleWordMouseUp = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>, container: HTMLDivElement | null) => {
+      const selection = window.getSelection();
+      const isDragSelection = Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+      if (isDragSelection) return;
+
+      event.stopPropagation();
+      const span = event.currentTarget;
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      handleSelectionMouseUp(container);
+    },
+    [handleSelectionMouseUp]
+  );
+
+  const handleScriptWordMouseUp = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      handleWordMouseUp(event, scriptTextContainerRef.current);
+    },
+    [handleWordMouseUp]
+  );
+
+  // Live translation/dictionary preview for whatever's currently selected —
+  // shown in the popover before the user decides to save anything. Debounced
+  // and abortable so rapidly tapping across several words doesn't pile up
+  // stale requests.
+  useEffect(() => {
+    if (!scriptPopover) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setScriptPopoverPreview(null);
+      setScriptPopoverPreviewLoading(false);
+      setScriptPopoverAiLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setScriptPopoverPreview(null);
+    setScriptPopoverPreviewLoading(true);
+    setScriptPopoverAiLoading(false);
+
+    const timer = window.setTimeout(() => {
+      void fetch("/api/vocabulary/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: scriptPopover.selectedText,
+          isWord: scriptPopover.selectedWordCount === 1,
+          useAI: false,
+        }),
+        signal: controller.signal,
+      })
+        .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : null))
+        .then((data) => setScriptPopoverPreview(data ?? null))
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setScriptPopoverPreview(null);
+        })
+        .finally(() => setScriptPopoverPreviewLoading(false));
+    }, 150);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [scriptPopover]);
+
+  // Explicit opt-in: only spends a Gemini call when the user clicks
+  // "Look up with AI" because the free sources above came back empty.
+  const requestAiLookup = useCallback(() => {
+    if (!scriptPopover) return;
+    setScriptPopoverAiLoading(true);
+    void fetch("/api/vocabulary/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: scriptPopover.selectedText,
+        isWord: scriptPopover.selectedWordCount === 1,
+        useAI: true,
+      }),
+    })
+      .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : null))
+      .then((data) => {
+        if (data) setScriptPopoverPreview(data);
+      })
+      .catch(() => {})
+      .finally(() => setScriptPopoverAiLoading(false));
+  }, [scriptPopover]);
+
   const handleScriptPopoverAction = useCallback(
     (type: "word" | "phrase" | "sentence" | "explain" | "note") => {
       if (!scriptPopover) return;
@@ -406,11 +556,21 @@ export function useLessonCapture({
 
       setScriptPopoverNoteMode(false);
       const textToSave = type === "sentence" ? segment.text : scriptPopover.selectedText;
-      void saveLessonCaptureAtSegment(textToSave, type, segment.segmentIndex, segment.text);
+      // Only reuse the preview when it was fetched for exactly this text —
+      // "Save sentence" ignores the selection and saves the whole segment,
+      // which only matches the preview if the whole segment was selected.
+      const previewMatchesSave = textToSave.trim() === scriptPopover.selectedText.trim();
+      void saveLessonCaptureAtSegment(
+        textToSave,
+        type,
+        segment.segmentIndex,
+        segment.text,
+        previewMatchesSave ? scriptPopoverPreview : null
+      );
       clearScriptSelection();
       setScriptShowAI(false);
     },
-    [clearScriptSelection, saveLessonCaptureAtSegment, scriptPopover, segmentsByIndex]
+    [clearScriptSelection, saveLessonCaptureAtSegment, scriptPopover, scriptPopoverPreview, segmentsByIndex]
   );
 
   useEffect(() => {
@@ -473,6 +633,10 @@ export function useLessonCapture({
     lessonSavedInCurrentVideo,
     filteredSavedItems,
     scriptPopover,
+    scriptPopoverPreview,
+    scriptPopoverPreviewLoading,
+    scriptPopoverAiLoading,
+    requestAiLookup,
     scriptShowAI,
     scriptAiReady,
     setScriptAiReady,
@@ -491,6 +655,7 @@ export function useLessonCapture({
     updateLessonCapture,
     handleScriptMouseUp,
     handleReviewMouseUp,
+    handleScriptWordMouseUp,
     handleScriptPopoverAction,
   };
 }

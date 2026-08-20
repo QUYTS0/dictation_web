@@ -5,6 +5,14 @@ export interface VocabularyEditFormProps {
   onTermChange: (value: string) => void;
   note: string;
   onNoteChange: (value: string) => void;
+  translation?: string;
+  onTranslationChange?: (value: string) => void;
+  phonetic?: string;
+  onPhoneticChange?: (value: string) => void;
+  partOfSpeech?: string;
+  onPartOfSpeechChange?: (value: string) => void;
+  definition?: string;
+  onDefinitionChange?: (value: string) => void;
   sentenceContext?: string;
   onSentenceContextChange?: (value: string) => void;
   onSave: () => void;
@@ -23,6 +31,14 @@ export function VocabularyEditForm({
   onTermChange,
   note,
   onNoteChange,
+  translation,
+  onTranslationChange,
+  phonetic,
+  onPhoneticChange,
+  partOfSpeech,
+  onPartOfSpeechChange,
+  definition,
+  onDefinitionChange,
   sentenceContext,
   onSentenceContextChange,
   onSave,
@@ -65,6 +81,46 @@ export function VocabularyEditForm({
           className={inputClass}
           placeholder="Sentence context"
           aria-label="Edit sentence context"
+        />
+      )}
+      {onTranslationChange && (
+        <input
+          value={translation ?? ""}
+          onChange={(e) => onTranslationChange(e.target.value)}
+          className={inputClass}
+          placeholder="Translation"
+          aria-label="Edit translation"
+        />
+      )}
+      {(onPhoneticChange || onPartOfSpeechChange) && (
+        <div className="flex items-center gap-1.5">
+          {onPhoneticChange && (
+            <input
+              value={phonetic ?? ""}
+              onChange={(e) => onPhoneticChange(e.target.value)}
+              className={clsx(inputClass, "flex-1 min-w-0")}
+              placeholder="Pronunciation (e.g. /ˈhæpi/)"
+              aria-label="Edit pronunciation"
+            />
+          )}
+          {onPartOfSpeechChange && (
+            <input
+              value={partOfSpeech ?? ""}
+              onChange={(e) => onPartOfSpeechChange(e.target.value)}
+              className={clsx(inputClass, "w-28")}
+              placeholder="Part of speech"
+              aria-label="Edit part of speech"
+            />
+          )}
+        </div>
+      )}
+      {onDefinitionChange && (
+        <input
+          value={definition ?? ""}
+          onChange={(e) => onDefinitionChange(e.target.value)}
+          className={inputClass}
+          placeholder="Definition"
+          aria-label="Edit definition"
         />
       )}
       <input

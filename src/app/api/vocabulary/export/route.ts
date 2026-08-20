@@ -19,7 +19,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("vocabulary_items")
-      .select("term, sentence_context, note, video_id")
+      .select("term, sentence_context, note, translation, phonetic, part_of_speech, definition, video_id")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
@@ -30,7 +30,15 @@ export async function GET() {
 
     const rows = [buildCsvRow(["Front", "Back", "Tags"])];
     for (const item of data ?? []) {
-      const back = item.note ? `${item.sentence_context}<br>${item.note}` : item.sentence_context;
+      const pronunciationLine = [item.phonetic, item.part_of_speech].filter(Boolean).join(" · ");
+      const backParts = [
+        pronunciationLine,
+        item.definition,
+        item.translation,
+        item.sentence_context,
+        item.note,
+      ].filter((part): part is string => Boolean(part));
+      const back = backParts.join("<br>");
       rows.push(buildCsvRow([item.term, back, sanitizeAnkiTag(item.video_id)]));
     }
 

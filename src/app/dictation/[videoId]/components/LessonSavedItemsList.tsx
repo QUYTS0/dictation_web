@@ -18,18 +18,37 @@ export function LessonSavedItemsList({
   deletingId: string | null;
   updatingId: string | null;
   onDelete: (itemId: string) => void;
-  onUpdate: (itemId: string, values: { term: string; sentenceContext: string; note: string }) => void;
+  onUpdate: (
+    itemId: string,
+    values: {
+      term: string;
+      sentenceContext: string;
+      note: string;
+      translation: string;
+      phonetic: string;
+      partOfSpeech: string;
+      definition: string;
+    }
+  ) => void;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTerm, setEditingTerm] = useState("");
   const [editingSentenceContext, setEditingSentenceContext] = useState("");
   const [editingNote, setEditingNote] = useState("");
+  const [editingTranslation, setEditingTranslation] = useState("");
+  const [editingPhonetic, setEditingPhonetic] = useState("");
+  const [editingPartOfSpeech, setEditingPartOfSpeech] = useState("");
+  const [editingDefinition, setEditingDefinition] = useState("");
 
   const beginEdit = (item: LessonSavedItem) => {
     setEditingId(item.id);
     setEditingTerm(item.term);
     setEditingSentenceContext(item.sentence_context);
     setEditingNote(item.note ?? "");
+    setEditingTranslation(item.translation ?? "");
+    setEditingPhonetic(item.phonetic ?? "");
+    setEditingPartOfSpeech(item.part_of_speech ?? "");
+    setEditingDefinition(item.definition ?? "");
   };
 
   const cancelEdit = () => {
@@ -37,6 +56,10 @@ export function LessonSavedItemsList({
     setEditingTerm("");
     setEditingSentenceContext("");
     setEditingNote("");
+    setEditingTranslation("");
+    setEditingPhonetic("");
+    setEditingPartOfSpeech("");
+    setEditingDefinition("");
   };
 
   return (
@@ -56,9 +79,19 @@ export function LessonSavedItemsList({
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <span className={clsx("text-sm text-slate-800", compact && "text-xs font-semibold")}>
-              {item.term}
-            </span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              {item.image_thumbnail_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={item.image_thumbnail_url}
+                  alt=""
+                  className="h-6 w-6 shrink-0 rounded object-cover"
+                />
+              )}
+              <span className={clsx("truncate text-sm text-slate-800", compact && "text-xs font-semibold")}>
+                {item.term}
+              </span>
+            </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
                 {item.type}
@@ -116,6 +149,28 @@ export function LessonSavedItemsList({
               </button>
             </div>
           </div>
+          {(item.phonetic || item.part_of_speech) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {item.phonetic && (
+                <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>{item.phonetic}</span>
+              )}
+              {item.part_of_speech && (
+                <span className="rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700">
+                  {item.part_of_speech}
+                </span>
+              )}
+            </div>
+          )}
+          {item.definition && (
+            <span className={clsx("text-xs text-slate-600", compact && "text-[11px] line-clamp-2")}>
+              {item.definition}
+            </span>
+          )}
+          {item.translation && (
+            <span className={clsx("text-sm font-medium text-primary-700", compact && "text-xs")}>
+              {item.translation}
+            </span>
+          )}
           <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>
             Sentence {item.segment_index + 1}
           </span>
@@ -133,6 +188,14 @@ export function LessonSavedItemsList({
                 onTermChange={setEditingTerm}
                 sentenceContext={editingSentenceContext}
                 onSentenceContextChange={setEditingSentenceContext}
+                translation={editingTranslation}
+                onTranslationChange={setEditingTranslation}
+                phonetic={editingPhonetic}
+                onPhoneticChange={setEditingPhonetic}
+                partOfSpeech={editingPartOfSpeech}
+                onPartOfSpeechChange={setEditingPartOfSpeech}
+                definition={editingDefinition}
+                onDefinitionChange={setEditingDefinition}
                 note={editingNote}
                 onNoteChange={setEditingNote}
                 onSave={() =>
@@ -140,6 +203,10 @@ export function LessonSavedItemsList({
                     term: editingTerm,
                     sentenceContext: editingSentenceContext,
                     note: editingNote,
+                    translation: editingTranslation,
+                    phonetic: editingPhonetic,
+                    partOfSpeech: editingPartOfSpeech,
+                    definition: editingDefinition,
                   })
                 }
                 onCancel={cancelEdit}

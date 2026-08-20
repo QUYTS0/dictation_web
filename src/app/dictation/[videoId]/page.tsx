@@ -17,6 +17,12 @@ import {
   Bookmark,
   MapPin,
   Sparkles,
+  Type,
+  Quote,
+  AlignLeft,
+  StickyNote,
+  Loader2,
+  Volume2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -43,7 +49,7 @@ import { LessonSavedItemsList } from "./components/LessonSavedItemsList";
 import { BookmarksList } from "./components/BookmarksList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
 import { SCRIPT_POPOVER_MAX_WIDTH_PX, SCRIPT_CONTEXT_NEXT_COUNT, SCRIPT_CONTEXT_PREVIOUS_COUNT, VIDEO_SIZE_MODE_CLASS } from "./constants";
-import { getSavedFilterLabel, buildComparedTokens } from "./helpers";
+import { getSavedFilterLabel, buildComparedTokens, splitSentenceIntoTokens } from "./helpers";
 import type { SavedFilter, RightPanelTab } from "./types";
 
 // ---- Page component ----
@@ -272,7 +278,12 @@ export default function DictationPage({ params }: PageProps) {
     updateLessonCapture,
     handleScriptMouseUp,
     handleReviewMouseUp,
+    handleScriptWordMouseUp,
     handleScriptPopoverAction,
+    scriptPopoverPreview,
+    scriptPopoverPreviewLoading,
+    scriptPopoverAiLoading,
+    requestAiLookup,
   } = useLessonCapture({
     videoId,
     user,
@@ -926,7 +937,21 @@ export default function DictationPage({ params }: PageProps) {
                               <span className="uppercase tracking-widest text-[9px]">Sentence #{segment.segmentIndex + 1}</span>
                               {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
                             </div>
-                            <p className={`text-sm leading-relaxed select-text ${isCurrentScriptSentence ? "text-slate-900 dark:text-white font-medium" : "text-slate-600 dark:text-slate-400"}`}>{segment.text}</p>
+                            <p className={`text-sm leading-relaxed select-text ${isCurrentScriptSentence ? "text-slate-900 dark:text-white font-medium" : "text-slate-600 dark:text-slate-400"}`}>
+                              {splitSentenceIntoTokens(segment.text).map((token, tokenIdx) =>
+                                token.trim() ? (
+                                  <span
+                                    key={tokenIdx}
+                                    onMouseUp={handleScriptWordMouseUp}
+                                    className="cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-primary-100/70 dark:hover:bg-primary-500/20"
+                                  >
+                                    {token}
+                                  </span>
+                                ) : (
+                                  token
+                                )
+                              )}
+                            </p>
                           </div>
                         );
                       })}
@@ -967,88 +992,206 @@ export default function DictationPage({ params }: PageProps) {
           </div>
         )}
 
-        {scriptPopover && (
-          <div
-            ref={scriptPopoverRef}
-            className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-lg border border-slate-200 bg-white shadow-lg p-2 flex flex-wrap gap-1.5"
-            style={{ left: scriptPopover.x, top: scriptPopover.y, maxWidth: `${SCRIPT_POPOVER_MAX_WIDTH_PX}px` }}
-            tabIndex={0}
-            role="dialog"
-            aria-modal="false"
-            aria-label="Script selection actions"
-            aria-describedby="script-selection-actions-help"
-          >
-            <button
-              onClick={() => handleScriptPopoverAction("word")}
-              disabled={scriptPopover.selectedWordCount !== 1 || learningSaving}
-              className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
+        <AnimatePresence>
+          {scriptPopover && (
+            <motion.div
+              ref={scriptPopoverRef}
+              initial={{ opacity: 0, scale: 0.92, y: 4 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 4 }}
+              transition={{ duration: 0.12 }}
+              className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-2xl border border-white/60 bg-white/90 p-2.5 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/90 flex flex-wrap items-center gap-1.5"
+              style={{ left: scriptPopover.x, top: scriptPopover.y, maxWidth: `${SCRIPT_POPOVER_MAX_WIDTH_PX}px` }}
+              tabIndex={0}
+              role="dialog"
+              aria-modal="false"
+              aria-label="Script selection actions"
+              aria-describedby="script-selection-actions-help"
             >
-              Save word
-            </button>
-            <button
-              onClick={() => handleScriptPopoverAction("phrase")}
-              disabled={scriptPopover.selectedWordCount < 2 || learningSaving}
-              className="px-2 py-1 text-[11px] rounded border border-slate-300 disabled:opacity-40"
-            >
-              Save phrase
-            </button>
-            <button
-              onClick={() => handleScriptPopoverAction("sentence")}
-              disabled={learningSaving}
-              className="px-2 py-1 text-[11px] rounded border border-slate-300"
-            >
-              Save sentence
-            </button>
-            <button
-              onClick={() => {
-                const segment = segments.find((s) => s.segmentIndex === scriptPopover.segmentIndex);
-                if (!segment) return;
-                requireAuth(() => {
-                  void toggleBookmark(segment.segmentIndex, segment.start, segment.text).catch(() => {});
-                });
-              }}
-              className={clsx(
-                "px-2 py-1 text-[11px] rounded border",
-                bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex)
-                  ? "border-amber-300 text-amber-700 bg-amber-50"
-                  : "border-slate-300"
-              )}
-            >
-              {bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex) ? "Bookmarked" : "Bookmark"}
-            </button>
-            <button
-              onClick={() => handleScriptPopoverAction("explain")}
-              className="px-2 py-1 text-[11px] rounded border border-violet-300 text-violet-700 bg-violet-50"
-            >
-              Explain
-            </button>
-            <button
-              onClick={() => handleScriptPopoverAction("note")}
-              className="px-2 py-1 text-[11px] rounded border border-slate-300"
-            >
-              Add note
-            </button>
-            {scriptPopoverNoteMode && (
-              <div className="w-full pt-1 flex items-center gap-1.5">
-                <input
-                  ref={scriptPopoverNoteInputRef}
-                  onChange={handleLearningNoteChange}
-                  placeholder="Optional note"
-                  className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                />
-                <button
-                  onClick={() => setScriptPopoverNoteMode(false)}
-                  className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
-                >
-                  Done
-                </button>
+              {(() => {
+                const isWordSelection = scriptPopover.selectedWordCount === 1;
+                const missingFreeResult =
+                  !scriptPopoverPreviewLoading &&
+                  (!scriptPopoverPreview?.translation || (isWordSelection && !scriptPopoverPreview?.wordDetails));
+
+                return (
+                  <div className="w-full rounded-xl bg-slate-50/80 px-2.5 py-2 dark:bg-white/5">
+                    {scriptPopoverPreviewLoading ? (
+                      <div className="h-3.5 w-24 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
+                    ) : scriptPopoverPreview?.wordDetails ? (
+                      <div className="flex items-start gap-2">
+                        {scriptPopoverPreview.image && (
+                          <img
+                            src={scriptPopoverPreview.image.thumbnailUrl}
+                            alt={scriptPopover.selectedText}
+                            className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                          />
+                        )}
+                        <div className="flex min-w-0 flex-1 flex-col gap-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-sm font-semibold text-slate-800 dark:text-white">
+                              {scriptPopover.selectedText}
+                            </span>
+                            {scriptPopoverPreview.wordDetails.phonetic && (
+                              <span className="text-xs text-slate-500 dark:text-slate-400">
+                                {scriptPopoverPreview.wordDetails.phonetic}
+                              </span>
+                            )}
+                            {scriptPopoverPreview.wordDetails.audioUrl && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const audioUrl = scriptPopoverPreview.wordDetails?.audioUrl;
+                                  if (audioUrl) void new Audio(audioUrl).play().catch(() => {});
+                                }}
+                                className="text-slate-400 transition-colors hover:text-primary-600"
+                                aria-label="Play pronunciation"
+                              >
+                                <Volume2 size={13} />
+                              </button>
+                            )}
+                            {scriptPopoverPreview.wordDetails.partOfSpeech && (
+                              <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700 dark:bg-primary-500/15 dark:text-primary-300">
+                                {scriptPopoverPreview.wordDetails.partOfSpeech}
+                              </span>
+                            )}
+                          </div>
+                          {scriptPopoverPreview.wordDetails.definition && (
+                            <p className="line-clamp-2 text-xs leading-snug text-slate-600 dark:text-slate-300">
+                              {scriptPopoverPreview.wordDetails.definition}
+                            </p>
+                          )}
+                          {scriptPopoverPreview.translation && (
+                            <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
+                              {scriptPopoverPreview.translation.text}
+                            </p>
+                          )}
+                          {scriptPopoverPreview.image && (
+                            <a
+                              href={scriptPopoverPreview.image.sourceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="truncate text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            >
+                              {scriptPopoverPreview.image.attribution}
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ) : scriptPopoverPreview?.translation ? (
+                      <p className="text-sm font-medium text-primary-700 dark:text-primary-300">
+                        {scriptPopoverPreview.translation.text}
+                      </p>
+                    ) : null}
+
+                    {missingFreeResult && (
+                      <button
+                        type="button"
+                        onClick={requestAiLookup}
+                        disabled={scriptPopoverAiLoading}
+                        className="mt-1 flex items-center gap-1 text-xs font-medium text-violet-600 transition-colors hover:text-violet-800 disabled:opacity-50 dark:text-violet-400"
+                      >
+                        {scriptPopoverAiLoading ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={12} />
+                        )}
+                        {scriptPopoverAiLoading ? "Looking up…" : "Look up with AI"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="flex items-center gap-1 rounded-xl bg-slate-100/70 p-1 dark:bg-white/5">
+                {learningSaving ? (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    <Loader2 size={13} className="animate-spin" />
+                    Saving…
+                  </span>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => handleScriptPopoverAction("word")}
+                      disabled={scriptPopover.selectedWordCount !== 1}
+                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-300 dark:hover:bg-white/10"
+                      title="Save word"
+                    >
+                      <Type size={13} /> Word
+                    </button>
+                    <button
+                      onClick={() => handleScriptPopoverAction("phrase")}
+                      disabled={scriptPopover.selectedWordCount < 2}
+                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-300 dark:hover:bg-white/10"
+                      title="Save phrase"
+                    >
+                      <Quote size={13} /> Phrase
+                    </button>
+                    <button
+                      onClick={() => handleScriptPopoverAction("sentence")}
+                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 dark:text-slate-300 dark:hover:bg-white/10"
+                      title="Save sentence"
+                    >
+                      <AlignLeft size={13} /> Sentence
+                    </button>
+                  </>
+                )}
               </div>
-            )}
-            <span id="script-selection-actions-help" className="sr-only">
-              Actions for selected script text: save word, phrase, sentence, explain, or add note.
-            </span>
-          </div>
-        )}
+
+              <button
+                onClick={() => {
+                  const segment = segments.find((s) => s.segmentIndex === scriptPopover.segmentIndex);
+                  if (!segment) return;
+                  requireAuth(() => {
+                    void toggleBookmark(segment.segmentIndex, segment.start, segment.text).catch(() => {});
+                  });
+                }}
+                className={clsx(
+                  "flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                  bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex)
+                    ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+                    : "border-white/60 text-slate-600 hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+                )}
+              >
+                <Bookmark size={13} />
+                {bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex) ? "Bookmarked" : "Bookmark"}
+              </button>
+
+              <button
+                onClick={() => handleScriptPopoverAction("explain")}
+                className="flex items-center gap-1 rounded-xl border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+              >
+                <Sparkles size={13} /> Explain
+              </button>
+
+              <button
+                onClick={() => handleScriptPopoverAction("note")}
+                className="flex items-center gap-1 rounded-xl border border-white/60 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+              >
+                <StickyNote size={13} /> Note
+              </button>
+
+              {scriptPopoverNoteMode && (
+                <div className="flex w-full items-center gap-1.5 pt-1">
+                  <input
+                    ref={scriptPopoverNoteInputRef}
+                    onChange={handleLearningNoteChange}
+                    placeholder="Optional note"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:focus:ring-primary-500/20"
+                  />
+                  <button
+                    onClick={() => setScriptPopoverNoteMode(false)}
+                    className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] text-slate-600 dark:border-white/10 dark:text-slate-300"
+                  >
+                    <Check size={13} />
+                  </button>
+                </div>
+              )}
+              <span id="script-selection-actions-help" className="sr-only">
+                Actions for selected script text: save word, phrase, sentence, explain, or add note.
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       {scriptShowAI && scriptPopover && (
