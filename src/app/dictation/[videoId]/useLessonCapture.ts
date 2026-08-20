@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import type { TranscriptSegment, VocabularyItem, VocabularyPreviewResponse } from "@/lib/types";
+import { normalizeVocabularyTerm } from "@/lib/utils/vocabulary";
 import {
   SCRIPT_POPOVER_MAX_SIDE_MARGIN_PX,
   SCRIPT_POPOVER_MIN_SIDE_MARGIN_PX,
@@ -59,6 +60,8 @@ export function useLessonCapture({
   const [scriptShowAI, setScriptShowAI] = useState(false);
   const [scriptAiReady, setScriptAiReady] = useState(false);
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
+  const [scriptPopoverSavedFeedback, setScriptPopoverSavedFeedback] = useState<LessonItemType | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   // Intentionally ref-only: keeps typing smooth without rerendering the
   // entire lesson screen on every note keystroke.
@@ -67,6 +70,15 @@ export function useLessonCapture({
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
   const reviewTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
+  const scriptPopoverSavedFeedbackTimeoutRef = useRef<number | null>(null);
+  // A pending delete is finalized after a grace period (see
+  // requestDeleteLessonCapture); these mirror pendingDeleteId so cleanup
+  // effects can read the latest value without depending on the state itself.
+  const pendingDeleteTimeoutRef = useRef<number | null>(null);
+  const pendingDeleteIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    pendingDeleteIdRef.current = pendingDeleteId;
+  }, [pendingDeleteId]);
   // Latest-callback refs so a failed action's retry closure (built inside the
   // action's own catch block) can call the current implementation without a
   // temporal-dead-zone self-reference.
@@ -146,14 +158,41 @@ export function useLessonCapture({
     return fetchSavedItems();
   }, [user, videoId, fetchSavedItems]);
 
+  // Excludes an item that's either still in its post-delete undo grace
+  // period (pendingDeleteId) or whose grace period just ended and whose real
+  // DELETE is now in flight (learningDeletingId) — without the second check,
+  // the item would flash back into the list for the moment between the
+  // grace period ending and the fetch actually resolving.
   const lessonSavedInCurrentVideo = useMemo(
-    () => learningItems.filter((item) => item.video_id === videoId),
-    [learningItems, videoId]
+    () =>
+      learningItems.filter(
+        (item) => item.video_id === videoId && item.id !== pendingDeleteId && item.id !== learningDeletingId
+      ),
+    [learningItems, videoId, pendingDeleteId, learningDeletingId]
   );
   const filteredSavedItems = useMemo(() => {
     if (savedFilter === "all") return lessonSavedInCurrentVideo;
     return lessonSavedInCurrentVideo.filter((item) => item.type === savedFilter);
   }, [lessonSavedInCurrentVideo, savedFilter]);
+
+  const pendingDeleteItem = useMemo(
+    () => (pendingDeleteId ? (learningItems.find((item) => item.id === pendingDeleteId) ?? null) : null),
+    [learningItems, pendingDeleteId]
+  );
+
+  // Matches the backend's dedupe key (video + segment + normalized term, see
+  // POST /api/vocabulary) so "already saved" only lights up when a save
+  // would actually upsert rather than create a new row.
+  const scriptPopoverSavedItem = useMemo(() => {
+    if (!scriptPopover) return null;
+    const normalized = normalizeVocabularyTerm(scriptPopover.selectedText);
+    if (!normalized) return null;
+    return (
+      lessonSavedInCurrentVideo.find(
+        (item) => item.segment_index === scriptPopover.segmentIndex && item.normalized_term === normalized
+      ) ?? null
+    );
+  }, [lessonSavedInCurrentVideo, scriptPopover]);
 
   const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     learningNoteDraftRef.current = event.target.value;
@@ -170,6 +209,14 @@ export function useLessonCapture({
     setScriptPopover(null);
   }, []);
 
+  const clearScriptPopoverSavedFeedback = useCallback(() => {
+    if (scriptPopoverSavedFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(scriptPopoverSavedFeedbackTimeoutRef.current);
+      scriptPopoverSavedFeedbackTimeoutRef.current = null;
+    }
+    setScriptPopoverSavedFeedback(null);
+  }, []);
+
   // Dismissing the popover without saving invalidates any note draft typed
   // for it — otherwise a note started for one selection can silently leak
   // onto a later, unrelated save (the draft lives in a ref so it survives
@@ -179,7 +226,8 @@ export function useLessonCapture({
   const dismissScriptSelection = useCallback(() => {
     clearScriptSelection();
     clearLearningNoteInputs();
-  }, [clearScriptSelection, clearLearningNoteInputs]);
+    clearScriptPopoverSavedFeedback();
+  }, [clearScriptSelection, clearLearningNoteInputs, clearScriptPopoverSavedFeedback]);
 
   useEffect(() => {
     if (showScriptContext) return;
@@ -246,9 +294,20 @@ export function useLessonCapture({
             });
             clearLearningNoteInputs();
             onAfterSave();
-            if (type !== "sentence") {
-              clearScriptSelection();
+            // Show a brief confirmation in the popover instead of vanishing
+            // instantly — word/phrase then auto-close; sentence stays open
+            // (matches the "keep selecting from here" flow for sentences).
+            setScriptPopoverSavedFeedback(type);
+            if (scriptPopoverSavedFeedbackTimeoutRef.current !== null) {
+              window.clearTimeout(scriptPopoverSavedFeedbackTimeoutRef.current);
             }
+            scriptPopoverSavedFeedbackTimeoutRef.current = window.setTimeout(() => {
+              scriptPopoverSavedFeedbackTimeoutRef.current = null;
+              setScriptPopoverSavedFeedback(null);
+              if (type !== "sentence") {
+                clearScriptSelection();
+              }
+            }, 700);
           })
           .catch((err: unknown) => {
             const message =
@@ -272,7 +331,10 @@ export function useLessonCapture({
     saveLessonCaptureAtSegmentRef.current = saveLessonCaptureAtSegment;
   }, [saveLessonCaptureAtSegment]);
 
-  const deleteLessonCapture = useCallback(
+  // The actual network delete. Not called directly from the UI — reached
+  // either after the undo grace period elapses (requestDeleteLessonCapture)
+  // or immediately when a second delete supersedes a still-pending one.
+  const finalizeDelete = useCallback(
     (itemId: string) => {
       requireAuth(() => {
         setLearningDeletingId(itemId);
@@ -304,8 +366,51 @@ export function useLessonCapture({
     [requireAuth]
   );
   useEffect(() => {
-    deleteLessonCaptureRef.current = deleteLessonCapture;
-  }, [deleteLessonCapture]);
+    deleteLessonCaptureRef.current = finalizeDelete;
+  }, [finalizeDelete]);
+
+  // Optimistically hides the item (via pendingDeleteId, filtered out of
+  // lessonSavedInCurrentVideo above) and only calls the real DELETE after a
+  // grace period, so "Undo" needs no network round-trip and can't lose data
+  // to a partial re-create. Only one delete can be pending at a time; a
+  // second delete finalizes whichever was already pending immediately
+  // instead of dropping it, keeping the undo toast to a single item.
+  const requestDeleteLessonCapture = useCallback((itemId: string) => {
+    if (pendingDeleteTimeoutRef.current !== null) {
+      window.clearTimeout(pendingDeleteTimeoutRef.current);
+      pendingDeleteTimeoutRef.current = null;
+    }
+    const previousPendingId = pendingDeleteIdRef.current;
+    if (previousPendingId && previousPendingId !== itemId) {
+      deleteLessonCaptureRef.current(previousPendingId);
+    }
+    setPendingDeleteId(itemId);
+    pendingDeleteTimeoutRef.current = window.setTimeout(() => {
+      pendingDeleteTimeoutRef.current = null;
+      setPendingDeleteId(null);
+      deleteLessonCaptureRef.current(itemId);
+    }, 5000);
+  }, []);
+
+  const undoDeleteLessonCapture = useCallback(() => {
+    if (pendingDeleteTimeoutRef.current !== null) {
+      window.clearTimeout(pendingDeleteTimeoutRef.current);
+      pendingDeleteTimeoutRef.current = null;
+    }
+    setPendingDeleteId(null);
+  }, []);
+
+  // Navigating away with a delete still pending shouldn't silently undo the
+  // user's action — finalize it rather than losing it.
+  useEffect(() => {
+    return () => {
+      if (pendingDeleteTimeoutRef.current !== null) {
+        window.clearTimeout(pendingDeleteTimeoutRef.current);
+        pendingDeleteTimeoutRef.current = null;
+        if (pendingDeleteIdRef.current) deleteLessonCaptureRef.current(pendingDeleteIdRef.current);
+      }
+    };
+  }, []);
 
   const updateLessonCapture = useCallback(
     (
@@ -388,6 +493,7 @@ export function useLessonCapture({
       if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
         setScriptPopover(null);
         clearLearningNoteInputs();
+        clearScriptPopoverSavedFeedback();
         return;
       }
 
@@ -395,6 +501,7 @@ export function useLessonCapture({
       if (!selectedText) {
         setScriptPopover(null);
         clearLearningNoteInputs();
+        clearScriptPopoverSavedFeedback();
         return;
       }
 
@@ -433,6 +540,7 @@ export function useLessonCapture({
       setScriptAiReady(false);
       setScriptPopoverNoteMode(false);
       clearLearningNoteInputs();
+      clearScriptPopoverSavedFeedback();
       setScriptPopover({
         segmentIndex,
         selectedText,
@@ -442,7 +550,7 @@ export function useLessonCapture({
         y,
       });
     },
-    [clearLearningNoteInputs, segmentsByIndex]
+    [clearLearningNoteInputs, clearScriptPopoverSavedFeedback, segmentsByIndex]
   );
 
   const handleScriptMouseUp = useCallback(() => {
@@ -569,11 +677,15 @@ export function useLessonCapture({
       }
 
       setScriptPopoverNoteMode(false);
+      setScriptShowAI(false);
       const textToSave = type === "sentence" ? segment.text : scriptPopover.selectedText;
       // Only reuse the preview when it was fetched for exactly this text —
       // "Save sentence" ignores the selection and saves the whole segment,
       // which only matches the preview if the whole segment was selected.
       const previewMatchesSave = textToSave.trim() === scriptPopover.selectedText.trim();
+      // Closing (or not, for sentences) is handled by the save's success
+      // handler after a brief "Saved" confirmation — see
+      // saveLessonCaptureAtSegment.
       void saveLessonCaptureAtSegment(
         textToSave,
         type,
@@ -581,10 +693,8 @@ export function useLessonCapture({
         segment.text,
         previewMatchesSave ? scriptPopoverPreview : null
       );
-      clearScriptSelection();
-      setScriptShowAI(false);
     },
-    [clearScriptSelection, saveLessonCaptureAtSegment, scriptPopover, scriptPopoverPreview, segmentsByIndex]
+    [saveLessonCaptureAtSegment, scriptPopover, scriptPopoverPreview, segmentsByIndex]
   );
 
   useEffect(() => {
@@ -597,6 +707,15 @@ export function useLessonCapture({
     setScriptShowAI(false);
     setScriptAiReady(false);
     setScriptPopoverNoteMode(false);
+    // A pending delete belongs to the video being left — finalize it rather
+    // than silently dropping it just because the user navigated away during
+    // the undo grace period.
+    if (pendingDeleteTimeoutRef.current !== null) {
+      window.clearTimeout(pendingDeleteTimeoutRef.current);
+      pendingDeleteTimeoutRef.current = null;
+      if (pendingDeleteIdRef.current) deleteLessonCaptureRef.current(pendingDeleteIdRef.current);
+      setPendingDeleteId(null);
+    }
   }, [dismissScriptSelection, videoId]);
 
   useEffect(() => {
@@ -617,6 +736,37 @@ export function useLessonCapture({
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [dismissScriptSelection, scriptPopover]);
+
+  // W/P/S quick-save shortcuts while the popover is open. Guarded against
+  // typing targets (the note <input> lives inside this same popover and
+  // accepts those letters as text) and against note mode generally, in case
+  // focus isn't literally on the input.
+  useEffect(() => {
+    if (!scriptPopover) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target;
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (isTypingTarget || scriptPopoverNoteMode) return;
+
+      const key = e.key.toLowerCase();
+      if (key === "w" && scriptPopover.selectedWordCount === 1) {
+        e.preventDefault();
+        handleScriptPopoverAction("word");
+      } else if (key === "p" && scriptPopover.selectedWordCount >= 2) {
+        e.preventDefault();
+        handleScriptPopoverAction("phrase");
+      } else if (key === "s") {
+        e.preventDefault();
+        handleScriptPopoverAction("sentence");
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [scriptPopover, scriptPopoverNoteMode, handleScriptPopoverAction]);
 
   // Otherwise the popover stays open indefinitely once the user clicks
   // anywhere that isn't itself (the video, sidebar, background, etc.).
@@ -673,6 +823,8 @@ export function useLessonCapture({
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverAiLoading,
+    scriptPopoverSavedItem,
+    scriptPopoverSavedFeedback,
     requestAiLookup,
     scriptShowAI,
     scriptAiReady,
@@ -688,7 +840,9 @@ export function useLessonCapture({
     clearScriptSelection,
     handleLearningNoteChange,
     saveLessonCaptureAtSegment,
-    deleteLessonCapture,
+    pendingDeleteItem,
+    requestDeleteLessonCapture,
+    undoDeleteLessonCapture,
     updateLessonCapture,
     handleScriptMouseUp,
     handleReviewMouseUp,

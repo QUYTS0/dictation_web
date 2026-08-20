@@ -23,6 +23,7 @@ import {
   StickyNote,
   Loader2,
   Volume2,
+  Undo2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -274,7 +275,9 @@ export default function DictationPage({ params }: PageProps) {
     reviewTextContainerRef,
     scriptPopoverRef,
     handleLearningNoteChange,
-    deleteLessonCapture,
+    pendingDeleteItem,
+    requestDeleteLessonCapture,
+    undoDeleteLessonCapture,
     updateLessonCapture,
     handleScriptMouseUp,
     handleReviewMouseUp,
@@ -283,6 +286,9 @@ export default function DictationPage({ params }: PageProps) {
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverAiLoading,
+    scriptPopoverSavedItem,
+    scriptPopoverSavedFeedback,
+    scriptSelectedType,
     requestAiLookup,
   } = useLessonCapture({
     videoId,
@@ -844,7 +850,7 @@ export default function DictationPage({ params }: PageProps) {
                       scrollClassName="h-full"
                       deletingId={learningDeletingId}
                       updatingId={learningUpdatingId}
-                      onDelete={deleteLessonCapture}
+                      onDelete={requestDeleteLessonCapture}
                       onUpdate={updateLessonCapture}
                     />
                   )}
@@ -1008,6 +1014,11 @@ export default function DictationPage({ params }: PageProps) {
               aria-label="Script selection actions"
               aria-describedby="script-selection-actions-help"
             >
+              {scriptPopoverSavedItem && (
+                <div className="flex w-full items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
+                  <Check size={12} /> Already saved as {scriptPopoverSavedItem.type}
+                </div>
+              )}
               {(() => {
                 const isWordSelection = scriptPopover.selectedWordCount === 1;
                 const missingFreeResult =
@@ -1103,7 +1114,12 @@ export default function DictationPage({ params }: PageProps) {
                 );
               })()}
               <div className="flex items-center gap-1 rounded-xl bg-slate-100/70 p-1 dark:bg-white/5">
-                {learningSaving ? (
+                {scriptPopoverSavedFeedback ? (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <Check size={13} />
+                    Saved
+                  </span>
+                ) : learningSaving ? (
                   <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                     <Loader2 size={13} className="animate-spin" />
                     Saving…
@@ -1113,23 +1129,33 @@ export default function DictationPage({ params }: PageProps) {
                     <button
                       onClick={() => handleScriptPopoverAction("word")}
                       disabled={scriptPopover.selectedWordCount !== 1}
-                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-300 dark:hover:bg-white/10"
-                      title="Save word"
+                      className={clsx(
+                        "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
+                        scriptSelectedType === "word"
+                          ? "bg-white text-primary-700 ring-1 ring-primary-300 dark:bg-white/10 dark:text-primary-300"
+                          : "text-slate-600 hover:bg-white hover:text-primary-700 dark:text-slate-300"
+                      )}
+                      title="Save word (W)"
                     >
                       <Type size={13} /> Word
                     </button>
                     <button
                       onClick={() => handleScriptPopoverAction("phrase")}
                       disabled={scriptPopover.selectedWordCount < 2}
-                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-300 dark:hover:bg-white/10"
-                      title="Save phrase"
+                      className={clsx(
+                        "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
+                        scriptSelectedType === "phrase"
+                          ? "bg-white text-primary-700 ring-1 ring-primary-300 dark:bg-white/10 dark:text-primary-300"
+                          : "text-slate-600 hover:bg-white hover:text-primary-700 dark:text-slate-300"
+                      )}
+                      title="Save phrase (P)"
                     >
                       <Quote size={13} /> Phrase
                     </button>
                     <button
                       onClick={() => handleScriptPopoverAction("sentence")}
                       className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 dark:text-slate-300 dark:hover:bg-white/10"
-                      title="Save sentence"
+                      title="Save sentence (S)"
                     >
                       <AlignLeft size={13} /> Sentence
                     </button>
@@ -1187,7 +1213,8 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
               )}
               <span id="script-selection-actions-help" className="sr-only">
-                Actions for selected script text: save word, phrase, sentence, explain, or add note.
+                Actions for selected script text: save word, phrase, sentence, explain, or add note. Keyboard
+                shortcuts W, P, and S save word, phrase, and sentence respectively.
               </span>
             </motion.div>
           )}
@@ -1209,6 +1236,28 @@ export default function DictationPage({ params }: PageProps) {
           )}
         </div>
       )}
+
+      <AnimatePresence>
+        {pendingDeleteItem && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.15 }}
+            role="status"
+            className="fixed bottom-4 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border border-white/60 bg-slate-900/90 px-4 py-2 text-xs font-medium text-white shadow-xl backdrop-blur-xl dark:border-white/10"
+          >
+            <span className="max-w-[14rem] truncate">Removed &ldquo;{pendingDeleteItem.term}&rdquo;</span>
+            <button
+              type="button"
+              onClick={undoDeleteLessonCapture}
+              className="flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 font-semibold text-indigo-300 transition-colors hover:bg-white/20 hover:text-indigo-200"
+            >
+              <Undo2 size={12} /> Undo
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
