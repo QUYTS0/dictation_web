@@ -23,7 +23,9 @@ import {
   StickyNote,
   Loader2,
   Volume2,
+  VolumeX,
   Undo2,
+  Flame,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -39,16 +41,26 @@ import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { useAuth, useRequireAuth } from "@/context/auth";
 import { useManualTranscriptPaste } from "./useManualTranscriptPaste";
 import { useVideoSizeMode } from "./useVideoSizeMode";
+import { useSoundPreference } from "./useSoundPreference";
+import { useStreak } from "./useStreak";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
 import { useBookmarks } from "@/hooks/useBookmarks";
+import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 
 import { ControlButton } from "./components/ControlButton";
 import { LessonSavedItemsList } from "./components/LessonSavedItemsList";
 import { BookmarksList } from "./components/BookmarksList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
-import { SCRIPT_POPOVER_MAX_WIDTH_PX, SCRIPT_CONTEXT_NEXT_COUNT, SCRIPT_CONTEXT_PREVIOUS_COUNT, VIDEO_SIZE_MODE_CLASS } from "./constants";
+import { ConfettiBurst } from "./components/ConfettiBurst";
+import {
+  SCRIPT_POPOVER_MAX_WIDTH_PX,
+  SCRIPT_CONTEXT_NEXT_COUNT,
+  SCRIPT_CONTEXT_PREVIOUS_COUNT,
+  VIDEO_SIZE_MODE_CLASS,
+  COMBO_MILESTONE_INTERVAL,
+} from "./constants";
 import { getSavedFilterLabel, buildComparedTokens, splitSentenceIntoTokens } from "./helpers";
 import type { SavedFilter, RightPanelTab } from "./types";
 
@@ -79,6 +91,8 @@ export default function DictationPage({ params }: PageProps) {
   const [bookmarkDeletingId, setBookmarkDeletingId] = useState<string | null>(null);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
+  const { soundEnabled, setSoundEnabled } = useSoundPreference();
+  const { streakDays } = useStreak(user);
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
   const previousShowVideoRef = useRef(showVideo);
@@ -90,6 +104,11 @@ export default function DictationPage({ params }: PageProps) {
     setCheckResult,
     hintLevel,
     setHintLevel,
+    combo,
+    bestCombo,
+    cleanSolveCount,
+    isLastResultClean,
+    previousRunSnapshot,
     mistakes,
     resumeState,
     resumeLoading,
@@ -332,6 +351,18 @@ export default function DictationPage({ params }: PageProps) {
       : "error"
     : "idle";
 
+  // Play a confirmation chime on each correct answer (a brighter tone on combo milestones).
+  // Fires once per successful check result (a fresh object each time), not on every render.
+  useEffect(() => {
+    if (!checkResult?.isCorrect || !soundEnabled) return;
+    if (combo > 0 && combo % COMBO_MILESTONE_INTERVAL === 0) {
+      playComboMilestoneChime();
+    } else {
+      playCorrectChime();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkResult]);
+
   // ---- Render ----
   return (
     <div className="relative h-screen overflow-hidden flex flex-col w-full bg-[#f4f7ff] font-sans text-slate-900 antialiased">
@@ -366,7 +397,15 @@ export default function DictationPage({ params }: PageProps) {
                   <span className="text-xs text-slate-500">{sentenceProgressLabel}</span>
                 </div>
               </div>
-              <UserButton />
+              <div className="flex shrink-0 items-center gap-3">
+                {user && streakDays > 0 && (
+                  <div className="hidden items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1 text-orange-600 sm:flex">
+                    <Flame size={14} className="fill-orange-500/20" />
+                    <span className="text-xs font-semibold">{streakDays} day streak</span>
+                  </div>
+                )}
+                <UserButton />
+              </div>
             </div>
           </motion.header>
         )}
@@ -452,10 +491,17 @@ export default function DictationPage({ params }: PageProps) {
                   onClick={handleToggleCurrentBookmark}
                   disabled={!currentSegment}
                 />
+                <ControlButton
+                  icon={soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  shortcut="Sound"
+                  label={soundEnabled ? "Sound on" : "Sound off"}
+                  active={soundEnabled}
+                  onClick={() => setSoundEnabled(!soundEnabled)}
+                />
               </div>
               {segments.length > 0 && (
                 <div className="flex-1 min-w-0">
-                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
+                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} combo={combo} />
                 </div>
               )}
             </div>
@@ -619,12 +665,25 @@ export default function DictationPage({ params }: PageProps) {
                             key="success"
                             role="status"
                             aria-live="polite"
-                            initial={{ opacity: 0, scale: 0.8 }}
+                            initial={{ opacity: 0, scale: 0.5 }}
                             animate={{ opacity: 1, scale: 1 }}
-                            className="bg-emerald-500 text-white p-2 rounded-xl flex items-center shadow-lg"
+                            transition={{ type: "spring", stiffness: 400, damping: 15 }}
+                            className="relative bg-emerald-500 text-white p-2 rounded-xl flex items-center shadow-lg"
                           >
                             <Check size={20} strokeWidth={3} />
                             <span className="sr-only">Correct</span>
+                            <AnimatePresence>
+                              {isLastResultClean && (
+                                <motion.span
+                                  initial={{ opacity: 0, y: 4, scale: 0.8 }}
+                                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  className="absolute -top-7 right-0 whitespace-nowrap rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-bold text-amber-900 shadow"
+                                >
+                                  ⚡ First try
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
                           </motion.div>
                         ) : workspaceStatus === "error" ? (
                           <motion.button
@@ -755,11 +814,43 @@ export default function DictationPage({ params }: PageProps) {
             </AnimatePresence>
 
             {uxState === "session_completed" && (
-              <div className="rounded-xl border border-indigo-300/60 bg-indigo-50/50 backdrop-blur-md p-6 flex flex-col gap-4 mt-6">
+              <div className="relative overflow-hidden rounded-xl border border-indigo-300/60 bg-indigo-50/50 backdrop-blur-md p-6 flex flex-col gap-4 mt-6">
+                {(mistakes.length === 0 || (previousRunSnapshot && accuracy > previousRunSnapshot.accuracy)) && (
+                  <ConfettiBurst />
+                )}
                 <div className="text-center">
                   <p className="text-3xl">🎉</p>
                   <p className="text-indigo-700 font-bold text-xl">Session Complete!</p>
                   <p className="text-slate-600 text-sm mt-1">Final accuracy: <span className="font-bold">{accuracy}%</span> over {sessionStore.totalAttempts} attempts.</p>
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs font-semibold">
+                    {bestCombo > 1 && (
+                      <span className="rounded-full bg-orange-100 px-3 py-1 text-orange-700">
+                        🔥 Best streak: {bestCombo} in a row
+                      </span>
+                    )}
+                    <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
+                      ⚡ {cleanSolveCount}/{segments.length} sentences on the first try
+                    </span>
+                    {previousRunSnapshot && (
+                      <span
+                        className={clsx(
+                          "rounded-full px-3 py-1",
+                          accuracy > previousRunSnapshot.accuracy
+                            ? "bg-emerald-100 text-emerald-700"
+                            : accuracy < previousRunSnapshot.accuracy
+                            ? "bg-slate-200 text-slate-600"
+                            : "bg-slate-100 text-slate-600"
+                        )}
+                      >
+                        {accuracy > previousRunSnapshot.accuracy
+                          ? `+${accuracy - previousRunSnapshot.accuracy}%`
+                          : accuracy < previousRunSnapshot.accuracy
+                          ? `${accuracy - previousRunSnapshot.accuracy}%`
+                          : "Same as"}{" "}
+                        vs your last run ({previousRunSnapshot.accuracy}%)
+                      </span>
+                    )}
+                  </div>
                 </div>
                 {mistakes.length > 0 ? (
                   <div className="flex flex-col gap-2">

@@ -48,6 +48,16 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [checkAnswerError, setCheckAnswerError] = useState<string | null>(null);
+  // Consecutive "clean" solves (correct on the first try, no hint used). Resets on any wrong submit.
+  const [combo, setCombo] = useState(0);
+  const [bestCombo, setBestCombo] = useState(0);
+  const [cleanSolveCount, setCleanSolveCount] = useState(0);
+  const [isLastResultClean, setIsLastResultClean] = useState(false);
+  // Snapshot of the user's last *completed* run on this video, captured before this
+  // visit's autosave can overwrite that row — used for the "vs last run" recap comparison.
+  const [previousRunSnapshot, setPreviousRunSnapshot] = useState<{ accuracy: number; totalAttempts: number } | null>(
+    null
+  );
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -189,6 +199,15 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
         sessionStore.incrementAttempt(result.isCorrect);
 
         if (result.isCorrect) {
+          const isClean = wrongAttempts === 0 && hintLevel === 0;
+          setIsLastResultClean(isClean);
+          if (isClean) {
+            setCleanSolveCount((c) => c + 1);
+            const nextCombo = combo + 1;
+            setCombo(nextCombo);
+            setBestCombo((best) => Math.max(best, nextCombo));
+          }
+
           const firstAttemptText = (firstAttemptBySegmentRef.current[currentSegIdx] ?? userText).trim();
           const firstAttemptReview = evaluateAnswer(
             segments[currentSegIdx].text,
@@ -221,6 +240,8 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
         } else {
           const newWrong = wrongAttempts + 1;
           setWrongAttempts(newWrong);
+          setCombo(0);
+          setIsLastResultClean(false);
           // Record first mistake for this segment (deduplicated by segIdx)
           const segText = segments[currentSegIdx].text;
           setMistakes((prev) =>
@@ -245,7 +266,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
         setUxState("paused_waiting_input");
       }
     },
-    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts]
+    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo]
   );
 
   // ---- Start session (seek to segment 0 and play) ----
@@ -337,6 +358,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     setMistakes([]);
     setPreviousReview(null);
     setResumeState(null);
+    setCombo(0);
+    setBestCombo(0);
+    setCleanSolveCount(0);
+    setIsLastResultClean(false);
     firstAttemptBySegmentRef.current = {};
 
     try {
@@ -357,6 +382,14 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     fetchResumeSession(videoId)
       .then((data) => {
         if (data.session) {
+          // Only a fully completed prior run is a fair "vs last run" baseline —
+          // an interrupted "active" session reflects partial progress, not a full attempt.
+          if (data.session.status === "completed" && data.session.totalAttempts > 0) {
+            setPreviousRunSnapshot({
+              accuracy: data.session.accuracy,
+              totalAttempts: data.session.totalAttempts,
+            });
+          }
           setResumeState({
             sessionId: data.session.sessionId,
             currentSegmentIndex: data.session.currentSegmentIndex,
@@ -444,6 +477,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       .then(() => {
         firstAttemptBySegmentRef.current = {};
         setResumeState(null);
+        setCombo(0);
+        setBestCombo(0);
+        setCleanSolveCount(0);
+        setIsLastResultClean(false);
         sessionStore.reset();
       })
       .catch(() => {});
@@ -457,6 +494,11 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     wrongAttempts,
     hintLevel,
     setHintLevel,
+    combo,
+    bestCombo,
+    cleanSolveCount,
+    isLastResultClean,
+    previousRunSnapshot,
     mistakes,
     resumeState,
     resumeLoading,
