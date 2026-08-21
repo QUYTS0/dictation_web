@@ -19,6 +19,7 @@ interface SessionState {
   setHintLevel: (level: HintLevel) => void;
   incrementAttempt: (isCorrect: boolean) => void;
   resetAttempts: () => void;
+  hydrateAccuracy: (totalAttempts: number, correctCount: number) => void;
   setLastError: (error: string | null) => void;
   setAiExplanation: (explanation: string | null) => void;
   reset: () => void;
@@ -48,6 +49,7 @@ export const useSessionStore = create<SessionState>()(
           correctCount: isCorrect ? s.correctCount + 1 : s.correctCount,
         })),
       resetAttempts: () => set({ attemptCount: 0 }),
+      hydrateAccuracy: (totalAttempts, correctCount) => set({ totalAttempts, correctCount }),
       setLastError: (error) => set({ lastError: error }),
       setAiExplanation: (explanation) => set({ aiExplanation: explanation }),
       reset: () =>

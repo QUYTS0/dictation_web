@@ -68,6 +68,13 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     resumeLoadedRef.current = false;
     setResumeState(null);
     firstAttemptBySegmentRef.current = {};
+    // The session store (sessionId, attempt/correct counts) is global and
+    // persisted, so it must be wiped whenever the active video changes —
+    // otherwise the accuracy shown for this video is actually the running
+    // accuracy carried over from whatever video was practiced previously,
+    // and a stale sessionId could get reused to save progress against the
+    // wrong video's session row.
+    useSessionStore.getState().reset();
   }, [videoId, user?.id]);
 
   // ---- Transcript query ----
@@ -395,6 +402,13 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     if (!resumeState || segments.length === 0) return;
     const segIdx = Math.min(Math.max(resumeState.currentSegmentIndex, 0), segments.length - 1);
     sessionStore.setSessionId(resumeState.sessionId);
+    // Restore this video's own accuracy tally so continued practice blends
+    // with what was already recorded, instead of starting from the counts
+    // left over from whatever the store last held.
+    sessionStore.hydrateAccuracy(
+      resumeState.totalAttempts,
+      Math.round((resumeState.accuracy / 100) * resumeState.totalAttempts)
+    );
     currentSegIdxRef.current = segIdx;
     setCurrentSegIdx(segIdx);
     setResumeState(null);
@@ -430,7 +444,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       .then(() => {
         firstAttemptBySegmentRef.current = {};
         setResumeState(null);
-        sessionStore.setSessionId(null);
+        sessionStore.reset();
       })
       .catch(() => {});
   }, [resumeState?.sessionId, sessionStore, user, videoId]);
