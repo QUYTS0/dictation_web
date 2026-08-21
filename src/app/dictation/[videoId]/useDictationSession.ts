@@ -57,6 +57,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   // Ref mirror of currentSegIdx — lets handleSegmentEnd guard against stale
   // callbacks that fire after the user has already submitted early and advanced.
   const currentSegIdxRef = useRef(0);
+  // Mirror of uxState — lets the visibility/pagehide autosave below check
+  // "has the user actually started practicing" without re-registering its
+  // listeners on every state change.
+  const uxStateRef = useRef<UXState>("loading_transcript");
   const resumeLoadedRef = useRef(false);
   const firstAttemptBySegmentRef = useRef<Record<number, string>>({});
 
@@ -104,6 +108,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       setUxState("transcript_failed");
     }
   }, [transcriptStatus, transcriptQuery.isLoading, segments.length]);
+
+  useEffect(() => {
+    uxStateRef.current = uxState;
+  }, [uxState]);
 
   // ---- Segment end handler (called by YouTubePlayer) ----
   const handleSegmentEnd = useCallback((segIdx: number) => {
@@ -346,6 +354,9 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
             sessionId: data.session.sessionId,
             currentSegmentIndex: data.session.currentSegmentIndex,
             videoCurrentTimeSec: data.session.videoCurrentTimeSec,
+            status: data.session.status,
+            accuracy: data.session.accuracy,
+            totalAttempts: data.session.totalAttempts,
           });
         }
       })
@@ -359,7 +370,16 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   // ---- Autosave when tab is hidden / page is being closed ----
   useEffect(() => {
     if (!user) return;
-    const persist = () => triggerAutoSave(currentSegIdxRef.current, "active");
+    const persist = () => {
+      // Only autosave if dictation practice actually started this visit —
+      // otherwise merely opening a video and switching tabs/closing it
+      // spawns a fresh "active" session at segment 0, which then shows up
+      // as bogus in-progress state even for a video the user already
+      // completed (or never touched).
+      const practicingStates: UXState[] = ["playing", "paused_waiting_input", "checking_answer"];
+      if (!practicingStates.includes(uxStateRef.current)) return;
+      triggerAutoSave(currentSegIdxRef.current, "active");
+    };
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") persist();
     };

@@ -514,23 +514,46 @@ export default function DictationPage({ params }: PageProps) {
             {uxState === "transcript_ready" && segments.length > 0 && (
               <div className="rounded-xl border border-emerald-300/60 bg-emerald-50/50 backdrop-blur-md p-4 flex flex-col gap-3 mb-4">
                 <p className="text-emerald-700 font-semibold">Transcript ready - {segments.length} sentences</p>
-                <p className="text-sm text-slate-600">Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.</p>
-                <div className="flex items-center gap-3 mt-1">
-                  {resumeState ? (
-                    <>
-                      <button onClick={handleResume} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
-                        Resume at sentence {resumeState.currentSegmentIndex + 1}
-                      </button>
+                {resumeState?.status === "completed" ? (
+                  <>
+                    <p className="text-sm text-slate-600">
+                      You already completed this video with{" "}
+                      <span className="font-semibold">{resumeState.accuracy}% accuracy</span> over{" "}
+                      {resumeState.totalAttempts} attempts.
+                    </p>
+                    <div className="flex items-center gap-3 mt-1">
+                      <Link
+                        href={`/results/${resumeState.sessionId}`}
+                        className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors"
+                      >
+                        View Results
+                      </Link>
                       <button onClick={handleRestart} className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">
-                        Restart
+                        Practice Again
                       </button>
-                    </>
-                  ) : (
-                    <button onClick={handleStart} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
-                      Start Dictation
-                    </button>
-                  )}
-                </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-slate-600">Press the button below to start. The video will play each sentence one at a time and pause so you can type what you heard.</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      {resumeState ? (
+                        <>
+                          <button onClick={handleResume} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
+                            Resume at sentence {resumeState.currentSegmentIndex + 1}
+                          </button>
+                          <button onClick={handleRestart} className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors">
+                            Restart
+                          </button>
+                        </>
+                      ) : (
+                        <button onClick={handleStart} className="px-6 py-2 rounded-xl bg-indigo-600 text-white font-semibold text-sm hover:bg-indigo-700 transition-colors">
+                          Start Dictation
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
                 {resumeLoading && <p className="text-xs text-slate-500">Checking for saved progress...</p>}
               </div>
             )}
@@ -755,9 +778,19 @@ export default function DictationPage({ params }: PageProps) {
                 ) : (
                   <p className="text-emerald-600 text-sm font-medium text-center">Perfect session - no mistakes!</p>
                 )}
-                <Link href="/" className="mt-2 inline-block rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center">
-                  Try another video
-                </Link>
+                <div className="mt-2 flex items-center justify-center gap-3">
+                  {sessionStore.sessionId && (
+                    <Link
+                      href={`/results/${sessionStore.sessionId}`}
+                      className="rounded-xl border border-indigo-300 text-indigo-700 px-6 py-2 font-semibold hover:bg-indigo-50 transition-colors text-center"
+                    >
+                      View full report
+                    </Link>
+                  )}
+                  <Link href="/" className="rounded-xl bg-indigo-600 text-white px-6 py-2 font-semibold hover:bg-indigo-700 transition-colors text-center">
+                    Try another video
+                  </Link>
+                </div>
               </div>
             )}
           </div>

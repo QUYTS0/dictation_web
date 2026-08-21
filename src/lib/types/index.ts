@@ -212,7 +212,79 @@ export interface ResumeSessionResponse {
     accuracy: number;
     totalAttempts: number;
     updatedAt: string;
+    status: "active" | "completed" | "abandoned";
   } | null;
+}
+
+// ---- Session results / report ----
+
+export interface SessionReportMistake {
+  segmentIndex: number;
+  expectedText: string;
+  userText: string;
+  errorType: ErrorType | null;
+  attempts: number;
+  /** The most recent wrong attempt for this segment — used to request/cache an AI explanation. */
+  attemptId: string;
+  /** Pre-loaded from `ai_feedback` when this attempt was already explained before. */
+  aiFeedback: { explanation: string; correctedText: string; example: string } | null;
+}
+
+export interface SessionReportResponse {
+  session: {
+    id: string;
+    videoId: string;
+    videoTitle: string | null;
+    status: "active" | "completed" | "abandoned";
+    accuracy: number;
+    totalAttempts: number;
+    currentSegmentIndex: number;
+    totalSegments: number | null;
+    startedAt: string;
+    updatedAt: string;
+    durationSec: number;
+    /** Pre-loaded from `learning_sessions.ai_assessment` when this session was already assessed before. */
+    assessment: SessionAssessment | null;
+    assessmentGeneratedAt: string | null;
+  };
+  errorBreakdown: Array<{ errorType: ErrorType; count: number; percentage: number }>;
+  mistakes: SessionReportMistake[];
+}
+
+export type SessionExplainAllItemStatus = "explained" | "duplicate" | "minor";
+
+export interface SessionExplainAllItem {
+  attemptId: string;
+  status: SessionExplainAllItemStatus;
+  /** Populated when status is "explained". */
+  explanation: string;
+  correctedText: string;
+  example: string;
+  tip?: string;
+  /** Populated when status is "duplicate" — the segment (1-based) carrying the full explanation. */
+  duplicateOfSegmentIndex?: number;
+  /** Short note shown instead of the full card for "duplicate" / "minor". */
+  note?: string;
+}
+
+export interface SessionAssessment {
+  /** One-sentence overall verdict on the session, e.g. "Solid session with a few recurring slip-ups." */
+  verdict: string;
+  strengths: string[];
+  weaknesses: string[];
+  recommendation: string;
+}
+
+export interface SessionExplainAllResponse {
+  items: SessionExplainAllItem[];
+  /** A structured overall performance review — reviews every mistake in the session, uncapped. */
+  assessment: SessionAssessment | null;
+  /** Total mistakes (not deduped) the assessment was based on. */
+  mistakesReviewed: number;
+  /** How many distinct mistake patterns were sent to Gemini for a full explanation. */
+  uniquePatternsExplained: number;
+  /** True when there were more distinct patterns than the per-request cap — only the first batch got a full explanation. */
+  truncated: boolean;
 }
 
 export interface VocabularyItem {

@@ -39,16 +39,21 @@ export async function GET() {
         60
     );
     const allSessionIds = (sessions ?? []).map((s) => s.id);
-    const activeSessions = (sessions ?? [])
-      .filter((s) => s.status === "active")
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
-    const latestSessionByVideoId = new Map<string, (typeof activeSessions)[number]>();
-    for (const session of activeSessions) {
+    // Latest session per video regardless of status — a video whose most
+    // recent session is "completed" must still surface (as completed) here,
+    // otherwise reopening it silently creates a fresh "active" row that then
+    // looks like abandoned progress. See resumableSessions' `status` field,
+    // which callers use to route to /results (completed) vs /dictation (active).
+    const sortedSessions = [...(sessions ?? [])].sort(
+      (a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)
+    );
+    const latestSessionByVideoId = new Map<string, (typeof sortedSessions)[number]>();
+    for (const session of sortedSessions) {
       if (!latestSessionByVideoId.has(session.youtube_video_id)) {
         latestSessionByVideoId.set(session.youtube_video_id, session);
       }
     }
-    const recentSessions = [...latestSessionByVideoId.values()].slice(0, 4);
+    const recentSessions = [...latestSessionByVideoId.values()].slice(0, 10);
     const recentVideoIds = [...new Set(recentSessions.map((s) => s.youtube_video_id))];
     const recentSessionIds = recentSessions.map((s) => s.id);
 
@@ -130,6 +135,7 @@ export async function GET() {
       currentSegmentIndex: Number(session.current_segment_index ?? 0),
       totalAttempts: Number(session.total_attempts ?? 0),
       mistakesCount: mistakeCountBySessionId[session.id] ?? 0,
+      status: session.status as "active" | "completed" | "abandoned",
     }));
 
     return NextResponse.json({

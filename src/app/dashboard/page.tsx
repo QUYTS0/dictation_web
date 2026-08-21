@@ -24,6 +24,7 @@ import MetricCard from "@/components/MetricCard";
 import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
+import { formatMinutesAsHm } from "@/lib/utils/time";
 import type { ErrorType } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
@@ -113,6 +114,7 @@ interface DashboardData {
     currentSegmentIndex: number;
     totalAttempts: number;
     mistakesCount: number;
+    status: "active" | "completed" | "abandoned";
   }>;
 }
 const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
@@ -195,7 +197,11 @@ export default function DashboardPage() {
     enabled: !!userId,
   });
 
-  const firstSession = dashboardData?.resumableSessions[0] ?? null;
+  const activeSessions = useMemo(
+    () => dashboardData?.resumableSessions.filter((session) => session.status === "active") ?? [],
+    [dashboardData]
+  );
+  const firstSession = activeSessions[0] ?? null;
   const latestMistakeSession = useMemo(
     () => dashboardData?.resumableSessions.find((session) => session.mistakesCount > 0) ?? null,
     [dashboardData]
@@ -283,8 +289,8 @@ export default function DashboardPage() {
                     Welcome back, {user.email?.split("@")[0] ?? "Learner"}
                   </h1>
                   <p className="text-sm text-slate-500">
-                    You have {dashboardData.resumableSessions.length} active session
-                    {dashboardData.resumableSessions.length === 1 ? "" : "s"}.
+                    You have {activeSessions.length} active session
+                    {activeSessions.length === 1 ? "" : "s"}.
                   </p>
                 </div>
                 <div className="flex gap-2 rounded-2xl border border-white/80 bg-white/60 p-2 shadow-md backdrop-blur-md">
@@ -307,7 +313,7 @@ export default function DashboardPage() {
               <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
                 <MetricCard title="Completed Videos" value={String(dashboardData.completedVideos)} icon={<PlayCircle size={20} />} />
                 <MetricCard title="Avg. Accuracy" value={`${dashboardData.avgAccuracy}%`} icon={<CheckCircle2 size={20} />} positive />
-                <MetricCard title="Practice Time" value={`${dashboardData.totalPracticeMinutes}m`} icon={<Clock size={20} />} />
+                <MetricCard title="Practice Time" value={formatMinutesAsHm(dashboardData.totalPracticeMinutes)} icon={<Clock size={20} />} />
                 <MetricCard title="Vocab Saved" value={String(dashboardData.vocabularyCount)} icon={<BookOpen size={20} />} trend={dashboardData.vocabularyCount > 0 ? `+${dashboardData.vocabularyCount} words` : undefined} />
               </section>
 
@@ -320,7 +326,9 @@ export default function DashboardPage() {
 
                     {!firstSession ? (
                       <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
-                        No recent sessions yet.
+                        {dashboardData.resumableSessions.length > 0
+                          ? "No sessions in progress — nice work! Check History below to revisit past results."
+                          : "No recent sessions yet."}
                       </div>
                     ) : (
                       <Link
@@ -401,9 +409,34 @@ export default function DashboardPage() {
                     ) : (
                       <ul className="space-y-2">
                         {dashboardData.resumableSessions.slice(0, MAX_DASHBOARD_HISTORY_SESSIONS).map((session) => (
-                          <li key={session.sessionId} className="rounded-xl border border-white/60 bg-white/50 p-3 text-sm backdrop-blur-md">
-                            <p className="font-medium text-slate-800">{session.videoTitle ?? `Video ${session.videoId}`}</p>
-                            <p className="text-xs text-slate-500">Last practiced {new Date(session.updatedAt).toLocaleString()}</p>
+                          <li key={session.sessionId}>
+                            <Link
+                              href={
+                                session.status === "completed"
+                                  ? `/results/${session.sessionId}`
+                                  : `/dictation/${session.videoId}`
+                              }
+                              className="flex items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/50 p-3 text-sm backdrop-blur-md transition-colors hover:bg-white/80"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate font-medium text-slate-800">
+                                  {session.videoTitle ?? `Video ${session.videoId}`}
+                                </p>
+                                <p className="text-xs text-slate-500">
+                                  Last practiced {new Date(session.updatedAt).toLocaleString()}
+                                </p>
+                              </div>
+                              <span
+                                className={clsx(
+                                  "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                                  session.status === "completed"
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : "bg-primary-50 text-primary-600"
+                                )}
+                              >
+                                {session.status === "completed" ? "Completed" : "In progress"}
+                              </span>
+                            </Link>
                           </li>
                         ))}
                       </ul>
@@ -432,7 +465,11 @@ export default function DashboardPage() {
                               You made {latestMistakeSession.mistakesCount} mistakes in your most recent challenge.
                             </p>
                             <Link
-                              href={`/dictation/${latestMistakeSession.videoId}`}
+                              href={
+                                latestMistakeSession.status === "completed"
+                                  ? `/results/${latestMistakeSession.sessionId}`
+                                  : `/dictation/${latestMistakeSession.videoId}`
+                              }
                               className="block w-full rounded-xl bg-white py-2 text-center text-sm font-bold text-indigo-600 shadow-lg shadow-indigo-900/20"
                             >
                               Review Lesson

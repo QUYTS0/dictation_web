@@ -15,6 +15,7 @@ import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
 import type { ErrorType } from "@/lib/types";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
+import { formatMinutesAsHm } from "@/lib/utils/time";
 
 interface DashboardData {
   completedVideos: number;
@@ -36,6 +37,7 @@ interface DashboardData {
     currentSegmentIndex: number;
     totalAttempts: number;
     mistakesCount: number;
+    status: "active" | "completed" | "abandoned";
   }>;
 }
 
@@ -58,13 +60,6 @@ interface MistakesResponse {
 }
 
 const MISTAKES_PAGE_SIZE = 10;
-
-function formatPracticeMinutes(totalMinutes: number) {
-  if (totalMinutes < 60) return `${totalMinutes}m`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return `${hours}h ${minutes}m`;
-}
 
 export default function HistoryPage() {
   const { user, loading, openAuthModal } = useAuth();
@@ -195,7 +190,7 @@ export default function HistoryPage() {
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Total Time</p>
                       <p className="text-lg font-black leading-none text-slate-800">
-                        {formatPracticeMinutes(dashboardData.totalPracticeMinutes)}
+                        {formatMinutesAsHm(dashboardData.totalPracticeMinutes)}
                       </p>
                     </div>
                   </div>
@@ -223,7 +218,10 @@ export default function HistoryPage() {
                       transition={{ delay: idx * 0.1 }}
                       className="group relative rounded-3xl border border-white/60 bg-white/40 p-4 shadow-lg transition-all hover:-translate-y-1 backdrop-blur-xl sm:p-5"
                     >
-                      <Link href={`/dictation/${item.videoId}`} className="flex cursor-pointer flex-col gap-5 sm:flex-row">
+                      <Link
+                        href={item.status === "completed" ? `/results/${item.sessionId}` : `/dictation/${item.videoId}`}
+                        className="flex cursor-pointer flex-col gap-5 sm:flex-row"
+                      >
                         <div className="relative w-full shrink-0 overflow-hidden rounded-2xl bg-slate-800 shadow-md sm:w-56">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -249,9 +247,20 @@ export default function HistoryPage() {
                                 <ChevronRight size={20} />
                               </span>
                             </div>
-                            <p className="mb-3 text-sm font-medium text-slate-500">
-                              {item.mistakesCount > 0 ? `${item.mistakesCount} mistakes to review` : "No mistakes logged"}
-                            </p>
+                            <div className="mb-3 flex items-center gap-2">
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  item.status === "completed"
+                                    ? "bg-emerald-50 text-emerald-600"
+                                    : "bg-primary-50 text-primary-600"
+                                }`}
+                              >
+                                {item.status === "completed" ? "Completed" : "In progress"}
+                              </span>
+                              <p className="text-sm font-medium text-slate-500">
+                                {item.mistakesCount > 0 ? `${item.mistakesCount} mistakes to review` : "No mistakes logged"}
+                              </p>
+                            </div>
                           </div>
 
                           <div>

@@ -18,14 +18,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
+    // Fetch the latest session regardless of status (not just "active") so a
+    // finished video reports its completed session back to the caller instead
+    // of looking like a brand-new video — see resumeState.status handling in
+    // useDictationSession, which is what stops a stale "in progress" row
+    // from being spawned every time a completed video is reopened.
     const { data, error } = await supabase
       .from("learning_sessions")
       .select(
-        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at"
+        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status"
       )
       .eq("user_id", user.id)
       .eq("youtube_video_id", videoId)
-      .eq("status", "active")
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -44,6 +48,7 @@ export async function GET(request: NextRequest) {
             accuracy: Number(data.accuracy ?? 0),
             totalAttempts: data.total_attempts ?? 0,
             updatedAt: data.updated_at,
+            status: data.status as "active" | "completed" | "abandoned",
           }
         : null,
     };

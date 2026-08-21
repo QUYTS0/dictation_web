@@ -41,4 +41,7 @@ export interface ResumeState {
   sessionId: string;
   currentSegmentIndex: number;
   videoCurrentTimeSec: number;
+  status: "active" | "completed" | "abandoned";
+  accuracy: number;
+  totalAttempts: number;
 }
