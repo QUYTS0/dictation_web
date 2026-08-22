@@ -46,6 +46,9 @@ const LEVEL_DESIGN: Record<ActiveLevel, Design> = {
   6: "infernoHalo",
 };
 
+/** Level 6 tile pulse cycle length (1.2s scale + 0.3s repeatDelay) — shared with InfernoPulseGlints so the front glints fire in sync with the box's own pulse. */
+const INFERNO_TILE_CYCLE = 1.5;
+
 /**
  * Each design's ring/particle cycle length (duration + repeatDelay) is
  * shared with that level's tile motion below, so the box's own pulse and
@@ -191,6 +194,41 @@ function InfernoHaloEffect({ color }: { color: LevelColor }) {
   );
 }
 
+/**
+ * Small bright glints that flash right on top of the tile (z-20, above the
+ * z-10 box) timed to the same 1.5s cycle as level 6's tile pulse (1.2s
+ * scale + 0.3s repeatDelay, see INFERNO_TILE_CYCLE) — a quick "release"
+ * blink at the start of every pulse rather than a constant flicker, and
+ * placed close enough to the center to actually read as being on the box
+ * instead of hidden behind it or lost further out.
+ */
+function InfernoPulseGlints() {
+  const points: [number, number][] = [
+    [-15, -13],
+    [15, -13],
+    [0, 15],
+  ];
+  return (
+    <>
+      {points.map(([dx, dy], i) => (
+        <motion.span
+          key={i}
+          className="absolute z-20 h-1.5 w-1.5 rounded-full bg-white"
+          style={{ top: "50%", left: "50%", marginLeft: dx, marginTop: dy, boxShadow: "0 0 8px 3px rgba(255,255,255,0.95)" }}
+          animate={{ opacity: [0, 1, 0, 0], scale: [0, 1.6, 0.8, 0] }}
+          transition={{
+            duration: INFERNO_TILE_CYCLE,
+            times: [0, 0.1, 0.22, 1],
+            repeat: Infinity,
+            delay: i * 0.15,
+            ease: "easeOut",
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
 const DESIGN_EFFECT: Record<Design, (props: { color: LevelColor }) => ReactElement> = {
   sparkBurst: SparkBurstEffect,
   softPulseRing: SoftPulseRingEffect,
@@ -305,6 +343,8 @@ export function ComboStreak({ combo }: ComboStreakProps) {
             {combo}
           </span>
         </motion.div>
+
+        {design === "infernoHalo" && <InfernoPulseGlints key={`glints-${combo}`} />}
       </div>
       <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
         <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">Streak</span>
