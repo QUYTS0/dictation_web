@@ -337,7 +337,9 @@ export default function VocabularyPage() {
                               <p className="mt-1 font-medium leading-relaxed text-slate-700">{item.translation}</p>
                             ) : null}
                             {item.note ? (
-                              <p className="mt-1 text-sm leading-relaxed text-slate-500">📝 {item.note}</p>
+                              <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-500">
+                                📝 {item.note}
+                              </p>
                             ) : null}
                             <div className="mt-3 rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
                               <p className="line-clamp-3 text-sm italic leading-relaxed text-slate-500">

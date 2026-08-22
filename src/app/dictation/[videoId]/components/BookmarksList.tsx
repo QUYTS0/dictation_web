@@ -96,32 +96,37 @@ export function BookmarksList({
             {item.sentence_text}
           </span>
           {item.note && (
-            <span className={clsx("text-xs text-slate-700", compact && "text-[11px]")}>📝 {item.note}</span>
+            <span className={clsx("whitespace-pre-wrap text-xs text-slate-700", compact && "text-[11px]")}>
+              📝 {item.note}
+            </span>
           )}
           {editingId === item.id && (
-            <div className="mt-1 flex items-center gap-1.5">
-              <input
+            <div className="mt-1 flex flex-col items-end gap-1.5">
+              <textarea
                 value={editingNote}
                 onChange={(e) => setEditingNote(e.target.value)}
                 placeholder="Optional note"
                 autoFocus
-                className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                rows={2}
+                className="w-full min-w-0 resize-y rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
               />
-              <button
-                onClick={() => {
-                  onUpdateNote(item.id, editingNote);
-                  cancelEdit();
-                }}
-                className="px-2 py-1 text-[11px] rounded border border-indigo-300 text-indigo-700 bg-indigo-50"
-              >
-                Save
-              </button>
-              <button
-                onClick={cancelEdit}
-                className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
-              >
-                Cancel
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    onUpdateNote(item.id, editingNote);
+                    cancelEdit();
+                  }}
+                  className="px-2 py-1 text-[11px] rounded border border-indigo-300 text-indigo-700 bg-indigo-50"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
         </div>

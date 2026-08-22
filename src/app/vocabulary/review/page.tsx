@@ -125,7 +125,7 @@ export default function VocabularyReviewPage() {
                     <p className="italic leading-relaxed text-slate-600">&quot;{current.sentence_context}&quot;</p>
                   </div>
                   {current.note ? (
-                    <p className="text-sm font-medium text-slate-700">{current.note}</p>
+                    <p className="whitespace-pre-wrap text-sm font-medium text-slate-700">{current.note}</p>
                   ) : null}
                 </div>
               ) : (
