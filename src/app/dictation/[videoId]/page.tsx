@@ -1198,12 +1198,23 @@ export default function DictationPage({ params }: PageProps) {
               </button>
 
               {scriptPopoverNoteMode && (
-                <div className="flex w-full items-center gap-1.5 pt-1">
-                  <input
+                <div className="flex w-full items-end gap-1.5 pt-1">
+                  <textarea
                     ref={scriptPopoverNoteInputRef}
-                    onChange={handleLearningNoteChange}
-                    placeholder="Optional note"
-                    className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:focus:ring-primary-500/20"
+                    onChange={(e) => {
+                      handleLearningNoteChange(e);
+                      e.target.style.height = "auto";
+                      e.target.style.height = `${e.target.scrollHeight}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setScriptPopoverNoteMode(false);
+                      }
+                    }}
+                    placeholder="Optional note (Shift+Enter for new line)"
+                    rows={2}
+                    className="min-w-0 flex-1 resize-none rounded-lg border border-slate-300 px-2 py-1 text-[11px] leading-snug outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:focus:ring-primary-500/20"
                   />
                   <button
                     onClick={() => setScriptPopoverNoteMode(false)}

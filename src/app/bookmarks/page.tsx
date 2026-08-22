@@ -187,31 +187,34 @@ export default function BookmarksPage() {
                           </p>
                         </div>
                         {editingId === item.id ? (
-                          <div className="mt-3 flex items-center gap-1.5">
-                            <input
+                          <div className="mt-3 flex flex-col items-end gap-1.5">
+                            <textarea
                               value={editingNote}
                               onChange={(e) => setEditingNote(e.target.value)}
                               placeholder="Optional note"
                               autoFocus
-                              className="flex-1 min-w-0 rounded border border-slate-300 px-2 py-1 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                              rows={2}
+                              className="w-full min-w-0 resize-y rounded border border-slate-300 px-2 py-1 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                             />
-                            <button
-                              onClick={handleUpdateNote}
-                              className="px-2 py-1 text-xs rounded border border-indigo-300 text-indigo-700 bg-indigo-50"
-                            >
-                              Save
-                            </button>
-                            <button
-                              onClick={cancelEdit}
-                              className="px-2 py-1 text-xs rounded border border-slate-300 text-slate-600"
-                            >
-                              Cancel
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={handleUpdateNote}
+                                className="px-2 py-1 text-xs rounded border border-indigo-300 text-indigo-700 bg-indigo-50"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={cancelEdit}
+                                className="px-2 py-1 text-xs rounded border border-slate-300 text-slate-600"
+                              >
+                                Cancel
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <button
                             onClick={() => beginEdit(item)}
-                            className="mt-3 text-xs font-medium text-slate-500 hover:text-primary-600"
+                            className="mt-3 block w-full whitespace-pre-wrap text-left text-xs font-medium text-slate-500 hover:text-primary-600"
                           >
                             {item.note ? `📝 ${item.note}` : "+ Add note"}
                           </button>

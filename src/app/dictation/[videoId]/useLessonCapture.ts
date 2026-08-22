@@ -62,7 +62,7 @@ export function useLessonCapture({
   // Intentionally ref-only: keeps typing smooth without rerendering the
   // entire lesson screen on every note keystroke.
   const learningNoteDraftRef = useRef("");
-  const scriptPopoverNoteInputRef = useRef<HTMLInputElement>(null);
+  const scriptPopoverNoteInputRef = useRef<HTMLTextAreaElement>(null);
   const scriptTextContainerRef = useRef<HTMLDivElement>(null);
   const reviewTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
@@ -190,13 +190,16 @@ export function useLessonCapture({
     return lessonSavedInCurrentVideo.find((item) => item.normalized_term === normalized) ?? null;
   }, [lessonSavedInCurrentVideo, scriptPopover]);
 
-  const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLearningNoteChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
     learningNoteDraftRef.current = event.target.value;
   }, []);
 
   const clearLearningNoteInputs = useCallback(() => {
     learningNoteDraftRef.current = "";
-    if (scriptPopoverNoteInputRef.current) scriptPopoverNoteInputRef.current.value = "";
+    if (scriptPopoverNoteInputRef.current) {
+      scriptPopoverNoteInputRef.current.value = "";
+      scriptPopoverNoteInputRef.current.style.height = "auto";
+    }
   }, []);
 
   const clearScriptSelection = useCallback(() => {

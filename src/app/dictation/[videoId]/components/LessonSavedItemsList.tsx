@@ -178,7 +178,9 @@ export function LessonSavedItemsList({
             {item.sentence_context}
           </span>
           {item.note && (
-            <span className={clsx("text-xs text-slate-700", compact && "text-[11px]")}>📝 {item.note}</span>
+            <span className={clsx("whitespace-pre-wrap text-xs text-slate-700", compact && "text-[11px]")}>
+              📝 {item.note}
+            </span>
           )}
           {editingId === item.id && (
             <div className="mt-1">

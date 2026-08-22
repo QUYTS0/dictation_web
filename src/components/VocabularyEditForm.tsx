@@ -123,12 +123,13 @@ export function VocabularyEditForm({
           aria-label="Edit definition"
         />
       )}
-      <input
+      <textarea
         value={note}
         onChange={(e) => onNoteChange(e.target.value)}
-        className={inputClass}
+        className={clsx(inputClass, "min-h-[2.5rem] resize-y")}
         placeholder="Optional note"
         aria-label="Edit note"
+        rows={2}
       />
       <div className="flex items-center gap-1.5">
         <button
