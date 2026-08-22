@@ -674,18 +674,6 @@ export default function DictationPage({ params }: PageProps) {
                           >
                             <Check size={20} strokeWidth={3} />
                             <span className="sr-only">Correct</span>
-                            <AnimatePresence>
-                              {isLastResultClean && (
-                                <motion.span
-                                  initial={{ opacity: 0, y: 4, scale: 0.8 }}
-                                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                                  exit={{ opacity: 0 }}
-                                  className="absolute -top-7 right-0 whitespace-nowrap rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-bold text-amber-900 shadow"
-                                >
-                                  ⚡ First try
-                                </motion.span>
-                              )}
-                            </AnimatePresence>
                           </motion.div>
                         ) : workspaceStatus === "error" ? (
                           <motion.button
@@ -712,6 +700,22 @@ export default function DictationPage({ params }: PageProps) {
                       </AnimatePresence>
                     </div>
                   </div>
+
+                  {/* Rendered outside the input box's overflow-hidden wrapper above, so it
+                      doesn't get clipped when it pops up past the box's edge. */}
+                  <AnimatePresence>
+                    {workspaceStatus === "success" && isLastResultClean && (
+                      <motion.span
+                        key="first-try-badge"
+                        initial={{ opacity: 0, y: 4, scale: 0.8 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute -top-3 right-4 z-20 whitespace-nowrap rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-bold text-amber-900 shadow"
+                      >
+                        ⚡ First try
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
                 </div>
 
                 {checkAnswerError && (

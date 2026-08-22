@@ -48,7 +48,9 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [checkAnswerError, setCheckAnswerError] = useState<string | null>(null);
-  // Consecutive "clean" solves (correct on the first try, no hint used). Resets on any wrong submit.
+  // Consecutive correct answers — a hint or a retry doesn't break it, only a wrong
+  // submit resets it to 0. "Clean" (first-try, no-hint) solves are tracked separately
+  // below via cleanSolveCount/isLastResultClean, for the "First try" badge and recap.
   const [combo, setCombo] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [cleanSolveCount, setCleanSolveCount] = useState(0);
@@ -203,10 +205,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
           setIsLastResultClean(isClean);
           if (isClean) {
             setCleanSolveCount((c) => c + 1);
-            const nextCombo = combo + 1;
-            setCombo(nextCombo);
-            setBestCombo((best) => Math.max(best, nextCombo));
           }
+          const nextCombo = combo + 1;
+          setCombo(nextCombo);
+          setBestCombo((best) => Math.max(best, nextCombo));
 
           const firstAttemptText = (firstAttemptBySegmentRef.current[currentSegIdx] ?? userText).trim();
           const firstAttemptReview = evaluateAnswer(

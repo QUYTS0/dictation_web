@@ -12,7 +12,7 @@ export const SCRIPT_CONTEXT_PREVIOUS_COUNT = 3;
 export const CORRECT_RESULT_VISIBILITY_DELAY_MS = 650;
 export const VIDEO_SIZE_MODE_STORAGE_KEY = "dictation.video-size-mode";
 export const SOUND_ENABLED_STORAGE_KEY = "dictation.sound-enabled";
-// Every Nth clean solve in a row plays a brighter "milestone" chime instead of the normal tick.
+// Every Nth combo tick plays a brighter "milestone" chime instead of the normal tick.
 export const COMBO_MILESTONE_INTERVAL = 3;
 export const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   standard: "max-w-4xl",
