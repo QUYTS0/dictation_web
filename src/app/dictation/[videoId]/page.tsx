@@ -54,6 +54,7 @@ import { LessonSavedItemsList } from "./components/LessonSavedItemsList";
 import { BookmarksList } from "./components/BookmarksList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
 import { ConfettiBurst } from "./components/ConfettiBurst";
+import { ComboStreak } from "./components/ComboStreak";
 import {
   SCRIPT_POPOVER_MAX_WIDTH_PX,
   SCRIPT_CONTEXT_NEXT_COUNT,
@@ -498,10 +499,11 @@ export default function DictationPage({ params }: PageProps) {
                   active={soundEnabled}
                   onClick={() => setSoundEnabled(!soundEnabled)}
                 />
+                <ComboStreak combo={combo} />
               </div>
               {segments.length > 0 && (
                 <div className="flex-1 min-w-0">
-                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} combo={combo} />
+                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
                 </div>
               )}
             </div>
