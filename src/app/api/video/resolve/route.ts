@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { extractYouTubeVideoId, isValidYouTubeUrl } from "@/lib/utils/url";
 import { createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { fetchYouTubeVideoTitle } from "@/lib/youtube";
 import type { ResolveVideoRequest, ResolveVideoResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest) {
@@ -37,9 +38,13 @@ export async function POST(request: NextRequest) {
 
     // Upsert the video record so downstream APIs can reference it
     const supabase = createServiceClient();
+    const title = await fetchYouTubeVideoTitle(videoId);
     const { error } = await supabase
       .from("videos")
-      .upsert({ youtube_video_id: videoId }, { onConflict: "youtube_video_id" });
+      .upsert(
+        { youtube_video_id: videoId, ...(title ? { title } : {}) },
+        { onConflict: "youtube_video_id" }
+      );
 
     if (error) {
       console.error("[resolve] supabase upsert error:", error);

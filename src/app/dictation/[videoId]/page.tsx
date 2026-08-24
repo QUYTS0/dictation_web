@@ -42,10 +42,15 @@ import { useAuth, useRequireAuth } from "@/context/auth";
 import { useManualTranscriptPaste } from "./useManualTranscriptPaste";
 import { useVideoSizeMode } from "./useVideoSizeMode";
 import { useSoundPreference } from "./useSoundPreference";
+import { usePlaybackRatePreference } from "./usePlaybackRatePreference";
+import { useAutoAdvancePreference } from "./useAutoAdvancePreference";
+import { usePracticeModePreference } from "./usePracticeModePreference";
 import { useStreak } from "./useStreak";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
+import { useScriptTranslation } from "./useScriptTranslation";
+import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 
@@ -61,8 +66,11 @@ import {
   SCRIPT_CONTEXT_PREVIOUS_COUNT,
   VIDEO_SIZE_MODE_CLASS,
   COMBO_MILESTONE_INTERVAL,
+  PLAYBACK_RATE_OPTIONS,
 } from "./constants";
-import { getSavedFilterLabel, buildComparedTokens, splitSentenceIntoTokens } from "./helpers";
+import { getSavedFilterLabel, buildComparedTokens, splitSentenceIntoTokens, getHighlightedTokenIndexes } from "./helpers";
+import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
+import { getWordShapeMask } from "@/lib/utils/segment";
 import type { SavedFilter, RightPanelTab } from "./types";
 
 // ---- Page component ----
@@ -93,6 +101,9 @@ export default function DictationPage({ params }: PageProps) {
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
+  const { playbackRate, setPlaybackRate } = usePlaybackRatePreference();
+  const { autoAdvance, setAutoAdvance } = useAutoAdvancePreference();
+  const { practiceMode, setPracticeMode } = usePracticeModePreference();
   const { streakDays } = useStreak(user);
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
@@ -143,6 +154,24 @@ export default function DictationPage({ params }: PageProps) {
     deleteBookmark,
     updateBookmarkNote,
   } = useBookmarks(videoId, user);
+
+  const {
+    showTranslation: showScriptTranslation,
+    setShowTranslation: setShowScriptTranslation,
+    translationBySegmentIndex,
+    translationLoading: scriptTranslationLoading,
+    translationError: scriptTranslationError,
+  } = useScriptTranslation({
+    videoId,
+    transcriptId: segments[0]?.transcript_id,
+    enabled: rightPanelTab === "script",
+  });
+
+  const { phrasesBySegmentIndex, highlightsError: vocabHighlightsError } = useVocabHighlights({
+    videoId,
+    transcriptId: segments[0]?.transcript_id,
+    enabled: rightPanelTab === "script",
+  });
 
   // ---- Deep-link jump: "?segment=" opens the video directly at a bookmarked
   // sentence. Resume-from-last-position takes priority if both apply, and we
@@ -208,6 +237,26 @@ export default function DictationPage({ params }: PageProps) {
   });
 
   const currentSegment = segments[currentSegIdx];
+
+  // Auto-advance: as soon as the typed text exactly matches the sentence
+  // (post-normalization), submit automatically instead of waiting for
+  // Enter/Check — lets confident typists skip the manual submit step.
+  const handleWorkspaceInputChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const value = event.target.value;
+      setWorkspaceInputValue(value);
+      setCheckResult(null);
+
+      if (!autoAdvance || !currentSegment) return;
+      if (uxState !== "paused_waiting_input" && uxState !== "playing") return;
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      if (evaluateAutoAdvanceAnswer(currentSegment.text, trimmed, "relaxed").isCorrect) {
+        void handleAnswerSubmit(trimmed);
+      }
+    },
+    [autoAdvance, currentSegment, uxState, handleAnswerSubmit, setCheckResult]
+  );
 
   const handleToggleCurrentBookmark = useCallback(() => {
     if (!currentSegment) return;
@@ -308,7 +357,7 @@ export default function DictationPage({ params }: PageProps) {
   // largest size regardless of the user's saved Standard/Large preference.
   const effectiveVideoSizeMode = isZenMode ? "large" : videoSizeMode;
   const videoBlock = shouldRenderVideoPlayer && (
-    <div className={clsx("mx-auto flex h-full w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[effectiveVideoSizeMode])}>
+    <div className={clsx("mx-auto flex h-full w-full transition-all duration-300", VIDEO_SIZE_MODE_CLASS[effectiveVideoSizeMode])}>
       <div className="h-full w-full">
         <YouTubePlayer
           ref={ytPlayerRef}
@@ -377,6 +426,10 @@ export default function DictationPage({ params }: PageProps) {
   }, [showVideo, playerStore.currentTimeSec, uxState, ytPlayerRef]);
 
   useEffect(() => {
+    ytPlayerRef.current?.setPlaybackRate(playbackRate);
+  }, [playbackRate, ytPlayerRef]);
+
+  useEffect(() => {
     if (!showLearningPanel || rightPanelTab !== "script") return;
     const container = scriptTextContainerRef.current;
     if (!container) return;
@@ -387,10 +440,6 @@ export default function DictationPage({ params }: PageProps) {
   }, [currentSegIdx, rightPanelTab, showLearningPanel, scriptTextContainerRef]);
 
   const workspaceTitle = transcriptTitle ?? `Video ${videoId}`;
-  const sentenceProgressLabel =
-    segments.length > 0
-      ? `Sentence ${Math.min(currentSegIdx + 1, segments.length)} of ${segments.length}`
-      : "Preparing transcript…";
 
   const isCheckingWorkspace = uxState === "checking_answer" && checkResult === null;
   const workspaceStatus: "idle" | "success" | "error" = checkResult
@@ -422,19 +471,19 @@ export default function DictationPage({ params }: PageProps) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
             className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-0 pointer-events-none"
           />
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
+      <AnimatePresence mode="popLayout">
         {!isZenMode && (
           <motion.header
             initial={{ y: -64, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -64, opacity: 0 }}
-            transition={{ duration: 0.25, ease: "easeOut" }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
             className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-4 py-1 backdrop-blur-md"
           >
             <div className="mx-auto flex w-full max-w-none items-center justify-between">
@@ -444,7 +493,6 @@ export default function DictationPage({ params }: PageProps) {
                 </Link>
                 <div className="min-w-0">
                   <h1 className="truncate text-sm font-semibold leading-tight text-slate-900">{workspaceTitle}</h1>
-                  <span className="text-xs text-slate-500">{sentenceProgressLabel}</span>
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-3">
@@ -464,81 +512,160 @@ export default function DictationPage({ params }: PageProps) {
       <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col overflow-y-auto px-4 gap-4 lg:flex-row lg:overflow-hidden">
         <motion.div
           layout
-          transition={{ type: "tween", ease: "linear", duration: 0.25 }}
+          transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
             "flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden",
             isZenMode && "z-50"
           )}
         >
           <div className="flex-shrink-0 space-y-2 pt-2">
-          {!isZenMode && (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setShowVideo((v) => !v)}
-                className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+          <AnimatePresence initial={false}>
+            {!isZenMode && (
+              <motion.div
+                key="video-toolbar"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+                className="overflow-hidden"
               >
-                <Sparkles size={14} className="text-indigo-500" />
-                {showVideo ? "Audio Mode" : "Exit Audio Mode"}
-              </button>
-              <button
-                onClick={() => setIsZenMode(true)}
-                title="Z"
-                className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
-              >
-                <Sparkles size={14} className="text-indigo-500" />
-                Zen Mode
-              </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setShowVideo((v) => !v)}
+                    className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+                  >
+                    <Sparkles size={14} className="text-indigo-500" />
+                    {showVideo ? "Audio Mode" : "Exit Audio Mode"}
+                  </button>
+                  <button
+                    onClick={() => setIsZenMode(true)}
+                    title="Z"
+                    className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+                  >
+                    <Sparkles size={14} className="text-indigo-500" />
+                    Zen Mode
+                  </button>
 
-              <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
-                <button
-                  onClick={() => setVideoSizeMode("standard")}
-                  className={clsx(
-                    "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-                    videoSizeMode === "standard"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-600 hover:bg-white/80"
-                  )}
-                >
-                  Standard
-                </button>
-                <button
-                  onClick={() => setVideoSizeMode("large")}
-                  className={clsx(
-                    "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-                    videoSizeMode === "large"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-600 hover:bg-white/80"
-                  )}
-                >
-                  Large
-                </button>
-              </div>
+                  <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
+                    <button
+                      onClick={() => setVideoSizeMode("standard")}
+                      className={clsx(
+                        "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                        videoSizeMode === "standard"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-600 hover:bg-white/80"
+                      )}
+                    >
+                      Standard
+                    </button>
+                    <button
+                      onClick={() => setVideoSizeMode("large")}
+                      className={clsx(
+                        "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                        videoSizeMode === "large"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-600 hover:bg-white/80"
+                      )}
+                    >
+                      Large
+                    </button>
+                  </div>
 
-            </div>
-          )}
+                  <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
+                    {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                      <button
+                        key={rate}
+                        onClick={() => setPlaybackRate(rate)}
+                        className={clsx(
+                          "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                          playbackRate === rate
+                            ? "bg-indigo-600 text-white"
+                            : "text-slate-600 hover:bg-white/80"
+                        )}
+                      >
+                        {rate}x
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => setAutoAdvance((v) => !v)}
+                    title="Auto-submit as soon as your typed text matches the sentence"
+                    className={clsx(
+                      "text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-2",
+                      autoAdvance
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                        : "border-white/60 bg-white/40 text-slate-600 hover:bg-white/80"
+                    )}
+                  >
+                    <Sparkles size={14} className="text-indigo-500" />
+                    {autoAdvance ? "Auto-advance: On" : "Auto-advance: Off"}
+                  </button>
+
+                  <div
+                    className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md"
+                    title="Easy mode always shows the sentence's word/letter shape. Hard mode hides it until you ask for a hint."
+                  >
+                    <button
+                      onClick={() => setPracticeMode("easy")}
+                      className={clsx(
+                        "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                        practiceMode === "easy"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-600 hover:bg-white/80"
+                      )}
+                    >
+                      Easy
+                    </button>
+                    <button
+                      onClick={() => setPracticeMode("hard")}
+                      className={clsx(
+                        "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                        practiceMode === "hard"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-600 hover:bg-white/80"
+                      )}
+                    >
+                      Hard
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div
             className={clsx(
-              "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 bg-black transition-all duration-500 ease-out",
+              "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 bg-black transition-all duration-300 ease-out",
               isZenMode ? "max-h-[65vh]" : "max-h-[320px]"
             )}
           >
-            <div className={clsx("absolute inset-0", !showVideo && "opacity-0 pointer-events-none")} aria-hidden={!showVideo}>
+            <div
+              className={clsx(
+                "absolute inset-0 transition-opacity duration-300 ease-out",
+                !showVideo && "opacity-0 pointer-events-none"
+              )}
+              aria-hidden={!showVideo}
+            >
               {videoBlock}
             </div>
-            {!showVideo && (
-              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
-                <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-center text-xs text-white/85">
-                  Audio focus mode is enabled. Video is hidden.
-                </div>
+            <div
+              className={clsx(
+                "absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm transition-opacity duration-300 ease-out",
+                showVideo ? "opacity-0 pointer-events-none" : "opacity-100"
+              )}
+              aria-hidden={showVideo}
+            >
+              <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-center text-xs text-white/85">
+                Audio focus mode is enabled. Video is hidden.
               </div>
-            )}
+            </div>
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
             <div
               className={clsx(
-                "relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border backdrop-blur-md shadow-md mt-4 transition-all duration-500",
+                "relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border backdrop-blur-md shadow-md mt-4 transition-all duration-300",
                 isZenMode ? "border-white/10 bg-slate-900/40" : "border-white/60 bg-white/40"
               )}
             >
@@ -573,7 +700,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           <div className="py-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
-          <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-500 ease-out ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
+          <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-300 ease-out ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
 
             {uxState === "loading_transcript" && (
               <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
@@ -670,6 +797,14 @@ export default function DictationPage({ params }: PageProps) {
 
             {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
               <>
+                {practiceMode === "easy" && currentSegment && (
+                  <p
+                    aria-hidden="true"
+                    className="mb-2 select-none whitespace-pre-wrap font-mono text-sm tracking-wide text-slate-400 dark:text-slate-500"
+                  >
+                    {getWordShapeMask(currentSegment.text)}
+                  </p>
+                )}
                 <div className="relative">
                   <div className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
                     workspaceStatus === "success"
@@ -682,10 +817,7 @@ export default function DictationPage({ params }: PageProps) {
                       ref={workspaceInputRef}
                       type="text"
                       value={workspaceInputValue}
-                      onChange={(e) => {
-                        setWorkspaceInputValue(e.target.value);
-                        setCheckResult(null);
-                      }}
+                      onChange={handleWorkspaceInputChange}
                       onKeyDown={handleWorkspaceInputKeyDown}
                       onWheel={(e) => {
                         const el = e.currentTarget;
@@ -839,35 +971,55 @@ export default function DictationPage({ params }: PageProps) {
                   )}
                 </AnimatePresence>
 
-                {showHintPanel && currentSegment && !checkResult?.isCorrect && (
-                  <div>
-                    <HintDisplay text={currentSegment.text} level={hintLevel} onLevelChange={(l) => setHintLevel(l)} />
-                  </div>
-                )}
+                <AnimatePresence>
+                  {showHintPanel && currentSegment && !checkResult?.isCorrect && (
+                    <motion.div
+                      key="hint-panel"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <HintDisplay text={currentSegment.text} level={hintLevel} onLevelChange={(l) => setHintLevel(l)} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-                {shouldShowPreviousReview && previousReview && (
-                  <div ref={reviewTextContainerRef} onMouseUp={handleReviewMouseUp} className="rounded-xl border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-2 mt-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Review previous sentence</p>
-                      <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">#{previousReview.segmentIndex + 1}</span>
-                    </div>
-                    <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700">
-                      <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
-                      <ComparedSentenceText
-                        tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).expectedTokens}
-                        tone="expected"
-                      />
-                    </div>
-                    <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700">
-                      <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
-                      <ComparedSentenceText
-                        tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).userTokens}
-                        tone="user"
-                        emptyFallback="(No answer provided)"
-                      />
-                    </div>
-                  </div>
-                )}
+                <AnimatePresence>
+                  {shouldShowPreviousReview && previousReview && (
+                    <motion.div
+                      key="previous-review"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.25, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div ref={reviewTextContainerRef} onMouseUp={handleReviewMouseUp} className="rounded-xl border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-2 mt-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Review previous sentence</p>
+                          <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">#{previousReview.segmentIndex + 1}</span>
+                        </div>
+                        <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-xs text-slate-700">
+                          <p className="text-[11px] font-semibold text-slate-500">Correct sentence</p>
+                          <ComparedSentenceText
+                            tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).expectedTokens}
+                            tone="expected"
+                          />
+                        </div>
+                        <div data-script-segment-index={previousReview.segmentIndex} data-selection-sentence-text={previousReview.expectedText} className="rounded-lg border border-slate-200 bg-slate-100 p-2 text-xs text-slate-700">
+                          <p className="text-[11px] font-semibold text-slate-500">Your answer</p>
+                          <ComparedSentenceText
+                            tokens={buildComparedTokens({ diff: previousReview.diff, expectedText: previousReview.expectedText, userText: previousReview.firstUserText }).userTokens}
+                            tone="user"
+                            emptyFallback="(No answer provided)"
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </>
             )}
 
@@ -965,14 +1117,14 @@ export default function DictationPage({ params }: PageProps) {
           </div>
         </motion.div>
 
-        <AnimatePresence initial={false}>
+        <AnimatePresence initial={false} mode="popLayout">
           {showLearningPanel && (
             <motion.div
               key="learning-panel"
               initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
-              transition={{ duration: 0.2 }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
                 "shrink-0 overflow-hidden",
                 isZenMode
@@ -1107,6 +1259,17 @@ export default function DictationPage({ params }: PageProps) {
                       </button>
                     )}
                     <button
+                      onClick={() => setShowScriptTranslation((prev) => !prev)}
+                      className={clsx(
+                        "rounded-md border px-2.5 py-1 text-[11px] font-medium",
+                        showScriptTranslation
+                          ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      )}
+                    >
+                      {showScriptTranslation ? "Hide translation" : "Show translation"}
+                    </button>
+                    <button
                       onClick={handleRegenerateClick}
                       disabled={regenerating}
                       title="Re-fetch this video's script from YouTube's captions if it doesn't match the audio"
@@ -1116,6 +1279,15 @@ export default function DictationPage({ params }: PageProps) {
                     </button>
                   </div>
                   {regenerateError && <p className="text-xs text-red-600">{regenerateError}</p>}
+                  {showScriptTranslation && scriptTranslationLoading && (
+                    <p className="text-xs text-slate-500">Translating…</p>
+                  )}
+                  {showScriptTranslation && scriptTranslationError && (
+                    <p className="text-xs text-red-600">Couldn&apos;t load translation.</p>
+                  )}
+                  {vocabHighlightsError && (
+                    <p className="text-xs text-slate-400">Vocab highlighting is unavailable right now.</p>
+                  )}
                   {scriptContextSegments.length === 0 ? (
                     <p className="text-xs text-slate-500">Script is not available yet.</p>
                   ) : !showScriptContext ? (
@@ -1125,6 +1297,10 @@ export default function DictationPage({ params }: PageProps) {
                       {scriptContextSegments.map((segment) => {
                         const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
                         const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
+                        const highlightedTokenIndexes = getHighlightedTokenIndexes(
+                          segment.text,
+                          phrasesBySegmentIndex.get(segment.segmentIndex) ?? []
+                        );
                         return (
                           <div
                             key={segment.segmentIndex}
@@ -1148,7 +1324,11 @@ export default function DictationPage({ params }: PageProps) {
                                   <span
                                     key={tokenIdx}
                                     onMouseUp={handleScriptWordMouseUp}
-                                    className="cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-primary-100/70 dark:hover:bg-primary-500/20"
+                                    title="Tap to save this word/phrase"
+                                    className={clsx(
+                                      "cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-primary-100/70 dark:hover:bg-primary-500/20",
+                                      highlightedTokenIndexes.has(tokenIdx) && "underline decoration-amber-400 decoration-2 underline-offset-2"
+                                    )}
                                   >
                                     {token}
                                   </span>
@@ -1157,6 +1337,11 @@ export default function DictationPage({ params }: PageProps) {
                                 )
                               )}
                             </p>
+                            {showScriptTranslation && (
+                              <p className="mt-1 text-sm leading-relaxed text-indigo-600 dark:text-indigo-400">
+                                {translationBySegmentIndex.get(segment.segmentIndex) ?? "…"}
+                              </p>
+                            )}
                           </div>
                         );
                       })}

@@ -8,6 +8,7 @@ export interface YouTubePlayerHandle {
   playSegment: (segIdx: number) => void;
   pauseVideo: () => void;
   seekTo: (timeSec: number, autoPlay?: boolean) => void;
+  setPlaybackRate: (rate: number) => void;
 }
 
 interface YouTubePlayerProps {
@@ -38,6 +39,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const activeSegmentIdxRef = useRef<number>(0);
     const isPausedRef = useRef<boolean>(false);
+    const playbackRateRef = useRef<number>(1);
 
     const setStatus = usePlayerStore((s) => s.setStatus);
     const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
@@ -109,6 +111,10 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           disablekb: 1,
           rel: 0,
           modestbranding: 1,
+          // We show our own script/transcript UI instead, so force YouTube's native
+          // captions off — otherwise a viewer's own YouTube "always show captions"
+          // account preference can override the unset default and show them anyway.
+          cc_load_policy: 0,
         },
         events: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -116,6 +122,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
             playerReadyRef.current = true;
             setStatus("ready");
             setDuration(event.target.getDuration());
+            event.target.setPlaybackRate(playbackRateRef.current);
             console.log("[YouTubePlayer] player ready, videoId=", videoId);
           },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,10 +197,17 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       if (autoPlay) playerRef.current.playVideo();
     }, []);
 
+    const setPlaybackRateFn = useCallback((rate: number) => {
+      playbackRateRef.current = rate;
+      if (!playerRef.current || !playerReadyRef.current) return;
+      playerRef.current.setPlaybackRate(rate);
+    }, []);
+
     useImperativeHandle(ref, () => ({
       playSegment: playSegmentFn,
       pauseVideo: pauseVideoFn,
       seekTo: seekToFn,
+      setPlaybackRate: setPlaybackRateFn,
     }));
 
     return (

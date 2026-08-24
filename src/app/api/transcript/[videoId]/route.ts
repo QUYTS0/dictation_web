@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { fetchYouTubeVideoTitle } from "@/lib/youtube";
 import type { TranscriptResponse, TranscriptSegment } from "@/lib/types";
 
 interface RouteParams {
@@ -61,6 +62,16 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .select("title")
       .eq("youtube_video_id", videoId)
       .maybeSingle();
+
+    // Older/pre-existing video rows may predate title backfilling on resolve —
+    // fill it in lazily here so the UI can show a real title instead of the ID.
+    let title = videoRow?.title ?? null;
+    if (!title) {
+      title = await fetchYouTubeVideoTitle(videoId);
+      if (title) {
+        await supabase.from("videos").update({ title }).eq("youtube_video_id", videoId);
+      }
+    }
 
     if (!transcript) {
       // No transcript at all — return processing to prompt generation
@@ -126,7 +137,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json<TranscriptResponse>({
       status: "ready",
       source: transcript.source,
-      title: videoRow?.title ?? null,
+      title,
       segments,
     });
   } catch (err) {

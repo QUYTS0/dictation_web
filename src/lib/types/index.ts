@@ -163,6 +163,25 @@ export interface TranslateTranscriptResponse {
   error?: string;
 }
 
+// ---- Vocab highlighting (AI-picked difficult words/phrases per segment) ----
+
+export interface VocabHighlightSegment {
+  segmentIndex: number;
+  /** Exact substrings of the segment's text worth a learner's attention. */
+  phrases: string[];
+}
+
+export interface VocabHighlightsRequest {
+  videoId: string;
+  transcriptId: string;
+}
+
+export interface VocabHighlightsResponse {
+  status: "ready" | "error";
+  highlights: VocabHighlightSegment[];
+  error?: string;
+}
+
 export interface CheckAnswerRequest {
   sessionId?: string;
   segmentIndex: number;

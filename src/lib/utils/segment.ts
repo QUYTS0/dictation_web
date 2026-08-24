@@ -109,6 +109,16 @@ export function getHint(text: string, level: HintLevel): HintResult {
   }
 }
 
+/**
+ * Masks every letter/digit with "_" while preserving spaces and punctuation,
+ * so the sentence's word count, word lengths, and punctuation are visible
+ * without revealing any actual letters. Used by Easy mode's always-on shape
+ * hint (distinct from the numbered hint levels above, which are opt-in).
+ */
+export function getWordShapeMask(text: string): string {
+  return text.replace(/[A-Za-z0-9]/g, "_");
+}
+
 // ---- Manual transcript fallback ----
 
 // Average spoken English pace (~150 wpm) used to estimate segment timing

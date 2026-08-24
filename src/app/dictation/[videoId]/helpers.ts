@@ -27,6 +27,40 @@ export function splitSentenceIntoTokens(sentence: string) {
   return sentence.split(/(\s+)/).filter((token) => token.length > 0);
 }
 
+/**
+ * Given a sentence and a list of exact substrings worth highlighting (e.g.
+ * AI-picked difficult phrases), returns the indexes into
+ * splitSentenceIntoTokens(text) that fall inside one of those phrases —
+ * including every word of a multi-word phrase, so a phrase like "make sense
+ * of" underlines as one continuous run rather than only its first word.
+ */
+export function getHighlightedTokenIndexes(text: string, phrases: string[]): Set<number> {
+  const lowerText = text.toLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const phrase of phrases) {
+    const needle = phrase.toLowerCase().trim();
+    if (!needle) continue;
+    const start = lowerText.indexOf(needle);
+    if (start === -1) continue;
+    ranges.push([start, start + needle.length]);
+  }
+  if (ranges.length === 0) return new Set();
+
+  const tokens = splitSentenceIntoTokens(text);
+  const highlighted = new Set<number>();
+  let offset = 0;
+  tokens.forEach((token, idx) => {
+    const tokenStart = offset;
+    const tokenEnd = offset + token.length;
+    offset = tokenEnd;
+    if (!token.trim()) return;
+    if (ranges.some(([rangeStart, rangeEnd]) => tokenStart < rangeEnd && tokenEnd > rangeStart)) {
+      highlighted.add(idx);
+    }
+  });
+  return highlighted;
+}
+
 export function normalizeComparableText(text: string) {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }

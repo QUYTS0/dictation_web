@@ -3,6 +3,8 @@ import type {
   MatchMode,
   ResumeSessionResponse,
   TranscriptResponse,
+  TranslateTranscriptResponse,
+  VocabHighlightsResponse,
 } from "@/lib/types";
 
 export async function fetchTranscript(videoId: string): Promise<TranscriptResponse> {
@@ -72,6 +74,33 @@ export async function saveProgress(
 export async function fetchResumeSession(videoId: string): Promise<ResumeSessionResponse> {
   const res = await fetch(`/api/session/resume?videoId=${encodeURIComponent(videoId)}`);
   if (!res.ok) throw new Error("Failed to fetch resume session");
+  return res.json();
+}
+
+export async function fetchTranslation(
+  videoId: string,
+  transcriptId: string,
+  language = "vi"
+): Promise<TranslateTranscriptResponse> {
+  const res = await fetch("/api/transcript/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, transcriptId, language }),
+  });
+  if (!res.ok) throw new Error("Failed to fetch translation");
+  return res.json();
+}
+
+export async function fetchVocabHighlights(
+  videoId: string,
+  transcriptId: string
+): Promise<VocabHighlightsResponse> {
+  const res = await fetch("/api/transcript/vocab-highlights", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, transcriptId }),
+  });
+  if (!res.ok) throw new Error("Failed to fetch vocab highlights");
   return res.json();
 }
 

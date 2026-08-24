@@ -5,6 +5,7 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
+import { fetchYoutubeTranslatedCaptions } from "@/lib/youtubeTranslatedCaptions";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type {
   TranslateTranscriptRequest,
@@ -30,7 +31,13 @@ interface EnglishSegmentRow {
 /**
  * Translates a transcript's segments to `language` (default Vietnamese),
  * trying progressively more expensive tiers and caching each result:
- *   1. YouTube's own captions in the target language, if the video has them.
+ *   1a. YouTube's own captions already in the target language, if the video
+ *       happens to have a distinct track for it (rare).
+ *   1b. Otherwise, YouTube's server-side auto-translate ("tlang") of
+ *       whatever caption track the video does have — still YouTube's own
+ *       translation, just requested on the fly instead of relying on a
+ *       pre-existing track. Covers most videos, since most have at least
+ *       English auto-captions.
  *   2. A free, no-API-key translation library (best effort — the unofficial
  *      endpoint it hits can be rate-limited on shared serverless IPs).
  *   3. Gemini, for whatever segments are still untranslated after 1 and 2.
@@ -128,6 +135,37 @@ export async function POST(request: NextRequest) {
         `[transcript translate] no ${language} YouTube captions for ${videoId}:`,
         captionErr instanceof Error ? captionErr.message : captionErr
       );
+    }
+
+    // ---- Tier 1b: YouTube's server-side auto-translate of an existing track ----
+    if (results.size < englishSegments.length) {
+      try {
+        const translatedItems = await fetchYoutubeTranslatedCaptions(videoId, language);
+        if (translatedItems && translatedItems.length > 0) {
+          const translatedSegments = mergeIntoSentences(translatedItems);
+          for (const enSeg of englishSegments) {
+            if (results.has(enSeg.segment_index)) continue;
+            const overlapping = translatedSegments.filter((t) => {
+              const tEnd = t.start + t.duration;
+              return tEnd > enSeg.start_sec && t.start < enSeg.end_sec;
+            });
+            if (overlapping.length > 0) {
+              results.set(enSeg.segment_index, {
+                text: overlapping.map((t) => t.text).join(" "),
+                source: "youtube_captions",
+              });
+            }
+          }
+          console.log(
+            `[transcript translate] youtube tlang=${language} auto-translate matched ${results.size}/${englishSegments.length} segments`
+          );
+        }
+      } catch (tlangErr) {
+        console.log(
+          `[transcript translate] youtube tlang=${language} auto-translate failed for ${videoId}:`,
+          tlangErr instanceof Error ? tlangErr.message : tlangErr
+        );
+      }
     }
 
     // ---- Tier 2: free, no-API-key translation library (best effort) ----
