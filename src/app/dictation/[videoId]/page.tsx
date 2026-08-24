@@ -191,6 +191,8 @@ export default function DictationPage({ params }: PageProps) {
     onReplay: handleReplay,
     onPrevious: handlePrevious,
     onSkip: handleSkip,
+    isZenMode,
+    onZenModeChange: setIsZenMode,
   });
 
   // ---- Manual transcript paste fallback (used when captions aren't available) ----
@@ -302,8 +304,11 @@ export default function DictationPage({ params }: PageProps) {
     uxState !== "loading_transcript" &&
     uxState !== "transcript_processing" &&
     uxState !== "transcript_failed";
+  // Zen mode is meant to be immersive, so it always shows the video at its
+  // largest size regardless of the user's saved Standard/Large preference.
+  const effectiveVideoSizeMode = isZenMode ? "large" : videoSizeMode;
   const videoBlock = shouldRenderVideoPlayer && (
-    <div className={clsx("mx-auto flex h-full w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[videoSizeMode])}>
+    <div className={clsx("mx-auto flex h-full w-full transition-all duration-200", VIDEO_SIZE_MODE_CLASS[effectiveVideoSizeMode])}>
       <div className="h-full w-full">
         <YouTubePlayer
           ref={ytPlayerRef}
@@ -417,7 +422,8 @@ export default function DictationPage({ params }: PageProps) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-0 transition-all pointer-events-none"
+            transition={{ duration: 0.35, ease: "easeOut" }}
+            className="absolute inset-0 bg-slate-950/90 backdrop-blur-2xl z-0 pointer-events-none"
           />
         )}
       </AnimatePresence>
@@ -428,6 +434,7 @@ export default function DictationPage({ params }: PageProps) {
             initial={{ y: -64, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -64, opacity: 0 }}
+            transition={{ duration: 0.25, ease: "easeOut" }}
             className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-4 py-1 backdrop-blur-md"
           >
             <div className="mx-auto flex w-full max-w-none items-center justify-between">
@@ -464,50 +471,58 @@ export default function DictationPage({ params }: PageProps) {
           )}
         >
           <div className="flex-shrink-0 space-y-2 pt-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setShowVideo((v) => !v)}
-              className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
-            >
-              <Sparkles size={14} className="text-indigo-500" />
-              {showVideo ? "Audio Mode" : "Exit Audio Mode"}
-            </button>
-            <button
-              onClick={() => setIsZenMode(true)}
-              className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
-            >
-              <Sparkles size={14} className="text-indigo-500" />
-              Zen Mode
-            </button>
+          {!isZenMode && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setShowVideo((v) => !v)}
+                className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+              >
+                <Sparkles size={14} className="text-indigo-500" />
+                {showVideo ? "Audio Mode" : "Exit Audio Mode"}
+              </button>
+              <button
+                onClick={() => setIsZenMode(true)}
+                title="Z"
+                className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
+              >
+                <Sparkles size={14} className="text-indigo-500" />
+                Zen Mode
+              </button>
 
-            <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
-              <button
-                onClick={() => setVideoSizeMode("standard")}
-                className={clsx(
-                  "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-                  videoSizeMode === "standard"
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-600 hover:bg-white/80"
-                )}
-              >
-                Standard
-              </button>
-              <button
-                onClick={() => setVideoSizeMode("large")}
-                className={clsx(
-                  "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-                  videoSizeMode === "large"
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-600 hover:bg-white/80"
-                )}
-              >
-                Large
-              </button>
+              <div className="flex items-center rounded-full border border-white/70 bg-white/60 p-1 shadow-sm backdrop-blur-md">
+                <button
+                  onClick={() => setVideoSizeMode("standard")}
+                  className={clsx(
+                    "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                    videoSizeMode === "standard"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-600 hover:bg-white/80"
+                  )}
+                >
+                  Standard
+                </button>
+                <button
+                  onClick={() => setVideoSizeMode("large")}
+                  className={clsx(
+                    "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
+                    videoSizeMode === "large"
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-600 hover:bg-white/80"
+                  )}
+                >
+                  Large
+                </button>
+              </div>
+
             </div>
+          )}
 
-          </div>
-
-          <div className={clsx("relative w-full aspect-video max-h-[320px] rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 transition-transform bg-black", isZenMode && "scale-105")}>
+          <div
+            className={clsx(
+              "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 bg-black transition-all duration-500 ease-out",
+              isZenMode ? "max-h-[65vh]" : "max-h-[320px]"
+            )}
+          >
             <div className={clsx("absolute inset-0", !showVideo && "opacity-0 pointer-events-none")} aria-hidden={!showVideo}>
               {videoBlock}
             </div>
@@ -521,7 +536,12 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
-            <div className="relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border border-white/60 bg-white/40 backdrop-blur-md shadow-md mt-4">
+            <div
+              className={clsx(
+                "relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border backdrop-blur-md shadow-md mt-4 transition-all duration-500",
+                isZenMode ? "border-white/10 bg-slate-900/40" : "border-white/60 bg-white/40"
+              )}
+            >
               <div className="flex items-center gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
@@ -545,7 +565,7 @@ export default function DictationPage({ params }: PageProps) {
               </div>
               {segments.length > 0 && (
                 <div className="flex-1 min-w-0">
-                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} />
+                  <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} tone={isZenMode ? "zen" : "default"} />
                 </div>
               )}
             </div>
@@ -553,7 +573,7 @@ export default function DictationPage({ params }: PageProps) {
           </div>
 
           <div className="py-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
-          <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
+          <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-500 ease-out ${isZenMode ? "bg-slate-900/40 border-white/5" : ""}`}>
 
             {uxState === "loading_transcript" && (
               <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
@@ -857,13 +877,14 @@ export default function DictationPage({ params }: PageProps) {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
+                  transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
                   className="mt-8 flex justify-center"
                 >
                   <button onClick={() => setIsZenMode(false)} className="group flex flex-col items-center gap-2">
                     <div className="w-12 h-12 rounded-full bg-white/10 border border-white/20 backdrop-blur-md flex items-center justify-center text-white/50 group-hover:text-white group-hover:bg-white/20 transition-all group-hover:scale-110">
                       <X size={24} />
                     </div>
-                    <span className="text-[10px] uppercase font-black tracking-widest text-white/30 group-hover:text-white/60 transition-colors">Exit Zen Mode</span>
+                    <span className="text-[10px] uppercase font-black tracking-widest text-white/30 group-hover:text-white/60 transition-colors">Exit Zen Mode (Esc)</span>
                   </button>
                 </motion.div>
               )}
@@ -944,17 +965,21 @@ export default function DictationPage({ params }: PageProps) {
           </div>
         </motion.div>
 
-        {!isZenMode && (
-          <AnimatePresence initial={false}>
-            {showLearningPanel && (
-              <motion.div
-                key="learning-panel"
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 16 }}
-                transition={{ duration: 0.2 }}
-                className="w-full shrink-0 overflow-hidden lg:h-full lg:w-[360px]"
-              >
+        <AnimatePresence initial={false}>
+          {showLearningPanel && (
+            <motion.div
+              key="learning-panel"
+              initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
+              transition={{ duration: 0.2 }}
+              className={clsx(
+                "shrink-0 overflow-hidden",
+                isZenMode
+                  ? "fixed top-4 right-4 bottom-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)]"
+                  : "w-full lg:h-full lg:w-[360px]"
+              )}
+            >
                 <div className="w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
               <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
                 <div className="mb-4 flex items-center justify-between gap-2">
@@ -1158,14 +1183,25 @@ export default function DictationPage({ params }: PageProps) {
               </motion.div>
             )}
           </AnimatePresence>
-        )}
 
-        {!isZenMode && !showLearningPanel && (
-          <div className="flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3">
+        {!showLearningPanel && (
+          <div
+            className={clsx(
+              isZenMode
+                ? "fixed top-4 right-4 z-[60]"
+                : "flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3"
+            )}
+          >
             <button
               onClick={() => setShowLearningPanel(true)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/80 bg-white/60 text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-white"
+              className={clsx(
+                "inline-flex h-10 w-10 items-center justify-center rounded-xl border shadow-sm backdrop-blur-md transition-colors",
+                isZenMode
+                  ? "border-white/20 bg-white/10 text-white/60 hover:bg-white/20 hover:text-white"
+                  : "border-white/80 bg-white/60 text-slate-700 hover:bg-white"
+              )}
               aria-label="Show lesson panel"
+              title="Show lesson panel"
             >
               <PanelRightOpen size={16} />
             </button>

@@ -4,14 +4,23 @@ interface UseKeyboardShortcutsOptions {
   onReplay: () => void;
   onPrevious: () => void;
   onSkip: () => void;
+  isZenMode: boolean;
+  onZenModeChange: (value: boolean | ((prev: boolean) => boolean)) => void;
 }
 
 /**
  * Wires the dictation page's global keyboard shortcuts (Shift+Space replay,
- * Shift+Arrow prev/next, "/" to focus the answer input). Returns a signal
- * that increments each time "/" is pressed, so the page can focus its input.
+ * Shift+Arrow prev/next, "/" to focus the answer input, "Z" to toggle Zen
+ * mode, Escape to exit it). Returns a signal that increments each time "/"
+ * is pressed, so the page can focus its input.
  */
-export function useKeyboardShortcuts({ onReplay, onPrevious, onSkip }: UseKeyboardShortcutsOptions) {
+export function useKeyboardShortcuts({
+  onReplay,
+  onPrevious,
+  onSkip,
+  isZenMode,
+  onZenModeChange,
+}: UseKeyboardShortcutsOptions) {
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
 
   useEffect(() => {
@@ -21,6 +30,12 @@ export function useKeyboardShortcuts({ onReplay, onPrevious, onSkip }: UseKeyboa
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         (target instanceof HTMLElement && target.isContentEditable);
+
+      if (e.key === "Escape" && isZenMode) {
+        e.preventDefault();
+        onZenModeChange(false);
+        return;
+      }
 
       if (e.shiftKey && e.code === "Space") {
         e.preventDefault();
@@ -46,11 +61,24 @@ export function useKeyboardShortcuts({ onReplay, onPrevious, onSkip }: UseKeyboa
         return;
       }
 
+      if (
+        !isTypingTarget &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "z"
+      ) {
+        e.preventDefault();
+        onZenModeChange((prev) => !prev);
+        return;
+      }
+
       if (isTypingTarget) return;
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [onReplay, onSkip, onPrevious]);
+  }, [onReplay, onSkip, onPrevious, isZenMode, onZenModeChange]);
 
   return { inputFocusSignal };
 }
