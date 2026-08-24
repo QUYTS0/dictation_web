@@ -240,6 +240,48 @@ export default function DictationPage({ params }: PageProps) {
     return () => window.clearTimeout(t);
   }, [inputFocusSignal, shouldShowInput]);
 
+  // Lets the user swipe horizontally to pan overflowed text instead of only
+  // dragging the caret. A short tap still falls through to native cursor
+  // placement; only a clear horizontal drag hijacks the gesture.
+  useEffect(() => {
+    const el = workspaceInputRef.current;
+    if (!el || !shouldShowInput) return;
+
+    const DRAG_THRESHOLD = 8;
+    let startX = 0;
+    let startScrollLeft = 0;
+    let isDragging = false;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      startX = e.touches[0].clientX;
+      startScrollLeft = el.scrollLeft;
+      isDragging = false;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const deltaX = e.touches[0].clientX - startX;
+      if (!isDragging && Math.abs(deltaX) < DRAG_THRESHOLD) return;
+      isDragging = true;
+      e.preventDefault();
+      el.scrollLeft = startScrollLeft - deltaX;
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (isDragging) e.preventDefault();
+      isDragging = false;
+    };
+
+    el.addEventListener("touchstart", handleTouchStart, { passive: true });
+    el.addEventListener("touchmove", handleTouchMove, { passive: false });
+    el.addEventListener("touchend", handleTouchEnd);
+
+    return () => {
+      el.removeEventListener("touchstart", handleTouchStart);
+      el.removeEventListener("touchmove", handleTouchMove);
+      el.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [shouldShowInput]);
+
   const shouldShowPreviousReview =
     !!previousReview &&
     previousReview.segmentIndex === currentSegIdx - 1 &&
@@ -625,6 +667,14 @@ export default function DictationPage({ params }: PageProps) {
                         setCheckResult(null);
                       }}
                       onKeyDown={handleWorkspaceInputKeyDown}
+                      onWheel={(e) => {
+                        const el = e.currentTarget;
+                        if (el.scrollWidth <= el.clientWidth) return;
+                        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+                        if (delta === 0) return;
+                        e.preventDefault();
+                        el.scrollLeft += delta;
+                      }}
                       placeholder="Type what you hear..."
                       className="w-full bg-transparent p-6 pr-39 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
                       autoComplete="off"
