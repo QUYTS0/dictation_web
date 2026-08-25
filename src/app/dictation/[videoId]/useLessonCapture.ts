@@ -85,6 +85,11 @@ export function useLessonCapture({
   const phrasePreviewCacheRef = useRef<Map<string, VocabularyPreviewResponse>>(new Map());
   const phraseHoverTimeoutRef = useRef<number | null>(null);
   const phraseHoverAbortRef = useRef<AbortController | null>(null);
+  // Set once a touch is observed anywhere on the page, so the
+  // selectionchange listener below (see the effect near handleReviewMouseUp)
+  // only acts for touch interactions and never fires for desktop mouse use.
+  const touchSelectionActiveRef = useRef(false);
+  const touchSelectionDebounceRef = useRef<number | null>(null);
   // A pending delete is finalized after a grace period (see
   // requestDeleteLessonCapture); these mirror pendingDeleteId so cleanup
   // effects can read the latest value without depending on the state itself.
@@ -588,6 +593,45 @@ export function useLessonCapture({
     handleSelectionMouseUp(reviewTextContainerRef.current);
   }, [handleSelectionMouseUp]);
 
+  // Native touch text-selection (long-press then drag the handles) already
+  // populates window.getSelection() exactly like a desktop mouse-drag does —
+  // handleSelectionMouseUp above doesn't care how the selection was made.
+  // The only gap is that mobile browsers never fire a mouseup on our
+  // container once the user finishes adjusting the selection. `selectionchange`
+  // *does* fire continuously while dragging the native handles, so debouncing
+  // it and reusing handleSelectionMouseUp once the selection settles closes
+  // that gap without duplicating any selection-reading logic. Gated behind a
+  // "has this page seen a touch" flag so desktop mouse users (who are already
+  // served by the mouseup handlers) never trigger this path.
+  useEffect(() => {
+    const handleTouchStart = () => {
+      touchSelectionActiveRef.current = true;
+    };
+    const handleSelectionChange = () => {
+      if (!touchSelectionActiveRef.current) return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+      if (touchSelectionDebounceRef.current !== null) {
+        window.clearTimeout(touchSelectionDebounceRef.current);
+      }
+      touchSelectionDebounceRef.current = window.setTimeout(() => {
+        touchSelectionDebounceRef.current = null;
+        handleSelectionMouseUp(scriptTextContainerRef.current);
+        handleSelectionMouseUp(reviewTextContainerRef.current);
+      }, 300);
+    };
+    document.addEventListener("touchstart", handleTouchStart, { passive: true });
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("touchstart", handleTouchStart);
+      document.removeEventListener("selectionchange", handleSelectionChange);
+      if (touchSelectionDebounceRef.current !== null) {
+        window.clearTimeout(touchSelectionDebounceRef.current);
+        touchSelectionDebounceRef.current = null;
+      }
+    };
+  }, [handleSelectionMouseUp]);
+
   /**
    * A tap (no drag) on a single word should always select just that word,
    * without needing pixel-precise dragging. If the browser already produced
@@ -630,20 +674,15 @@ export function useLessonCapture({
   }, []);
 
   /**
-   * Hovering a highlighted phrase shows its meaning without needing a
-   * click. When Gemini already translated this exact phrase while picking
-   * it for highlighting, that translation is used directly — no request at
-   * all. Otherwise (older cached rows, or an arbitrary non-highlighted
-   * word) it falls back to the same live /api/vocabulary/preview lookup
-   * the click popover uses.
+   * Shared by the desktop hover handler and the phone tap handler below:
+   * shows a phrase's meaning at the given anchor point, preferring an
+   * already-known AI translation, then a cached lookup, then a live
+   * /api/vocabulary/preview request.
    */
-  const handlePhraseMouseEnter = useCallback(
-    (event: React.MouseEvent<HTMLSpanElement>, segmentIndex: number, phraseText: string) => {
+  const showPhrasePreview = useCallback(
+    (segmentIndex: number, phraseText: string, x: number, y: number) => {
       const key = phraseText.trim().toLowerCase();
       if (!key) return;
-      const rect = event.currentTarget.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top;
 
       const aiTranslation = findPhraseTranslation(segmentIndex, phraseText);
       if (aiTranslation) {
@@ -692,9 +731,40 @@ export function useLessonCapture({
     [dismissPhraseHoverPreview, findPhraseTranslation]
   );
 
+  /**
+   * Hovering a highlighted phrase shows its meaning without needing a
+   * click (desktop only — see handlePhraseTap for the phone equivalent).
+   */
+  const handlePhraseMouseEnter = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>, segmentIndex: number, phraseText: string) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      showPhrasePreview(segmentIndex, phraseText, rect.left + rect.width / 2, rect.top);
+    },
+    [showPhrasePreview]
+  );
+
   const handlePhraseMouseLeave = useCallback(() => {
     dismissPhraseHoverPreview();
   }, [dismissPhraseHoverPreview]);
+
+  /**
+   * Phone equivalent of handlePhraseMouseEnter, wired to the small inline
+   * info-icon rendered next to phrase spans on phone (there's no hover
+   * there). Tapping the icon again while the same phrase's preview is
+   * showing dismisses it instead of re-fetching.
+   */
+  const handlePhraseTap = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, segmentIndex: number, phraseText: string) => {
+      const key = phraseText.trim().toLowerCase();
+      if (phraseHoverPreview?.key === key) {
+        dismissPhraseHoverPreview();
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      showPhrasePreview(segmentIndex, phraseText, rect.left + rect.width / 2, rect.top);
+    },
+    [phraseHoverPreview, dismissPhraseHoverPreview, showPhrasePreview]
+  );
 
   // Live translation/dictionary preview for whatever's currently selected —
   // shown in the popover before the user decides to save anything. Debounced
@@ -942,5 +1012,6 @@ export function useLessonCapture({
     phraseHoverPreview,
     handlePhraseMouseEnter,
     handlePhraseMouseLeave,
+    handlePhraseTap,
   };
 }

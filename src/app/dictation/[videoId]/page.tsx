@@ -27,6 +27,7 @@ import {
   Undo2,
   Flame,
   Headphones,
+  SlidersHorizontal,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -61,6 +62,7 @@ import { BookmarksList } from "./components/BookmarksList";
 import { ComparedSentenceText } from "./components/ComparedSentenceText";
 import { ConfettiBurst } from "./components/ConfettiBurst";
 import { ComboStreak } from "./components/ComboStreak";
+import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import {
   SCRIPT_POPOVER_MAX_WIDTH_PX,
   SCRIPT_CONTEXT_NEXT_COUNT,
@@ -99,6 +101,7 @@ export default function DictationPage({ params }: PageProps) {
   const [isZenMode, setIsZenMode] = useState(false);
   const [showHintPanel, setShowHintPanel] = useState(false);
   const [bookmarkDeletingId, setBookmarkDeletingId] = useState<string | null>(null);
+  const [showMoreSettings, setShowMoreSettings] = useState(false);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -401,6 +404,7 @@ export default function DictationPage({ params }: PageProps) {
     phraseHoverPreview,
     handlePhraseMouseEnter,
     handlePhraseMouseLeave,
+    handlePhraseTap,
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverPreviewError,
@@ -470,7 +474,7 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Render ----
   return (
-    <div className="relative h-screen overflow-hidden flex flex-col w-full bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+    <div className="relative h-dvh overflow-hidden flex flex-col w-full bg-[#f4f7ff] font-sans text-slate-900 antialiased">
       <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
       <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
       <AnimatePresence>
@@ -503,20 +507,22 @@ export default function DictationPage({ params }: PageProps) {
                   <h1 className="truncate text-sm font-semibold leading-tight text-slate-900">{workspaceTitle}</h1>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-3">
+              <div className="flex shrink-0 items-center gap-2 sm:gap-3">
                 {user && streakDays > 0 && (
-                  <div className="hidden items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1 text-orange-600 sm:flex">
+                  <div className="flex items-center gap-1 rounded-lg bg-orange-50 px-2 py-1 text-orange-600 sm:gap-1.5 sm:px-2.5">
                     <Flame size={14} className="fill-orange-500/20" />
-                    <span className="text-xs font-semibold">{streakDays} day streak</span>
+                    <span className="text-xs font-semibold sm:hidden">{streakDays}</span>
+                    <span className="hidden text-xs font-semibold sm:inline">{streakDays} day streak</span>
                   </div>
                 )}
                 <Link
                   href={`/listening/${videoId}`}
-                  className="hidden items-center gap-1.5 rounded-lg border border-white/60 bg-white/40 px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-white/80 sm:flex"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/60 bg-white/40 text-slate-600 transition-colors hover:bg-white/80 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-xs sm:font-semibold"
                   title="Switch to Listening mode — same transcript, no regenerating"
+                  aria-label="Switch to Listening mode"
                 >
                   <Headphones size={14} />
-                  Listening mode
+                  <span className="hidden sm:inline">Listening mode</span>
                 </Link>
                 <UserButton />
               </div>
@@ -545,7 +551,55 @@ export default function DictationPage({ params }: PageProps) {
                 transition={{ duration: 0.3, ease: "easeInOut" }}
                 className="overflow-hidden"
               >
-                <div className="flex flex-wrap items-center gap-2">
+                {/* Phone-only compact row: the most-used controls stay one tap away,
+                    the rest move into the "More settings" sheet below. */}
+                <div className="flex sm:hidden items-center gap-2">
+                  <button
+                    onClick={() => setIsZenMode(true)}
+                    aria-label="Zen Mode"
+                    title="Zen Mode"
+                    className="h-11 w-11 flex items-center justify-center rounded-xl border border-white/60 bg-white/40 text-slate-600 active:scale-95 transition-all"
+                  >
+                    <Sparkles size={18} className="text-indigo-500" />
+                  </button>
+                  <button
+                    onClick={() => setShowVideo((v) => !v)}
+                    aria-label={showVideo ? "Enable Audio Mode" : "Exit Audio Mode"}
+                    aria-pressed={!showVideo}
+                    title={showVideo ? "Audio Mode" : "Exit Audio Mode"}
+                    className={clsx(
+                      "h-11 w-11 flex items-center justify-center rounded-xl border transition-all active:scale-95",
+                      !showVideo
+                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                        : "border-white/60 bg-white/40 text-slate-600"
+                    )}
+                  >
+                    <Sparkles size={18} />
+                  </button>
+                  <button
+                    onClick={() =>
+                      setPlaybackRate(
+                        PLAYBACK_RATE_OPTIONS[
+                          (PLAYBACK_RATE_OPTIONS.indexOf(playbackRate) + 1) % PLAYBACK_RATE_OPTIONS.length
+                        ]
+                      )
+                    }
+                    aria-label={`Playback speed: ${playbackRate}x, tap to change`}
+                    className="h-11 min-w-11 px-2 flex items-center justify-center rounded-xl border border-white/60 bg-white/40 text-xs font-bold text-slate-600 active:scale-95 transition-all"
+                  >
+                    {playbackRate}x
+                  </button>
+                  <button
+                    onClick={() => setShowMoreSettings(true)}
+                    aria-label="More settings"
+                    title="More settings"
+                    className="h-11 w-11 flex items-center justify-center rounded-xl border border-white/60 bg-white/40 text-slate-600 active:scale-95 transition-all"
+                  >
+                    <SlidersHorizontal size={18} />
+                  </button>
+                </div>
+
+                <div className="hidden sm:flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => setShowVideo((v) => !v)}
                     className="text-xs font-bold px-3 py-1.5 rounded-lg border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80 transition-colors flex items-center gap-2"
@@ -650,10 +704,81 @@ export default function DictationPage({ params }: PageProps) {
             )}
           </AnimatePresence>
 
+          <MobileBottomSheet open={showMoreSettings} onClose={() => setShowMoreSettings(false)} title="More settings">
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Video size</p>
+                <div className="flex items-center rounded-xl border border-white/70 bg-white/60 p-1 shadow-sm">
+                  <button
+                    onClick={() => setVideoSizeMode("standard")}
+                    className={clsx(
+                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
+                      videoSizeMode === "standard" ? "bg-indigo-600 text-white" : "text-slate-600"
+                    )}
+                  >
+                    Standard
+                  </button>
+                  <button
+                    onClick={() => setVideoSizeMode("large")}
+                    className={clsx(
+                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
+                      videoSizeMode === "large" ? "bg-indigo-600 text-white" : "text-slate-600"
+                    )}
+                  >
+                    Large
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setAutoAdvance((v) => !v)}
+                className={clsx(
+                  "flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-semibold transition-colors",
+                  autoAdvance
+                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                    : "border-white/60 bg-white/40 text-slate-600"
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-indigo-500" />
+                  Auto-advance
+                </span>
+                <span>{autoAdvance ? "On" : "Off"}</span>
+              </button>
+
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Practice mode</p>
+                <div
+                  className="flex items-center rounded-xl border border-white/70 bg-white/60 p-1 shadow-sm"
+                  title="Easy mode always shows the sentence's word/letter shape. Hard mode hides it until you ask for a hint."
+                >
+                  <button
+                    onClick={() => setPracticeMode("easy")}
+                    className={clsx(
+                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
+                      practiceMode === "easy" ? "bg-indigo-600 text-white" : "text-slate-600"
+                    )}
+                  >
+                    Easy
+                  </button>
+                  <button
+                    onClick={() => setPracticeMode("hard")}
+                    className={clsx(
+                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
+                      practiceMode === "hard" ? "bg-indigo-600 text-white" : "text-slate-600"
+                    )}
+                  >
+                    Hard
+                  </button>
+                </div>
+              </div>
+            </div>
+          </MobileBottomSheet>
+
           <div
             className={clsx(
               "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-white/20 shrink-0 bg-black transition-all duration-300 ease-out",
-              isZenMode ? "max-h-[65vh]" : "max-h-[320px]"
+              isZenMode ? "max-h-[50dvh] sm:max-h-[65vh]" : "max-h-[38dvh] sm:max-h-[320px]"
             )}
           >
             <div
@@ -681,11 +806,11 @@ export default function DictationPage({ params }: PageProps) {
           {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
             <div
               className={clsx(
-                "relative z-10 flex items-center gap-7 px-4 pt-4 h-16 rounded-3xl border backdrop-blur-md shadow-md mt-4 transition-all duration-300",
+                "relative z-10 flex flex-wrap sm:flex-nowrap items-center gap-3 sm:gap-7 px-3 sm:px-4 py-3 sm:pt-4 h-auto sm:h-16 rounded-3xl border backdrop-blur-md shadow-md mt-4 transition-all duration-300",
                 isZenMode ? "border-white/10 bg-slate-900/40" : "border-white/60 bg-white/40"
               )}
             >
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={handlePrevious} disabled={currentSegIdx === 0} />
                 <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={handleReplay} />
                 <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={handleSkip} disabled={currentSegIdx >= segments.length - 1} />
@@ -707,7 +832,7 @@ export default function DictationPage({ params }: PageProps) {
                 <ComboStreak combo={combo} />
               </div>
               {segments.length > 0 && (
-                <div className="flex-1 min-w-0">
+                <div className="order-last w-full sm:order-none sm:w-auto sm:flex-1 min-w-0">
                   <ProgressBar currentIndex={currentSegIdx} totalSegments={segments.length} accuracy={accuracy} tone={isZenMode ? "zen" : "default"} />
                 </div>
               )}
@@ -822,7 +947,9 @@ export default function DictationPage({ params }: PageProps) {
                   </p>
                 )}
                 <div className="relative">
-                  <div className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
+                  <div
+                    onClick={() => workspaceInputRef.current?.focus()}
+                    className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
                     workspaceStatus === "success"
                       ? "border-emerald-500 bg-emerald-50/30"
                       : workspaceStatus === "error"
@@ -835,6 +962,7 @@ export default function DictationPage({ params }: PageProps) {
                       value={workspaceInputValue}
                       onChange={handleWorkspaceInputChange}
                       onKeyDown={handleWorkspaceInputKeyDown}
+                      enterKeyHint="done"
                       onWheel={(e) => {
                         const el = e.currentTarget;
                         if (el.scrollWidth <= el.clientWidth) return;
@@ -844,7 +972,7 @@ export default function DictationPage({ params }: PageProps) {
                         el.scrollLeft += delta;
                       }}
                       placeholder="Type what you hear..."
-                      className="w-full bg-transparent p-6 pr-39 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      className="w-full bg-transparent p-6 pr-42 sm:pr-39 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
@@ -859,7 +987,7 @@ export default function DictationPage({ params }: PageProps) {
                         aria-label={showHintPanel ? "Hide hint" : "Show hint"}
                         aria-pressed={showHintPanel}
                         className={clsx(
-                          "h-9 w-9 flex items-center justify-center rounded-xl border-yellow-500 bg-yellow-100 transition-all active:scale-95" + " hover:bg-yellow-300 hover:border-yellow-300",
+                          "h-11 w-11 sm:h-9 sm:w-9 flex items-center justify-center rounded-xl border-yellow-500 bg-yellow-100 transition-all active:scale-95" + " hover:bg-yellow-300 hover:border-yellow-300",
                           showHintPanel
                             ? "bg-indigo-100 border-indigo-300 text-indigo-600"
                             : "bg-white/70 border-white/80 text-slate-500 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600"
@@ -1137,18 +1265,26 @@ export default function DictationPage({ params }: PageProps) {
           {showLearningPanel && (
             <motion.div
               key="learning-panel"
-              initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
+              initial={isZenMode ? { opacity: 0, y: 24 } : { opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0, y: 0 }}
+              exit={isZenMode ? { opacity: 0, y: 24 } : { opacity: 0, x: 16 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
-                "shrink-0 overflow-hidden",
+                "shrink-0",
                 isZenMode
-                  ? "fixed top-4 right-4 bottom-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)]"
-                  : "w-full lg:h-full lg:w-[360px]"
+                  ? "fixed inset-x-0 bottom-0 top-auto z-[60] w-full max-h-[80dvh] overflow-y-auto pb-[env(safe-area-inset-bottom)] sm:inset-x-auto sm:top-4 sm:right-4 sm:bottom-4 sm:w-[360px] sm:max-w-[calc(100vw-2rem)] sm:max-h-none sm:overflow-hidden sm:pb-0"
+                  : "overflow-hidden w-full lg:h-full lg:w-[360px]"
               )}
             >
-                <div className="w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
+                {isZenMode && (
+                  <div className="mx-auto mb-1 mt-2 h-1 w-10 shrink-0 rounded-full bg-slate-300/70 sm:hidden" aria-hidden="true" />
+                )}
+                <div
+                  className={clsx(
+                    "w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 shadow-lg overflow-hidden",
+                    isZenMode ? "rounded-t-3xl sm:rounded-3xl" : "rounded-3xl"
+                  )}
+                >
               <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
                 <div className="mb-4 flex items-center justify-between gap-2">
                   <h2 className="font-semibold text-slate-900 dark:text-white">Lesson panel</h2>
@@ -1350,15 +1486,27 @@ export default function DictationPage({ params }: PageProps) {
                                 if (item.kind === "space") return item.text;
                                 if (item.kind === "phrase") {
                                   return (
-                                    <span
-                                      key={item.key}
-                                      onMouseUp={handleScriptWordMouseUp}
-                                      onMouseEnter={(event) => handlePhraseMouseEnter(event, segment.segmentIndex, item.text)}
-                                      onMouseLeave={handlePhraseMouseLeave}
-                                      title="Hover or tap to see the meaning"
-                                      className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-amber-400 decoration-2 underline-offset-2 transition-colors hover:bg-amber-100/70 dark:hover:bg-amber-500/20"
-                                    >
-                                      {item.text}
+                                    <span key={item.key} className="whitespace-nowrap">
+                                      <span
+                                        onMouseUp={handleScriptWordMouseUp}
+                                        onMouseEnter={(event) => handlePhraseMouseEnter(event, segment.segmentIndex, item.text)}
+                                        onMouseLeave={handlePhraseMouseLeave}
+                                        title="Hover or tap to see the meaning"
+                                        className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-amber-400 decoration-2 underline-offset-2 transition-colors hover:bg-amber-100/70 dark:hover:bg-amber-500/20"
+                                      >
+                                        {item.text}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handlePhraseTap(event, segment.segmentIndex, item.text);
+                                        }}
+                                        aria-label={`Show meaning of "${item.text}"`}
+                                        className="sm:hidden ml-0.5 inline-flex h-4 w-4 items-center justify-center align-super text-[10px] leading-none text-amber-600"
+                                      >
+                                        ⓘ
+                                      </button>
                                     </span>
                                   );
                                 }
@@ -1410,7 +1558,7 @@ export default function DictationPage({ params }: PageProps) {
           <div
             className={clsx(
               isZenMode
-                ? "fixed top-4 right-4 z-[60]"
+                ? "fixed inset-x-0 bottom-4 z-[60] flex justify-center sm:inset-x-auto sm:top-4 sm:right-4 sm:bottom-auto"
                 : "flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3"
             )}
           >
@@ -1543,7 +1691,7 @@ export default function DictationPage({ params }: PageProps) {
                       onClick={() => handleScriptPopoverAction("word")}
                       disabled={scriptPopover.selectedWordCount !== 1}
                       className={clsx(
-                        "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
+                        "flex items-center gap-1 rounded-lg px-3 py-2.5 sm:px-2.5 sm:py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
                         scriptSelectedType === "word"
                           ? "bg-white text-primary-700 ring-1 ring-primary-300 dark:bg-white/10 dark:text-primary-300"
                           : "text-slate-600 hover:bg-white hover:text-primary-700 dark:text-slate-300"
@@ -1556,7 +1704,7 @@ export default function DictationPage({ params }: PageProps) {
                       onClick={() => handleScriptPopoverAction("phrase")}
                       disabled={scriptPopover.selectedWordCount < 2}
                       className={clsx(
-                        "flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
+                        "flex items-center gap-1 rounded-lg px-3 py-2.5 sm:px-2.5 sm:py-1.5 text-[11px] font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent dark:hover:bg-white/10",
                         scriptSelectedType === "phrase"
                           ? "bg-white text-primary-700 ring-1 ring-primary-300 dark:bg-white/10 dark:text-primary-300"
                           : "text-slate-600 hover:bg-white hover:text-primary-700 dark:text-slate-300"
@@ -1567,7 +1715,7 @@ export default function DictationPage({ params }: PageProps) {
                     </button>
                     <button
                       onClick={() => handleScriptPopoverAction("sentence")}
-                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 dark:text-slate-300 dark:hover:bg-white/10"
+                      className="flex items-center gap-1 rounded-lg px-3 py-2.5 sm:px-2.5 sm:py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-white hover:text-primary-700 dark:text-slate-300 dark:hover:bg-white/10"
                       title="Save sentence (S)"
                     >
                       <AlignLeft size={13} /> Sentence
@@ -1585,7 +1733,7 @@ export default function DictationPage({ params }: PageProps) {
                   });
                 }}
                 className={clsx(
-                  "flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                  "flex items-center gap-1 rounded-xl border px-3 py-2.5 sm:px-2.5 sm:py-1.5 text-[11px] font-medium transition-colors",
                   bookmarkedSegmentIndexes.has(scriptPopover.segmentIndex)
                     ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
                     : "border-white/60 text-slate-600 hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
@@ -1597,7 +1745,7 @@ export default function DictationPage({ params }: PageProps) {
 
               <button
                 onClick={() => handleScriptPopoverAction("note")}
-                className="flex items-center gap-1 rounded-xl border border-white/60 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+                className="flex items-center gap-1 rounded-xl border border-white/60 px-3 py-2.5 sm:px-2.5 sm:py-1.5 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-100/70 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
               >
                 <StickyNote size={13} /> Note
               </button>

@@ -312,7 +312,7 @@ export function ComboStreak({ combo }: ComboStreakProps) {
 
   return (
     <div className="flex flex-col items-center gap-1 group shrink-0">
-      <div className="relative h-12 w-12">
+      <div className="relative h-11 w-11 sm:h-12 sm:w-12">
         {Effect && color && <Effect key={`fx-${combo}`} color={color} />}
 
         <motion.div
@@ -346,7 +346,7 @@ export function ComboStreak({ combo }: ComboStreakProps) {
 
         {design === "infernoHalo" && <InfernoPulseGlints key={`glints-${combo}`} />}
       </div>
-      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center">
+      <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex flex-col items-center">
         <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">Streak</span>
       </div>
     </div>

@@ -72,12 +72,12 @@ export default function UserButton() {
             <img
               src={avatarUrl}
               alt=""
-              width={32}
-              height={32}
-              className="w-8 h-8 rounded-full cursor-pointer border-2 border-slate-200"
+              width={36}
+              height={36}
+              className="w-9 h-9 rounded-full cursor-pointer border-2 border-slate-200"
             />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-bold cursor-pointer select-none">
+            <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-bold cursor-pointer select-none">
               {initials}
             </div>
           )}
