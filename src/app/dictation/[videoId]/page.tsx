@@ -73,7 +73,7 @@ import {
 } from "./constants";
 import { getSavedFilterLabel, buildComparedTokens, buildScriptRenderItems } from "./helpers";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
-import { getWordShapeMask } from "@/lib/utils/segment";
+import { getWordShapeMask, overlayTypedOntoMask } from "@/lib/utils/segment";
 import type { SavedFilter, RightPanelTab } from "./types";
 
 // ---- Page component ----
@@ -111,6 +111,7 @@ export default function DictationPage({ params }: PageProps) {
   const { streakDays } = useStreak(user);
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
+  const maskOverlayRef = useRef<HTMLDivElement>(null);
   const previousShowVideoRef = useRef(showVideo);
 
   const {
@@ -536,7 +537,7 @@ export default function DictationPage({ params }: PageProps) {
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
-            "flex flex-col min-h-0 lg:flex-1 lg:overflow-hidden",
+            "flex flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden",
             isZenMode && "z-50"
           )}
         >
@@ -938,24 +939,31 @@ export default function DictationPage({ params }: PageProps) {
 
             {(uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer") && (
               <>
-                {practiceMode === "easy" && currentSegment && (
-                  <p
-                    aria-hidden="true"
-                    className="mb-2 select-none whitespace-pre-wrap font-mono text-sm tracking-wide text-slate-400 dark:text-slate-500"
-                  >
-                    {getWordShapeMask(currentSegment.text)}
-                  </p>
-                )}
-                <div className="relative">
+                <div className="flex items-stretch gap-2">
+                  <div className="relative flex-1 min-w-0">
                   <div
                     onClick={() => workspaceInputRef.current?.focus()}
-                    className={`relative rounded-2xl overflow-hidden border-2 transition-all ${
+                    className={`relative h-full rounded-2xl overflow-hidden border-2 transition-all ${
                     workspaceStatus === "success"
                       ? "border-emerald-500 bg-emerald-50/30"
                       : workspaceStatus === "error"
                       ? "border-red-500 bg-red-50/30"
                       : `border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 focus-within:border-indigo-500 focus-within:ring-4 focus-within:ring-indigo-500/10 ${isZenMode ? "shadow-2xl" : ""}`
                   }`}>
+                    {practiceMode === "easy" && currentSegment && (
+                      // Mirrors the input's own font/padding exactly so each typed
+                      // character lines up with the blank it fills — the input's
+                      // own text is made transparent (see className below) so only
+                      // this overlay is visible, with the caret still showing
+                      // through from the real input underneath.
+                      <div
+                        ref={maskOverlayRef}
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre p-6 pr-32 sm:pr-28 text-xl font-mono tracking-wide text-slate-900 dark:text-white"
+                      >
+                        {overlayTypedOntoMask(getWordShapeMask(currentSegment.text), workspaceInputValue)}
+                      </div>
+                    )}
                     <input
                       ref={workspaceInputRef}
                       type="text"
@@ -963,6 +971,9 @@ export default function DictationPage({ params }: PageProps) {
                       onChange={handleWorkspaceInputChange}
                       onKeyDown={handleWorkspaceInputKeyDown}
                       enterKeyHint="done"
+                      onScroll={(e) => {
+                        if (maskOverlayRef.current) maskOverlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                      }}
                       onWheel={(e) => {
                         const el = e.currentTarget;
                         if (el.scrollWidth <= el.clientWidth) return;
@@ -972,7 +983,12 @@ export default function DictationPage({ params }: PageProps) {
                         el.scrollLeft += delta;
                       }}
                       placeholder="Type what you hear..."
-                      className="w-full bg-transparent p-6 pr-42 sm:pr-39 text-xl font-medium text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+                      className={clsx(
+                        "w-full bg-transparent p-6 pr-32 sm:pr-28 text-xl outline-none",
+                        practiceMode === "easy" && currentSegment
+                          ? "font-mono tracking-wide text-transparent caret-slate-900 dark:caret-white placeholder:text-transparent"
+                          : "font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
+                      )}
                       autoComplete="off"
                       autoCorrect="off"
                       autoCapitalize="off"
@@ -980,21 +996,6 @@ export default function DictationPage({ params }: PageProps) {
                     />
 
                     <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setShowHintPanel((prev) => !prev)}
-                        title={showHintPanel ? "Hide hint" : "Show hint"}
-                        aria-label={showHintPanel ? "Hide hint" : "Show hint"}
-                        aria-pressed={showHintPanel}
-                        className={clsx(
-                          "h-11 w-11 sm:h-9 sm:w-9 flex items-center justify-center rounded-xl border-yellow-500 bg-yellow-100 transition-all active:scale-95" + " hover:bg-yellow-300 hover:border-yellow-300",
-                          showHintPanel
-                            ? "bg-indigo-100 border-indigo-300 text-indigo-600"
-                            : "bg-white/70 border-white/80 text-slate-500 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-600"
-                        )}
-                      >
-                        <Lightbulb size={17} />
-                      </button>
                       <AnimatePresence mode="wait">
                         {isCheckingWorkspace ? (
                           <motion.div
@@ -1062,6 +1063,22 @@ export default function DictationPage({ params }: PageProps) {
                       </motion.span>
                     )}
                   </AnimatePresence>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowHintPanel((prev) => !prev)}
+                    title={showHintPanel ? "Hide hint" : "Show hint"}
+                    aria-label={showHintPanel ? "Hide hint" : "Show hint"}
+                    aria-pressed={showHintPanel}
+                    className={clsx(
+                      "shrink-0 w-12 sm:w-14 flex items-center justify-center rounded-2xl border-2 transition-all active:scale-95",
+                      showHintPanel
+                        ? "border-indigo-300 bg-indigo-100 text-indigo-600"
+                        : "border-yellow-400 bg-yellow-100 text-slate-600 hover:bg-yellow-200 hover:border-yellow-500"
+                    )}
+                  >
+                    <Lightbulb size={20} />
+                  </button>
                 </div>
 
                 {checkAnswerError && (
@@ -1265,26 +1282,18 @@ export default function DictationPage({ params }: PageProps) {
           {showLearningPanel && (
             <motion.div
               key="learning-panel"
-              initial={isZenMode ? { opacity: 0, y: 24 } : { opacity: 0, x: 16 }}
-              animate={{ opacity: 1, x: 0, y: 0 }}
-              exit={isZenMode ? { opacity: 0, y: 24 } : { opacity: 0, x: 16 }}
+              initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
-                "shrink-0",
+                "shrink-0 overflow-hidden",
                 isZenMode
-                  ? "fixed inset-x-0 bottom-0 top-auto z-[60] w-full max-h-[80dvh] overflow-y-auto pb-[env(safe-area-inset-bottom)] sm:inset-x-auto sm:top-4 sm:right-4 sm:bottom-4 sm:w-[360px] sm:max-w-[calc(100vw-2rem)] sm:max-h-none sm:overflow-hidden sm:pb-0"
-                  : "overflow-hidden w-full lg:h-full lg:w-[360px]"
+                  ? "w-full sm:fixed sm:top-4 sm:right-4 sm:bottom-4 sm:z-[60] sm:w-[360px] sm:max-w-[calc(100vw-2rem)]"
+                  : "w-full lg:h-full lg:w-[360px]"
               )}
             >
-                {isZenMode && (
-                  <div className="mx-auto mb-1 mt-2 h-1 w-10 shrink-0 rounded-full bg-slate-300/70 sm:hidden" aria-hidden="true" />
-                )}
-                <div
-                  className={clsx(
-                    "w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 shadow-lg overflow-hidden",
-                    isZenMode ? "rounded-t-3xl sm:rounded-3xl" : "rounded-3xl"
-                  )}
-                >
+                <div className="w-full h-full flex flex-col bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-white/80 dark:border-white/10 rounded-3xl shadow-lg overflow-hidden">
               <div className="p-4 border-b border-white/40 dark:border-white/10 bg-white/30 dark:bg-slate-900/40 backdrop-blur-md">
                 <div className="mb-4 flex items-center justify-between gap-2">
                   <h2 className="font-semibold text-slate-900 dark:text-white">Lesson panel</h2>
@@ -1586,7 +1595,7 @@ export default function DictationPage({ params }: PageProps) {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 4 }}
               transition={{ duration: 0.12 }}
-              className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-2xl border border-white/60 bg-white/90 p-2.5 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/90 flex flex-wrap items-center gap-1.5"
+              className="fixed z-[80] -translate-x-1/2 -translate-y-full rounded-2xl border border-white/60 bg-white/90 p-2.5 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/90 flex flex-wrap items-center gap-1.5"
               style={{ left: scriptPopover.x, top: scriptPopover.y, maxWidth: `${SCRIPT_POPOVER_MAX_WIDTH_PX}px` }}
               tabIndex={0}
               role="dialog"
@@ -1792,7 +1801,7 @@ export default function DictationPage({ params }: PageProps) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 4 }}
               transition={{ duration: 0.1 }}
-              className="pointer-events-none fixed z-30 max-w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-white/60 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/95"
+              className="pointer-events-none fixed z-[80] max-w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-white/60 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/95"
               style={{ left: phraseHoverPreview.x, top: phraseHoverPreview.y - 8 }}
               role="tooltip"
             >

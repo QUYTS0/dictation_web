@@ -119,6 +119,17 @@ export function getWordShapeMask(text: string): string {
   return text.replace(/[A-Za-z0-9]/g, "_");
 }
 
+/**
+ * Overlays already-typed characters onto a word-shape mask so each keystroke
+ * visibly fills in the next blank, position by position (Easy mode's answer
+ * box renders this instead of the raw mask once typing starts). Anything
+ * typed past the mask's length is kept as-is, so nothing the user typed is
+ * ever silently hidden.
+ */
+export function overlayTypedOntoMask(mask: string, typed: string): string {
+  return typed + mask.slice(typed.length);
+}
+
 // ---- Manual transcript fallback ----
 
 // Average spoken English pace (~150 wpm) used to estimate segment timing
