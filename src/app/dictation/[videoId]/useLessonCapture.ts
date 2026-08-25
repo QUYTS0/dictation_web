@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import type { TranscriptSegment, VocabularyItem, VocabularyPreviewResponse } from "@/lib/types";
+import type { TranscriptSegment, VocabHighlightPhrase, VocabularyItem, VocabularyPreviewResponse } from "@/lib/types";
 import { normalizeVocabularyTerm } from "@/lib/utils/vocabulary";
 import {
   SCRIPT_POPOVER_MAX_SIDE_MARGIN_PX,
@@ -19,6 +19,8 @@ interface UseLessonCaptureOptions {
   currentSegIdx: number;
   currentSegmentText: string | undefined;
   showScriptContext: boolean;
+  /** AI-picked phrases (with in-context translations) per segment, from useVocabHighlights. */
+  phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   /** Called after any successful save (e.g. to reveal the lesson panel). */
   onAfterSave: () => void;
 }
@@ -39,6 +41,7 @@ export function useLessonCapture({
   currentSegIdx,
   currentSegmentText,
   showScriptContext,
+  phrasesBySegmentIndex,
   onAfterSave,
 }: UseLessonCaptureOptions) {
   const [learningItems, setLearningItems] = useState<LessonSavedItem[]>([]);
@@ -58,6 +61,18 @@ export function useLessonCapture({
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [scriptPopoverSavedFeedback, setScriptPopoverSavedFeedback] = useState<LessonItemType | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // Lightweight read-only tooltip for AI-highlighted phrases in the script —
+  // shows the meaning on hover, distinct from scriptPopover (which opens on
+  // click/tap and offers save actions). Keyed by phrase text so re-hovering
+  // the same phrase reuses phrasePreviewCacheRef instead of re-fetching.
+  const [phraseHoverPreview, setPhraseHoverPreview] = useState<{
+    key: string;
+    text: string;
+    x: number;
+    y: number;
+    data: VocabularyPreviewResponse | null;
+    loading: boolean;
+  } | null>(null);
 
   // Intentionally ref-only: keeps typing smooth without rerendering the
   // entire lesson screen on every note keystroke.
@@ -67,6 +82,9 @@ export function useLessonCapture({
   const reviewTextContainerRef = useRef<HTMLDivElement>(null);
   const scriptPopoverRef = useRef<HTMLDivElement>(null);
   const scriptPopoverSavedFeedbackTimeoutRef = useRef<number | null>(null);
+  const phrasePreviewCacheRef = useRef<Map<string, VocabularyPreviewResponse>>(new Map());
+  const phraseHoverTimeoutRef = useRef<number | null>(null);
+  const phraseHoverAbortRef = useRef<AbortController | null>(null);
   // A pending delete is finalized after a grace period (see
   // requestDeleteLessonCapture); these mirror pendingDeleteId so cleanup
   // effects can read the latest value without depending on the state itself.
@@ -107,6 +125,20 @@ export function useLessonCapture({
   const segmentsByIndex = useMemo(
     () => new Map(segments.map((segment) => [segment.segmentIndex, segment])),
     [segments]
+  );
+
+  // Looks up a known AI translation for an exact highlighted-phrase
+  // selection, so the popover/tooltip can skip /api/vocabulary/preview
+  // entirely when the phrase was already translated during highlighting.
+  const findPhraseTranslation = useCallback(
+    (segmentIndex: number, phraseText: string): string | null => {
+      const key = phraseText.trim().toLowerCase();
+      if (!key) return null;
+      const phrases = phrasesBySegmentIndex.get(segmentIndex);
+      const match = phrases?.find((p) => p.phrase.trim().toLowerCase() === key);
+      return match?.translation ?? null;
+    },
+    [phrasesBySegmentIndex]
   );
 
   // ---- Load saved vocabulary for this video ----
@@ -588,6 +620,82 @@ export function useLessonCapture({
     [handleWordMouseUp]
   );
 
+  const dismissPhraseHoverPreview = useCallback(() => {
+    if (phraseHoverTimeoutRef.current !== null) {
+      window.clearTimeout(phraseHoverTimeoutRef.current);
+      phraseHoverTimeoutRef.current = null;
+    }
+    phraseHoverAbortRef.current?.abort();
+    setPhraseHoverPreview(null);
+  }, []);
+
+  /**
+   * Hovering a highlighted phrase shows its meaning without needing a
+   * click. When Gemini already translated this exact phrase while picking
+   * it for highlighting, that translation is used directly — no request at
+   * all. Otherwise (older cached rows, or an arbitrary non-highlighted
+   * word) it falls back to the same live /api/vocabulary/preview lookup
+   * the click popover uses.
+   */
+  const handlePhraseMouseEnter = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>, segmentIndex: number, phraseText: string) => {
+      const key = phraseText.trim().toLowerCase();
+      if (!key) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top;
+
+      const aiTranslation = findPhraseTranslation(segmentIndex, phraseText);
+      if (aiTranslation) {
+        dismissPhraseHoverPreview();
+        setPhraseHoverPreview({
+          key,
+          text: phraseText,
+          x,
+          y,
+          data: { translation: { text: aiTranslation, source: "gemini" }, wordDetails: null, image: null },
+          loading: false,
+        });
+        return;
+      }
+
+      const cached = phrasePreviewCacheRef.current.get(key);
+      if (cached) {
+        dismissPhraseHoverPreview();
+        setPhraseHoverPreview({ key, text: phraseText, x, y, data: cached, loading: false });
+        return;
+      }
+
+      dismissPhraseHoverPreview();
+      setPhraseHoverPreview({ key, text: phraseText, x, y, data: null, loading: true });
+
+      const controller = new AbortController();
+      phraseHoverAbortRef.current = controller;
+      phraseHoverTimeoutRef.current = window.setTimeout(() => {
+        void fetch("/api/vocabulary/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: phraseText, isWord: splitSentenceIntoWords(phraseText).length === 1 }),
+          signal: controller.signal,
+        })
+          .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : Promise.reject(res)))
+          .then((data: VocabularyPreviewResponse) => {
+            phrasePreviewCacheRef.current.set(key, data);
+            setPhraseHoverPreview((prev) => (prev?.key === key ? { ...prev, data, loading: false } : prev));
+          })
+          .catch((err: unknown) => {
+            if (err instanceof DOMException && err.name === "AbortError") return;
+            setPhraseHoverPreview((prev) => (prev?.key === key ? { ...prev, data: null, loading: false } : prev));
+          });
+      }, 200);
+    },
+    [dismissPhraseHoverPreview, findPhraseTranslation]
+  );
+
+  const handlePhraseMouseLeave = useCallback(() => {
+    dismissPhraseHoverPreview();
+  }, [dismissPhraseHoverPreview]);
+
   // Live translation/dictionary preview for whatever's currently selected —
   // shown in the popover before the user decides to save anything. Debounced
   // and abortable so rapidly tapping across several words doesn't pile up
@@ -599,6 +707,21 @@ export function useLessonCapture({
       setScriptPopoverPreviewLoading(false);
       setScriptPopoverPreviewError(false);
       return;
+    }
+
+    // A multi-word selection that exactly matches an AI-highlighted phrase
+    // already has its translation from the same Gemini call that picked it.
+    // For phrases that's all the preview endpoint would return anyway
+    // (dictionary/image lookups only apply to single words), so this skips
+    // the request entirely instead of re-translating what Gemini just gave us.
+    if (scriptPopover.selectedWordCount > 1) {
+      const aiTranslation = findPhraseTranslation(scriptPopover.segmentIndex, scriptPopover.selectedText);
+      if (aiTranslation) {
+        setScriptPopoverPreview({ translation: { text: aiTranslation, source: "gemini" }, wordDetails: null, image: null });
+        setScriptPopoverPreviewLoading(false);
+        setScriptPopoverPreviewError(false);
+        return;
+      }
     }
 
     const controller = new AbortController();
@@ -633,7 +756,7 @@ export function useLessonCapture({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [scriptPopover]);
+  }, [scriptPopover, findPhraseTranslation]);
 
   const handleScriptPopoverAction = useCallback(
     (type: "word" | "phrase" | "sentence" | "note") => {
@@ -674,6 +797,7 @@ export function useLessonCapture({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     dismissScriptSelection();
+    dismissPhraseHoverPreview();
     setScriptPopoverNoteMode(false);
     // A pending delete belongs to the video being left — finalize it rather
     // than silently dropping it just because the user navigated away during
@@ -684,7 +808,22 @@ export function useLessonCapture({
       if (pendingDeleteIdRef.current) deleteLessonCaptureRef.current(pendingDeleteIdRef.current);
       setPendingDeleteId(null);
     }
-  }, [dismissScriptSelection, videoId]);
+  }, [dismissScriptSelection, dismissPhraseHoverPreview, videoId]);
+
+  // The click popover takes precedence over the hover tooltip (opening one
+  // while hovering another phrase would otherwise show both at once), and
+  // the tooltip's x/y is a point-in-time snapshot so it goes stale on scroll.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (scriptPopover) dismissPhraseHoverPreview();
+  }, [scriptPopover, dismissPhraseHoverPreview]);
+
+  useEffect(() => {
+    if (!phraseHoverPreview) return;
+    const handleScroll = () => dismissPhraseHoverPreview();
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => window.removeEventListener("scroll", handleScroll, { capture: true });
+  }, [phraseHoverPreview, dismissPhraseHoverPreview]);
 
   useEffect(() => {
     if (!scriptPopover) return;
@@ -800,5 +939,8 @@ export function useLessonCapture({
     handleReviewMouseUp,
     handleScriptWordMouseUp,
     handleScriptPopoverAction,
+    phraseHoverPreview,
+    handlePhraseMouseEnter,
+    handlePhraseMouseLeave,
   };
 }

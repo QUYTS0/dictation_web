@@ -197,7 +197,7 @@ export interface MergedSegment {
 }
 
 // A normalised cue with timestamps already converted to seconds and real end time.
-interface NormalizedCue {
+export interface NormalizedCue {
   text: string;
   startSec: number;
   endSec: number;
@@ -224,7 +224,7 @@ const MS_DURATION_THRESHOLD = 100;
 // ---------------------------------------------------------------------------
 // Step 1 – normalise raw cues to seconds and compute real end times.
 // ---------------------------------------------------------------------------
-function normalizeCues(cues: CueItem[]): NormalizedCue[] {
+export function normalizeCues(cues: CueItem[]): NormalizedCue[] {
   // youtube-transcript returns offsets/durations in ms for InnerTube (srv3)
   // but in seconds for the classic XML fallback.
   const sampleCues = cues.slice(0, UNIT_DETECT_SAMPLE_SIZE);

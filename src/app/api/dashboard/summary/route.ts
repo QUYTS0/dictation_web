@@ -1,6 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { computeStreakDays } from "@/lib/utils/streak";
+import type { ResumableSession } from "@/lib/types";
+
+interface UnifiedSessionRow {
+  id: string;
+  mode: "dictation" | "listening";
+  youtube_video_id: string;
+  status: "active" | "completed" | "abandoned";
+  updated_at: string;
+  video_current_time: number;
+  accuracy?: number;
+  current_segment_index?: number;
+  total_attempts?: number;
+}
 
 export async function GET() {
   try {
@@ -13,49 +26,79 @@ export async function GET() {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    const { data: sessions, error: sessionsError } = await supabase
-      .from("learning_sessions")
-      .select(
-        "id, youtube_video_id, status, accuracy, video_current_time, updated_at, current_segment_index, total_attempts"
-      )
-      .eq("user_id", user.id);
+    // Dictation (learning_sessions) and Listening (listening_sessions) are
+    // separate tables — see 012_listening_sessions.sql for why — so both are
+    // queried and merged here, tagged with `mode`, rather than one query.
+    const [{ data: dictationRows, error: dictationError }, { data: listeningRows, error: listeningError }] =
+      await Promise.all([
+        supabase
+          .from("learning_sessions")
+          .select(
+            "id, youtube_video_id, status, accuracy, video_current_time, updated_at, current_segment_index, total_attempts"
+          )
+          .eq("user_id", user.id),
+        supabase
+          .from("listening_sessions")
+          .select("id, youtube_video_id, status, video_current_time, updated_at")
+          .eq("user_id", user.id),
+      ]);
 
-    if (sessionsError) {
-      console.error("[dashboard] sessions query error:", sessionsError);
+    if (dictationError) {
+      console.error("[dashboard] dictation sessions query error:", dictationError);
       return NextResponse.json({ error: "Failed to load dashboard data" }, { status: 500 });
     }
+    // Non-fatal: if 012_listening_sessions.sql hasn't been applied yet, degrade
+    // to dictation-only data instead of breaking the whole dashboard for it.
+    if (listeningError) {
+      console.error("[dashboard] listening sessions query error (continuing without listening data):", listeningError);
+    }
 
-    const completedSessions = (sessions ?? []).filter((s) => s.status === "completed");
-    const completedVideos = new Set(completedSessions.map((s) => s.youtube_video_id)).size;
+    const sessions: UnifiedSessionRow[] = [
+      ...(dictationRows ?? []).map((s) => ({ ...s, mode: "dictation" as const })),
+      ...(listeningRows ?? []).map((s) => ({ ...s, mode: "listening" as const })),
+    ];
+
+    // Grading stats (completed-video count, average accuracy) are inherently
+    // a dictation concept — listening has no correct/incorrect notion.
+    const completedDictationSessions = (dictationRows ?? []).filter((s) => s.status === "completed");
+    const completedVideos = new Set(completedDictationSessions.map((s) => s.youtube_video_id)).size;
     const avgAccuracy =
-      completedSessions.length > 0
+      completedDictationSessions.length > 0
         ? Math.round(
-            completedSessions.reduce((sum, s) => sum + Number(s.accuracy ?? 0), 0) /
-              completedSessions.length
+            completedDictationSessions.reduce((sum, s) => sum + Number(s.accuracy ?? 0), 0) /
+              completedDictationSessions.length
           )
         : 0;
+    // Practice time, on the other hand, is mode-agnostic — both count as
+    // time spent with the video.
     const totalPracticeMinutes = Math.round(
-      ((sessions ?? []).reduce((sum, s) => sum + Number(s.video_current_time ?? 0), 0) || 0) /
-        60
+      (sessions.reduce((sum, s) => sum + Number(s.video_current_time ?? 0), 0) || 0) / 60
     );
-    const allSessionIds = (sessions ?? []).map((s) => s.id);
-    // Latest session per video regardless of status — a video whose most
-    // recent session is "completed" must still surface (as completed) here,
-    // otherwise reopening it silently creates a fresh "active" row that then
-    // looks like abandoned progress. See resumableSessions' `status` field,
-    // which callers use to route to /results (completed) vs /dictation (active).
-    const sortedSessions = [...(sessions ?? [])].sort(
-      (a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)
-    );
-    const latestSessionByVideoId = new Map<string, (typeof sortedSessions)[number]>();
+    const allDictationSessionIds = (dictationRows ?? []).map((s) => s.id);
+    // Latest session per (mode, video) regardless of status — a video whose
+    // most recent session is "completed" must still surface (as completed)
+    // here, otherwise reopening it silently creates a fresh "active" row
+    // that then looks like abandoned progress. See resumableSessions'
+    // `status` field, which callers use to route to /results (dictation,
+    // completed) vs /dictation or /listening (active). Dictation and
+    // listening progress on the same video are tracked separately, so both
+    // can appear.
+    const sortedSessions = [...sessions].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+    const latestSessionByKey = new Map<string, UnifiedSessionRow>();
     for (const session of sortedSessions) {
-      if (!latestSessionByVideoId.has(session.youtube_video_id)) {
-        latestSessionByVideoId.set(session.youtube_video_id, session);
+      const key = `${session.mode}:${session.youtube_video_id}`;
+      if (!latestSessionByKey.has(key)) {
+        latestSessionByKey.set(key, session);
       }
     }
-    const recentSessions = [...latestSessionByVideoId.values()].slice(0, 10);
+    const recentSessions = [...latestSessionByKey.values()].slice(0, 10);
     const recentVideoIds = [...new Set(recentSessions.map((s) => s.youtube_video_id))];
-    const recentSessionIds = recentSessions.map((s) => s.id);
+    // attempt_logs only ever references learning_sessions rows — scoping to
+    // dictation ids keeps the mistakes-count query from being sent listening
+    // session ids it could never match anyway.
+    const recentDictationSessionIds = recentSessions
+      .filter((s) => s.mode === "dictation")
+      .map((s) => s.id);
 
     // None of these depend on each other's results (only on `sessions`,
     // already resolved above) — run them concurrently instead of awaiting
@@ -68,8 +111,8 @@ export async function GET() {
       { data: recentVideos, error: recentVideosError },
       { data: recentMistakeAttempts, error: recentMistakeAttemptsError },
     ] = await Promise.all([
-      allSessionIds.length
-        ? supabase.from("attempt_logs").select("created_at").in("session_id", allSessionIds)
+      allDictationSessionIds.length
+        ? supabase.from("attempt_logs").select("created_at").in("session_id", allDictationSessionIds)
         : Promise.resolve({ data: [], error: null }),
       supabase
         .from("vocabulary_items")
@@ -81,11 +124,11 @@ export async function GET() {
       recentVideoIds.length
         ? supabase.from("videos").select("youtube_video_id, title").in("youtube_video_id", recentVideoIds)
         : Promise.resolve({ data: [], error: null }),
-      recentSessionIds.length
+      recentDictationSessionIds.length
         ? supabase
             .from("attempt_logs")
             .select("session_id")
-            .in("session_id", recentSessionIds)
+            .in("session_id", recentDictationSessionIds)
             .eq("is_correct", false)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -126,17 +169,26 @@ export async function GET() {
       {}
     );
 
-    const resumableSessions = recentSessions.map((session) => ({
-      sessionId: session.id,
-      videoId: session.youtube_video_id,
-      videoTitle: titleByVideoId.get(session.youtube_video_id) ?? null,
-      updatedAt: session.updated_at,
-      accuracy: Number(session.accuracy ?? 0),
-      currentSegmentIndex: Number(session.current_segment_index ?? 0),
-      totalAttempts: Number(session.total_attempts ?? 0),
-      mistakesCount: mistakeCountBySessionId[session.id] ?? 0,
-      status: session.status as "active" | "completed" | "abandoned",
-    }));
+    const resumableSessions: ResumableSession[] = recentSessions.map((session) => {
+      const base = {
+        sessionId: session.id,
+        mode: session.mode,
+        videoId: session.youtube_video_id,
+        videoTitle: titleByVideoId.get(session.youtube_video_id) ?? null,
+        updatedAt: session.updated_at,
+        status: session.status,
+      };
+      if (session.mode === "dictation") {
+        return {
+          ...base,
+          accuracy: Number(session.accuracy ?? 0),
+          currentSegmentIndex: Number(session.current_segment_index ?? 0),
+          totalAttempts: Number(session.total_attempts ?? 0),
+          mistakesCount: mistakeCountBySessionId[session.id] ?? 0,
+        };
+      }
+      return { ...base, videoCurrentTimeSec: Number(session.video_current_time ?? 0) };
+    });
 
     return NextResponse.json({
       completedVideos,

@@ -80,12 +80,13 @@ export async function fetchResumeSession(videoId: string): Promise<ResumeSession
 export async function fetchTranslation(
   videoId: string,
   transcriptId: string,
-  language = "vi"
+  language = "vi",
+  force = false
 ): Promise<TranslateTranscriptResponse> {
   const res = await fetch("/api/transcript/translate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ videoId, transcriptId, language }),
+    body: JSON.stringify({ videoId, transcriptId, language, force }),
   });
   if (!res.ok) throw new Error("Failed to fetch translation");
   return res.json();

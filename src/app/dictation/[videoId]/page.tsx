@@ -26,6 +26,7 @@ import {
   VolumeX,
   Undo2,
   Flame,
+  Headphones,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -68,7 +69,7 @@ import {
   COMBO_MILESTONE_INTERVAL,
   PLAYBACK_RATE_OPTIONS,
 } from "./constants";
-import { getSavedFilterLabel, buildComparedTokens, splitSentenceIntoTokens, getHighlightedTokenIndexes } from "./helpers";
+import { getSavedFilterLabel, buildComparedTokens, buildScriptRenderItems } from "./helpers";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import { getWordShapeMask } from "@/lib/utils/segment";
 import type { SavedFilter, RightPanelTab } from "./types";
@@ -161,6 +162,9 @@ export default function DictationPage({ params }: PageProps) {
     translationBySegmentIndex,
     translationLoading: scriptTranslationLoading,
     translationError: scriptTranslationError,
+    regenerateTranslation,
+    regeneratingTranslation,
+    regenerateTranslationError,
   } = useScriptTranslation({
     videoId,
     transcriptId: segments[0]?.transcript_id,
@@ -394,6 +398,9 @@ export default function DictationPage({ params }: PageProps) {
     handleReviewMouseUp,
     handleScriptWordMouseUp,
     handleScriptPopoverAction,
+    phraseHoverPreview,
+    handlePhraseMouseEnter,
+    handlePhraseMouseLeave,
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverPreviewError,
@@ -408,6 +415,7 @@ export default function DictationPage({ params }: PageProps) {
     currentSegIdx,
     currentSegmentText: currentSegment?.text,
     showScriptContext,
+    phrasesBySegmentIndex,
     onAfterSave: () => setShowLearningPanel(true),
   });
 
@@ -502,6 +510,14 @@ export default function DictationPage({ params }: PageProps) {
                     <span className="text-xs font-semibold">{streakDays} day streak</span>
                   </div>
                 )}
+                <Link
+                  href={`/listening/${videoId}`}
+                  className="hidden items-center gap-1.5 rounded-lg border border-white/60 bg-white/40 px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-white/80 sm:flex"
+                  title="Switch to Listening mode — same transcript, no regenerating"
+                >
+                  <Headphones size={14} />
+                  Listening mode
+                </Link>
                 <UserButton />
               </div>
             </div>
@@ -1269,6 +1285,16 @@ export default function DictationPage({ params }: PageProps) {
                     >
                       {showScriptTranslation ? "Hide translation" : "Show translation"}
                     </button>
+                    {showScriptTranslation && (
+                      <button
+                        onClick={() => void regenerateTranslation()}
+                        disabled={regeneratingTranslation}
+                        title="Re-translate this video's script if the Vietnamese doesn't match the English"
+                        className="rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
+                      </button>
+                    )}
                     <button
                       onClick={handleRegenerateClick}
                       disabled={regenerating}
@@ -1279,6 +1305,7 @@ export default function DictationPage({ params }: PageProps) {
                     </button>
                   </div>
                   {regenerateError && <p className="text-xs text-red-600">{regenerateError}</p>}
+                  {regenerateTranslationError && <p className="text-xs text-red-600">{regenerateTranslationError}</p>}
                   {showScriptTranslation && scriptTranslationLoading && (
                     <p className="text-xs text-slate-500">Translating…</p>
                   )}
@@ -1297,7 +1324,7 @@ export default function DictationPage({ params }: PageProps) {
                       {scriptContextSegments.map((segment) => {
                         const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
                         const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
-                        const highlightedTokenIndexes = getHighlightedTokenIndexes(
+                        const scriptRenderItems = buildScriptRenderItems(
                           segment.text,
                           phrasesBySegmentIndex.get(segment.segmentIndex) ?? []
                         );
@@ -1319,23 +1346,33 @@ export default function DictationPage({ params }: PageProps) {
                               {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />}
                             </div>
                             <p className={`text-sm leading-relaxed select-text ${isCurrentScriptSentence ? "text-slate-900 dark:text-white font-medium" : "text-slate-600 dark:text-slate-400"}`}>
-                              {splitSentenceIntoTokens(segment.text).map((token, tokenIdx) =>
-                                token.trim() ? (
+                              {scriptRenderItems.map((item) => {
+                                if (item.kind === "space") return item.text;
+                                if (item.kind === "phrase") {
+                                  return (
+                                    <span
+                                      key={item.key}
+                                      onMouseUp={handleScriptWordMouseUp}
+                                      onMouseEnter={(event) => handlePhraseMouseEnter(event, segment.segmentIndex, item.text)}
+                                      onMouseLeave={handlePhraseMouseLeave}
+                                      title="Hover or tap to see the meaning"
+                                      className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-amber-400 decoration-2 underline-offset-2 transition-colors hover:bg-amber-100/70 dark:hover:bg-amber-500/20"
+                                    >
+                                      {item.text}
+                                    </span>
+                                  );
+                                }
+                                return (
                                   <span
-                                    key={tokenIdx}
+                                    key={item.key}
                                     onMouseUp={handleScriptWordMouseUp}
                                     title="Tap to save this word/phrase"
-                                    className={clsx(
-                                      "cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-primary-100/70 dark:hover:bg-primary-500/20",
-                                      highlightedTokenIndexes.has(tokenIdx) && "underline decoration-amber-400 decoration-2 underline-offset-2"
-                                    )}
+                                    className="cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-primary-100/70 dark:hover:bg-primary-500/20"
                                   >
-                                    {token}
+                                    {item.text}
                                   </span>
-                                ) : (
-                                  token
-                                )
-                              )}
+                                );
+                              })}
                             </p>
                             {showScriptTranslation && (
                               <p className="mt-1 text-sm leading-relaxed text-indigo-600 dark:text-indigo-400">
@@ -1596,6 +1633,38 @@ export default function DictationPage({ params }: PageProps) {
                 Actions for selected script text: save word, phrase, sentence, or add note. Keyboard
                 shortcuts W, P, and S save word, phrase, and sentence respectively.
               </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {phraseHoverPreview && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.1 }}
+              className="pointer-events-none fixed z-30 max-w-64 -translate-x-1/2 -translate-y-full rounded-xl border border-white/60 bg-white/95 px-3 py-2 text-xs shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-slate-800/95"
+              style={{ left: phraseHoverPreview.x, top: phraseHoverPreview.y - 8 }}
+              role="tooltip"
+            >
+              <div className="font-semibold text-slate-800 dark:text-white">{phraseHoverPreview.text}</div>
+              {phraseHoverPreview.loading ? (
+                <div className="mt-1 h-3 w-24 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
+              ) : phraseHoverPreview.data?.translation ? (
+                <div className="mt-0.5 text-indigo-600 dark:text-indigo-400">
+                  {phraseHoverPreview.data.translation.text}
+                </div>
+              ) : phraseHoverPreview.data ? (
+                <div className="mt-0.5 text-slate-400">No translation found</div>
+              ) : (
+                <div className="mt-0.5 text-slate-400">Couldn&apos;t load translation</div>
+              )}
+              {!phraseHoverPreview.loading && phraseHoverPreview.data?.wordDetails?.definition && (
+                <div className="mt-1 line-clamp-2 text-slate-500 dark:text-slate-400">
+                  {phraseHoverPreview.data.wordDetails.definition}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

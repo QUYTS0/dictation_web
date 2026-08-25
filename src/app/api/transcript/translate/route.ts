@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { YoutubeTranscript } from "youtube-transcript";
 import { translate } from "@vitalets/google-translate-api";
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-ai";
 import { createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
-import { mergeIntoSentences } from "@/lib/utils/segment";
+import { normalizeCues } from "@/lib/utils/segment";
 import { fetchYoutubeTranslatedCaptions } from "@/lib/youtubeTranslatedCaptions";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import type {
@@ -16,10 +16,25 @@ import type {
 
 const GEMINI_TIMEOUT_MS = 20_000;
 
-const TRANSLATION_RESPONSE_SCHEMA = {
+// Objects tagged with their own 1-based `index`, not a bare positional
+// array of strings — see buildTranslationPrompt for why: a plain array lets
+// Gemini silently merge a couple of short/related sentences into one
+// translation while still padding its output back to the expected length by
+// re-splitting something else, which passes a length-only check but shifts
+// every later segment's translation onto the wrong sentence. Tagging each
+// answer with the index it's for lets the parser below catch that instead
+// of just trusting position.
+const TRANSLATION_RESPONSE_SCHEMA: Schema = {
   type: SchemaType.ARRAY,
-  items: { type: SchemaType.STRING },
-} as const;
+  items: {
+    type: SchemaType.OBJECT,
+    properties: {
+      index: { type: SchemaType.NUMBER },
+      translation: { type: SchemaType.STRING },
+    },
+    required: ["index", "translation"],
+  },
+};
 
 interface EnglishSegmentRow {
   segment_index: number;
@@ -51,7 +66,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: TranslateTranscriptRequest = await request.json();
-    const { videoId, transcriptId, language = "vi" } = body;
+    const { videoId, transcriptId, language = "vi", force = false } = body;
 
     if (!videoId || !transcriptId) {
       return NextResponse.json(
@@ -83,6 +98,9 @@ export async function POST(request: NextRequest) {
     }
 
     // ---- Tier 0: reuse cached translations for this transcript+language ----
+    // Skipped entirely when force=true ("Regenerate translation") — every
+    // segment is recomputed from scratch and the upsert below overwrites the
+    // stale cached rows via onConflict rather than only filling in gaps.
     const { data: cachedRows, error: cacheError } = await supabase
       .from("transcript_translations")
       .select("segment_index, text_translated, source")
@@ -94,12 +112,14 @@ export async function POST(request: NextRequest) {
     }
 
     const results = new Map<number, { text: string; source: TranslationSource }>();
-    for (const row of cachedRows ?? []) {
-      results.set(row.segment_index, { text: row.text_translated, source: row.source as TranslationSource });
+    if (!force) {
+      for (const row of cachedRows ?? []) {
+        results.set(row.segment_index, { text: row.text_translated, source: row.source as TranslationSource });
+      }
     }
     const cachedSegmentIndexes = new Set(results.keys());
 
-    if (results.size >= englishSegments.length) {
+    if (!force && results.size >= englishSegments.length) {
       console.log(`[transcript translate] full cache hit for transcript ${transcriptId} (${language})`);
       return NextResponse.json<TranslateTranscriptResponse>({
         status: "ready",
@@ -112,20 +132,7 @@ export async function POST(request: NextRequest) {
     try {
       const targetItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
       if (targetItems && targetItems.length > 0) {
-        const targetSegments = mergeIntoSentences(targetItems);
-        for (const enSeg of englishSegments) {
-          if (results.has(enSeg.segment_index)) continue;
-          const overlapping = targetSegments.filter((t) => {
-            const tEnd = t.start + t.duration;
-            return tEnd > enSeg.start_sec && t.start < enSeg.end_sec;
-          });
-          if (overlapping.length > 0) {
-            results.set(enSeg.segment_index, {
-              text: overlapping.map((t) => t.text).join(" "),
-              source: "youtube_captions",
-            });
-          }
-        }
+        matchCaptionCuesToSegments(normalizeCues(targetItems), englishSegments, results);
         console.log(
           `[transcript translate] youtube ${language} captions matched ${results.size}/${englishSegments.length} segments`
         );
@@ -142,20 +149,7 @@ export async function POST(request: NextRequest) {
       try {
         const translatedItems = await fetchYoutubeTranslatedCaptions(videoId, language);
         if (translatedItems && translatedItems.length > 0) {
-          const translatedSegments = mergeIntoSentences(translatedItems);
-          for (const enSeg of englishSegments) {
-            if (results.has(enSeg.segment_index)) continue;
-            const overlapping = translatedSegments.filter((t) => {
-              const tEnd = t.start + t.duration;
-              return tEnd > enSeg.start_sec && t.start < enSeg.end_sec;
-            });
-            if (overlapping.length > 0) {
-              results.set(enSeg.segment_index, {
-                text: overlapping.map((t) => t.text).join(" "),
-                source: "youtube_captions",
-              });
-            }
-          }
+          matchCaptionCuesToSegments(normalizeCues(translatedItems), englishSegments, results);
           console.log(
             `[transcript translate] youtube tlang=${language} auto-translate matched ${results.size}/${englishSegments.length} segments`
           );
@@ -211,7 +205,7 @@ export async function POST(request: NextRequest) {
           language
         );
 
-        let translated: string[] | null = null;
+        let translated: Map<number, string> | null = null;
         for (let attempt = 0; attempt < 2 && !translated; attempt++) {
           let rawText: string;
           try {
@@ -230,11 +224,12 @@ export async function POST(request: NextRequest) {
           try {
             const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
             const parsed: unknown = JSON.parse(jsonStr);
-            if (Array.isArray(parsed) && parsed.length === finalMissing.length) {
-              translated = parsed as string[];
+            const byIndex = indexTaggedTranslations(parsed, finalMissing.length);
+            if (byIndex) {
+              translated = byIndex;
             } else {
               console.warn(
-                `[transcript translate] Gemini returned unexpected shape on attempt ${attempt + 1}:`,
+                `[transcript translate] Gemini returned unexpected/misaligned shape on attempt ${attempt + 1}:`,
                 rawText
               );
             }
@@ -248,7 +243,7 @@ export async function POST(request: NextRequest) {
 
         if (translated) {
           finalMissing.forEach((seg, i) => {
-            const text = translated![i];
+            const text = translated!.get(i + 1);
             if (typeof text === "string" && text.trim()) {
               results.set(seg.segment_index, { text: text.trim(), source: "gemini" });
             }
@@ -303,6 +298,39 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Fills in `results` for each English segment whose time window overlaps
+ * one or more of the target-language caption cues, joining the overlapping
+ * cues' text.
+ *
+ * Matches against raw, un-merged cues (a few words each) rather than
+ * mergeIntoSentences' output. Sentence boundaries don't translate 1:1
+ * across languages — a Vietnamese sentence built from mergeIntoSentences
+ * often spans a different, unrelated stretch of time than the English
+ * sentence it happens to overlap, so matching at that granularity was
+ * concatenating several EN segments' worth of Vietnamese text onto a single
+ * segment. Raw cues stay tied to the original audio's timing (YouTube's
+ * tlang auto-translate swaps each cue's text in place without re-timing it),
+ * so overlap at that level tracks much more precisely to each EN segment's
+ * actual window.
+ */
+function matchCaptionCuesToSegments(
+  cues: { text: string; startSec: number; endSec: number }[],
+  englishSegments: EnglishSegmentRow[],
+  results: Map<number, { text: string; source: TranslationSource }>
+): void {
+  for (const enSeg of englishSegments) {
+    if (results.has(enSeg.segment_index)) continue;
+    const overlapping = cues.filter((c) => c.endSec > enSeg.start_sec && c.startSec < enSeg.end_sec);
+    if (overlapping.length > 0) {
+      results.set(enSeg.segment_index, {
+        text: overlapping.map((c) => c.text).join(" "),
+        source: "youtube_captions",
+      });
+    }
+  }
+}
+
 function buildResponseSegments(
   englishSegments: EnglishSegmentRow[],
   results: Map<number, { text: string; source: TranslationSource }>
@@ -318,7 +346,37 @@ function buildResponseSegments(
 function buildTranslationPrompt(sentences: string[], language: string): string {
   const languageName = language === "vi" ? "Vietnamese" : language;
   const numbered = sentences.map((s, i) => `${i + 1}. ${s}`).join("\n");
-  return `Translate the following numbered English sentences into natural, conversational ${languageName}. Respond with a raw JSON array of strings (no markdown fences), in the exact same order, one translated string per input sentence, with no extra commentary.
+  return `Translate each of the following numbered English sentences into natural, conversational ${languageName}. Translate every sentence independently: never merge two sentences into a single translation, never split one sentence into multiple translations, and never skip a sentence — even when adjacent sentences are short or closely related in meaning. Respond with a raw JSON array (no markdown fences) of exactly ${sentences.length} objects, one per input sentence, each shaped as {"index": <the sentence's number above>, "translation": "..."}, in any order.
 
 ${numbered}`;
+}
+
+/**
+ * Validates that a Gemini translation response is a complete, non-duplicated
+ * set of {index, translation} pairs covering 1..count exactly, and returns
+ * it as a Map keyed by index. Returns null on any mismatch (wrong shape,
+ * duplicate/missing/out-of-range index) so the caller retries instead of
+ * trusting a response that may have silently merged sentences together —
+ * see TRANSLATION_RESPONSE_SCHEMA for why this matters more than a plain
+ * positional array.
+ */
+function indexTaggedTranslations(parsed: unknown, count: number): Map<number, string> | null {
+  if (!Array.isArray(parsed) || parsed.length !== count) return null;
+  const byIndex = new Map<number, string>();
+  for (const item of parsed) {
+    const index = (item as { index?: unknown } | null)?.index;
+    const translation = (item as { translation?: unknown } | null)?.translation;
+    if (
+      typeof index !== "number" ||
+      !Number.isInteger(index) ||
+      index < 1 ||
+      index > count ||
+      typeof translation !== "string" ||
+      byIndex.has(index)
+    ) {
+      return null;
+    }
+    byIndex.set(index, translation);
+  }
+  return byIndex.size === count ? byIndex : null;
 }

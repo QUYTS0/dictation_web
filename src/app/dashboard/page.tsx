@@ -24,8 +24,9 @@ import MetricCard from "@/components/MetricCard";
 import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
-import { formatMinutesAsHm } from "@/lib/utils/time";
-import type { ErrorType } from "@/lib/types";
+import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
+import { resumableSessionHref } from "@/lib/utils/sessions";
+import type { ErrorType, ResumableSession } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
 
@@ -105,18 +106,22 @@ interface DashboardData {
     sentence_context: string;
     created_at: string;
   }>;
-  resumableSessions: Array<{
-    sessionId: string;
-    videoId: string;
-    videoTitle: string | null;
-    updatedAt: string;
-    accuracy: number;
-    currentSegmentIndex: number;
-    totalAttempts: number;
-    mistakesCount: number;
-    status: "active" | "completed" | "abandoned";
-  }>;
+  resumableSessions: ResumableSession[];
 }
+
+function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
+  return (
+    <span
+      className={clsx(
+        "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+        mode === "listening" ? "bg-purple-50 text-purple-600" : "bg-indigo-50 text-indigo-600"
+      )}
+    >
+      {mode === "listening" ? "Listening" : "Dictation"}
+    </span>
+  );
+}
+
 const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
 
 interface ErrorPatternsData {
@@ -203,7 +208,7 @@ export default function DashboardPage() {
   );
   const firstSession = activeSessions[0] ?? null;
   const latestMistakeSession = useMemo(
-    () => dashboardData?.resumableSessions.find((session) => session.mistakesCount > 0) ?? null,
+    () => dashboardData?.resumableSessions.find((session) => (session.mistakesCount ?? 0) > 0) ?? null,
     [dashboardData]
   );
 
@@ -332,7 +337,7 @@ export default function DashboardPage() {
                       </div>
                     ) : (
                       <Link
-                        href={`/dictation/${firstSession.videoId}`}
+                        href={resumableSessionHref(firstSession)}
                         className="group relative flex cursor-pointer flex-col gap-4 rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md transition-all hover:-translate-y-1 sm:flex-row"
                       >
                         <div className="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl bg-slate-800 sm:w-48">
@@ -351,24 +356,36 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="flex flex-1 flex-col justify-center">
-                          <h3 className="mb-1 font-semibold text-slate-900 transition-colors group-hover:text-primary-600">
-                            {firstSession.videoTitle ?? `Video ${firstSession.videoId}`}
-                          </h3>
+                          <div className="mb-1 flex items-center gap-2">
+                            <h3 className="font-semibold text-slate-900 transition-colors group-hover:text-primary-600">
+                              {firstSession.videoTitle ?? `Video ${firstSession.videoId}`}
+                            </h3>
+                            <ModeBadge mode={firstSession.mode} />
+                          </div>
                           <p className="mb-3 text-sm text-slate-500">
                             Last practiced {new Date(firstSession.updatedAt).toLocaleDateString()}
                           </p>
 
-                          <div className="mt-auto">
-                            <div className="mb-1 flex justify-between text-xs text-slate-600">
-                              <span>
-                                {firstSession.currentSegmentIndex + 1} segments · {firstSession.totalAttempts} attempts
-                              </span>
-                              <span className="font-medium">{firstSession.accuracy}%</span>
+                          {firstSession.mode === "dictation" ? (
+                            <div className="mt-auto">
+                              <div className="mb-1 flex justify-between text-xs text-slate-600">
+                                <span>
+                                  {(firstSession.currentSegmentIndex ?? 0) + 1} segments · {firstSession.totalAttempts ?? 0} attempts
+                                </span>
+                                <span className="font-medium">{firstSession.accuracy ?? 0}%</span>
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className="h-full rounded-full bg-primary-500"
+                                  style={{ width: `${Math.min(100, Math.max(0, firstSession.accuracy ?? 0))}%` }}
+                                />
+                              </div>
                             </div>
-                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                              <div className="h-full rounded-full bg-primary-500" style={{ width: `${Math.min(100, Math.max(0, firstSession.accuracy))}%` }} />
-                            </div>
-                          </div>
+                          ) : (
+                            <p className="mt-auto text-xs text-slate-600">
+                              Watched to {formatDurationSeconds(firstSession.videoCurrentTimeSec ?? 0)}
+                            </p>
+                          )}
                         </div>
                       </Link>
                     )}
@@ -411,17 +428,16 @@ export default function DashboardPage() {
                         {dashboardData.resumableSessions.slice(0, MAX_DASHBOARD_HISTORY_SESSIONS).map((session) => (
                           <li key={session.sessionId}>
                             <Link
-                              href={
-                                session.status === "completed"
-                                  ? `/results/${session.sessionId}`
-                                  : `/dictation/${session.videoId}`
-                              }
+                              href={resumableSessionHref(session)}
                               className="flex items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/50 p-3 text-sm backdrop-blur-md transition-colors hover:bg-white/80"
                             >
                               <div className="min-w-0">
-                                <p className="truncate font-medium text-slate-800">
-                                  {session.videoTitle ?? `Video ${session.videoId}`}
-                                </p>
+                                <div className="flex items-center gap-2">
+                                  <p className="truncate font-medium text-slate-800">
+                                    {session.videoTitle ?? `Video ${session.videoId}`}
+                                  </p>
+                                  <ModeBadge mode={session.mode} />
+                                </div>
                                 <p className="text-xs text-slate-500">
                                   Last practiced {new Date(session.updatedAt).toLocaleString()}
                                 </p>

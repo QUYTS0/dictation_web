@@ -112,7 +112,15 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments]);
 
-  // Update UX state based on transcript status
+  // Update UX state based on transcript status. Keyed on dataUpdatedAt (not
+  // just status/segments.length) because handleRegenerateTranscript forces
+  // uxState to "transcript_processing" before refetching — if the refetch
+  // lands on the same status ("ready") and the same segment count (the
+  // common case when just re-fetching captions for a video that already had
+  // a transcript), status/segments.length alone wouldn't change and this
+  // effect would never re-run, leaving the "Generating transcript…" screen
+  // stuck even though the regenerate succeeded. dataUpdatedAt changes on
+  // every successful fetch regardless of whether the content did.
   useEffect(() => {
     if (transcriptQuery.isLoading) {
       setUxState("loading_transcript");
@@ -126,7 +134,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       // Transcript marked ready but no segments — treat as failed so user gets feedback
       setUxState("transcript_failed");
     }
-  }, [transcriptStatus, transcriptQuery.isLoading, segments.length]);
+  }, [transcriptStatus, transcriptQuery.isLoading, transcriptQuery.dataUpdatedAt, segments.length]);
 
   useEffect(() => {
     uxStateRef.current = uxState;

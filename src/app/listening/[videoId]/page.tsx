@@ -3,7 +3,7 @@
 import { use, useEffect, useRef } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import { ArrowLeft, FileText, Languages, Play } from "lucide-react";
+import { ArrowLeft, FileText, Keyboard, Languages, Play } from "lucide-react";
 
 import YouTubePlayer from "@/components/YouTubePlayer";
 import UserButton from "@/components/UserButton";
@@ -11,6 +11,7 @@ import { StatusCard } from "@/components/StatusCard";
 
 import { useAuth, useRequireAuth } from "@/context/auth";
 import { useBookmarks } from "@/hooks/useBookmarks";
+import { formatDurationSeconds } from "@/lib/utils/time";
 import { useListeningSession } from "./useListeningSession";
 import { SubtitleOverlay } from "./components/SubtitleOverlay";
 import { TranscriptPanel } from "./components/TranscriptPanel";
@@ -41,8 +42,11 @@ export default function ListeningPage({ params }: PageProps) {
     ytPlayerRef,
     handleSeekToSegment,
     handleStart,
+    handleResume,
     handleSegmentEnd,
-  } = useListeningSession({ videoId });
+    resumeAvailable,
+    resumeTimeSec,
+  } = useListeningSession({ videoId, user });
 
   const { bookmarkedSegmentIndexes, toggleBookmark } = useBookmarks(videoId, user);
 
@@ -88,7 +92,17 @@ export default function ListeningPage({ params }: PageProps) {
               <span className="text-xs text-slate-500">Listening Practice</span>
             </div>
           </div>
-          <UserButton />
+          <div className="flex shrink-0 items-center gap-3">
+            <Link
+              href={`/dictation/${videoId}`}
+              className="hidden items-center gap-1.5 rounded-lg border border-white/60 bg-white/40 px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-white/80 sm:flex"
+              title="Switch to Dictation mode — same transcript, no regenerating"
+            >
+              <Keyboard size={14} />
+              Dictation mode
+            </Link>
+            <UserButton />
+          </div>
         </div>
       </header>
 
@@ -155,10 +169,24 @@ export default function ListeningPage({ params }: PageProps) {
 
           {loadState === "ready" && (
             <div className="flex flex-wrap items-center gap-3">
+              {resumeAvailable && (
+                <button
+                  type="button"
+                  onClick={handleResume}
+                  className="flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+                >
+                  <Play size={16} /> Continue from {formatDurationSeconds(resumeTimeSec)}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleStart}
-                className="flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+                className={clsx(
+                  "flex items-center gap-2 rounded-xl px-6 py-2 text-sm font-semibold shadow-sm transition-colors",
+                  resumeAvailable
+                    ? "border border-white/60 bg-white/40 text-slate-600 hover:bg-white/80"
+                    : "bg-primary-600 text-white hover:bg-primary-700"
+                )}
               >
                 <Play size={16} /> Start from beginning
               </button>

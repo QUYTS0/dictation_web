@@ -154,6 +154,8 @@ export interface TranslateTranscriptRequest {
   videoId: string;
   transcriptId: string;
   language?: string;
+  /** Recomputes every segment from scratch instead of reusing cached rows — used by "Regenerate translation". */
+  force?: boolean;
 }
 
 export interface TranslateTranscriptResponse {
@@ -165,10 +167,21 @@ export interface TranslateTranscriptResponse {
 
 // ---- Vocab highlighting (AI-picked difficult words/phrases per segment) ----
 
+export interface VocabHighlightPhrase {
+  /** Exact substring of the segment's text worth a learner's attention. */
+  phrase: string;
+  /**
+   * Gemini's translation of the phrase as used in that sentence, computed in
+   * the same call that picked the phrase — reused for free instead of a
+   * separate translation request. Null for rows cached before translations
+   * were added (the client falls back to /api/vocabulary/preview for those).
+   */
+  translation: string | null;
+}
+
 export interface VocabHighlightSegment {
   segmentIndex: number;
-  /** Exact substrings of the segment's text worth a learner's attention. */
-  phrases: string[];
+  phrases: VocabHighlightPhrase[];
 }
 
 export interface VocabHighlightsRequest {
@@ -233,6 +246,50 @@ export interface ResumeSessionResponse {
     updatedAt: string;
     status: "active" | "completed" | "abandoned";
   } | null;
+}
+
+// ---- Listening mode session tracking (listening_sessions table) ----
+// Separate from the dictation save-progress/resume shapes above since
+// listening has no grading/attempts concept — just a watch position.
+
+export interface SaveListeningProgressRequest {
+  sessionId?: string;
+  youtubeVideoId: string;
+  transcriptId?: string;
+  videoCurrentTimeSec: number;
+  status?: "active" | "completed" | "abandoned";
+}
+
+export interface SaveListeningProgressResponse {
+  sessionId: string;
+  status: string;
+}
+
+export interface ResumeListeningSessionResponse {
+  session: {
+    sessionId: string;
+    videoCurrentTimeSec: number;
+    updatedAt: string;
+    status: "active" | "completed" | "abandoned";
+  } | null;
+}
+
+// ---- Shared "resumable session" shape for Dashboard/History (either mode) ----
+
+export interface ResumableSession {
+  sessionId: string;
+  mode: "dictation" | "listening";
+  videoId: string;
+  videoTitle: string | null;
+  updatedAt: string;
+  status: "active" | "completed" | "abandoned";
+  /** Dictation-only — undefined for listening sessions. */
+  accuracy?: number;
+  currentSegmentIndex?: number;
+  totalAttempts?: number;
+  mistakesCount?: number;
+  /** Listening-only — undefined for dictation sessions. */
+  videoCurrentTimeSec?: number;
 }
 
 // ---- Session results / report ----
@@ -370,7 +427,7 @@ export interface VocabularyPreviewRequest {
 }
 
 export interface VocabularyPreviewResponse {
-  translation: { text: string; source: "free_library" } | null;
+  translation: { text: string; source: "free_library" | "gemini" } | null;
   /**
    * True when a translation was attempted but failed (e.g. the free
    * Google-Translate scraper got rate-limited/blocked), as opposed to

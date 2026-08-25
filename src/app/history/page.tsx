@@ -13,9 +13,10 @@ import {
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
-import type { ErrorType } from "@/lib/types";
+import type { ErrorType, ResumableSession } from "@/lib/types";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
-import { formatMinutesAsHm } from "@/lib/utils/time";
+import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
+import { resumableSessionHref } from "@/lib/utils/sessions";
 
 interface DashboardData {
   completedVideos: number;
@@ -28,17 +29,19 @@ interface DashboardData {
     sentence_context: string;
     created_at: string;
   }>;
-  resumableSessions: Array<{
-    sessionId: string;
-    videoId: string;
-    videoTitle: string | null;
-    updatedAt: string;
-    accuracy: number;
-    currentSegmentIndex: number;
-    totalAttempts: number;
-    mistakesCount: number;
-    status: "active" | "completed" | "abandoned";
-  }>;
+  resumableSessions: ResumableSession[];
+}
+
+function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+        mode === "listening" ? "bg-purple-50 text-purple-600" : "bg-indigo-50 text-indigo-600"
+      }`}
+    >
+      {mode === "listening" ? "Listening" : "Dictation"}
+    </span>
+  );
 }
 
 interface MistakeItem {
@@ -219,7 +222,7 @@ export default function HistoryPage() {
                       className="group relative rounded-3xl border border-white/60 bg-white/40 p-4 shadow-lg transition-all hover:-translate-y-1 backdrop-blur-xl sm:p-5"
                     >
                       <Link
-                        href={item.status === "completed" ? `/results/${item.sessionId}` : `/dictation/${item.videoId}`}
+                        href={resumableSessionHref(item)}
                         className="flex cursor-pointer flex-col gap-5 sm:flex-row"
                       >
                         <div className="relative w-full shrink-0 overflow-hidden rounded-2xl bg-slate-800 shadow-md sm:w-56">
@@ -248,6 +251,7 @@ export default function HistoryPage() {
                               </span>
                             </div>
                             <div className="mb-3 flex items-center gap-2">
+                              <ModeBadge mode={item.mode} />
                               <span
                                 className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                                   item.status === "completed"
@@ -257,41 +261,58 @@ export default function HistoryPage() {
                               >
                                 {item.status === "completed" ? "Completed" : "In progress"}
                               </span>
-                              <p className="text-sm font-medium text-slate-500">
-                                {item.mistakesCount > 0 ? `${item.mistakesCount} mistakes to review` : "No mistakes logged"}
-                              </p>
+                              {item.mode === "dictation" && (
+                                <p className="text-sm font-medium text-slate-500">
+                                  {(item.mistakesCount ?? 0) > 0
+                                    ? `${item.mistakesCount} mistakes to review`
+                                    : "No mistakes logged"}
+                                </p>
+                              )}
                             </div>
                           </div>
 
-                          <div>
-                            <div className="mb-4 flex flex-wrap gap-4">
+                          {item.mode === "dictation" ? (
+                            <div>
+                              <div className="mb-4 flex flex-wrap gap-4">
+                                <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
+                                  <Calendar size={14} className="text-slate-400" />
+                                  {new Date(item.updatedAt).toLocaleString()}
+                                </div>
+                                <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
+                                  <Clock size={14} className="text-slate-400" />
+                                  {item.totalAttempts ?? 0} attempts
+                                </div>
+                                <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                                  <CheckCircle2 size={14} className="text-emerald-500" />
+                                  {item.accuracy ?? 0}% Accuracy
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="mb-1.5 flex justify-between text-xs font-bold text-slate-500">
+                                  <span className="text-[10px] uppercase tracking-widest">Progress</span>
+                                  <span>Sentence {(item.currentSegmentIndex ?? 0) + 1}</span>
+                                </div>
+                                <div className="flex h-2 w-full overflow-hidden rounded-full border border-white/40 bg-white/50 shadow-inner">
+                                  <div
+                                    className="h-full rounded-full bg-primary-500 transition-all duration-1000"
+                                    style={{ width: `${Math.max(0, Math.min(100, item.accuracy ?? 0))}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-4">
                               <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
                                 <Calendar size={14} className="text-slate-400" />
                                 {new Date(item.updatedAt).toLocaleString()}
                               </div>
                               <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
                                 <Clock size={14} className="text-slate-400" />
-                                {item.totalAttempts} attempts
-                              </div>
-                              <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                                <CheckCircle2 size={14} className="text-emerald-500" />
-                                {item.accuracy}% Accuracy
+                                Watched to {formatDurationSeconds(item.videoCurrentTimeSec ?? 0)}
                               </div>
                             </div>
-
-                            <div>
-                              <div className="mb-1.5 flex justify-between text-xs font-bold text-slate-500">
-                                <span className="text-[10px] uppercase tracking-widest">Progress</span>
-                                <span>Sentence {item.currentSegmentIndex + 1}</span>
-                              </div>
-                              <div className="flex h-2 w-full overflow-hidden rounded-full border border-white/40 bg-white/50 shadow-inner">
-                                <div
-                                  className="h-full rounded-full bg-primary-500 transition-all duration-1000"
-                                  style={{ width: `${Math.max(0, Math.min(100, item.accuracy))}%` }}
-                                />
-                              </div>
-                            </div>
-                          </div>
+                          )}
                         </div>
                       </Link>
                     </motion.div>

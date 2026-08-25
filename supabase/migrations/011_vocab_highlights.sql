@@ -1,9 +1,12 @@
 -- =====================================================
 -- Dictation Script tab — AI-picked vocab highlight cache
--- One row per transcript segment; phrases is a JSON array of exact
--- substrings of that segment's text worth a learner's attention. Cached
--- exactly like transcript_translations (004) so a given transcript only
--- ever costs one Gemini call, shared by every future viewer.
+-- One row per transcript segment; phrases is a JSON array of
+-- {phrase, translation} objects — exact substrings of that segment's text
+-- worth a learner's attention, plus Gemini's in-context translation of each
+-- (added after this table's initial version; older rows may still hold
+-- plain strings, which the API normalizes to translation: null on read).
+-- Cached exactly like transcript_translations (004) so a given transcript
+-- only ever costs one Gemini call, shared by every future viewer.
 -- =====================================================
 
 create table if not exists transcript_vocab_highlights (
