@@ -1,17 +1,10 @@
 import type { DiffToken, VocabHighlightPhrase, VocabularyItem } from "@/lib/types";
-import type { ComparedToken, LessonItemType, SavedFilter } from "./types";
+import type { ComparedToken, LessonItemType } from "./types";
 
 export function getSelectedType(wordCount: number): LessonItemType | null {
   if (wordCount <= 0) return null;
   if (wordCount === 1) return "word";
   return "phrase";
-}
-
-export function getSavedFilterLabel(filter: SavedFilter) {
-  if (filter === "all") return "All";
-  if (filter === "word") return "Words";
-  if (filter === "phrase") return "Phrases";
-  return "Sentences";
 }
 
 export function splitSentenceIntoWords(sentence: string) {

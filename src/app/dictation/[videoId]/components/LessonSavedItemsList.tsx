@@ -74,7 +74,7 @@ export function LessonSavedItemsList({
         <div
           key={item.id}
           className={clsx(
-            "rounded-lg border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-1",
+            "rounded-lg border border-[var(--border)] bg-[var(--surface-2)] backdrop-blur-md p-3 flex flex-col gap-1",
             compact && "p-2 rounded-md"
           )}
         >
@@ -88,19 +88,19 @@ export function LessonSavedItemsList({
                   className="h-6 w-6 shrink-0 rounded object-cover"
                 />
               )}
-              <span className={clsx("truncate text-sm text-slate-800", compact && "text-xs font-semibold")}>
+              <span className={clsx("truncate text-sm text-[var(--text)]", compact && "text-xs font-semibold")}>
                 {item.term}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] uppercase tracking-wide rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5">
+              <span className="text-[10px] uppercase tracking-wide rounded-full bg-[var(--accent-soft)] text-[var(--accent)] px-2 py-0.5">
                 {item.type}
               </span>
               {item.type === "word" && (
                 <button
                   onClick={() => beginEdit(item)}
                   disabled={updatingId === item.id || deletingId === item.id}
-                  className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-40"
+                  className="h-5 px-1.5 rounded border border-[var(--border)] text-[10px] text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--accent)] disabled:opacity-40"
                   title="Edit saved word"
                   aria-label={`Edit saved word ${item.term}`}
                 >
@@ -110,7 +110,7 @@ export function LessonSavedItemsList({
               <button
                 onClick={() => onDelete(item.id)}
                 disabled={deletingId === item.id || updatingId === item.id}
-                className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
+                className="h-5 w-5 rounded-full border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--red)] hover:border-[var(--red)] focus:text-[var(--red)] focus:border-[var(--red)] focus:outline-none focus:ring-2 focus:ring-[var(--red)]/30 disabled:opacity-40"
                 aria-label={
                   deletingId === item.id
                     ? `Removing saved item ${item.term}`
@@ -152,33 +152,33 @@ export function LessonSavedItemsList({
           {(item.phonetic || item.part_of_speech) && (
             <div className="flex flex-wrap items-center gap-1.5">
               {item.phonetic && (
-                <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>{item.phonetic}</span>
+                <span className={clsx("text-xs text-[var(--text-muted)]", compact && "text-[11px]")}>{item.phonetic}</span>
               )}
               {item.part_of_speech && (
-                <span className="rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700">
+                <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
                   {item.part_of_speech}
                 </span>
               )}
             </div>
           )}
           {item.definition && (
-            <span className={clsx("text-xs text-slate-600", compact && "text-[11px] line-clamp-2")}>
+            <span className={clsx("text-xs text-[var(--text-muted)]", compact && "text-[11px] line-clamp-2")}>
               {item.definition}
             </span>
           )}
           {item.translation && (
-            <span className={clsx("text-sm font-medium text-primary-700", compact && "text-xs")}>
+            <span className={clsx("text-sm font-medium text-[var(--accent)]", compact && "text-xs")}>
               {item.translation}
             </span>
           )}
-          <span className={clsx("text-xs text-slate-500", compact && "text-[11px]")}>
+          <span className={clsx("text-xs text-[var(--text-faint)]", compact && "text-[11px]")}>
             Sentence {item.segment_index + 1}
           </span>
-          <span className={clsx("text-xs text-slate-600", compact && "text-[11px] line-clamp-2")}>
+          <span className={clsx("text-xs text-[var(--text-muted)]", compact && "text-[11px] line-clamp-2")}>
             {item.sentence_context}
           </span>
           {item.note && (
-            <span className={clsx("whitespace-pre-wrap text-xs text-slate-700", compact && "text-[11px]")}>
+            <span className={clsx("whitespace-pre-wrap text-xs text-[var(--text-muted)]", compact && "text-[11px]")}>
               📝 {item.note}
             </span>
           )}

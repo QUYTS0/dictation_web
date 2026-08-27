@@ -36,18 +36,18 @@ export function MobileBottomSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "tween", ease: "easeOut", duration: 0.25 }}
-            className="fixed inset-x-0 bottom-0 z-[70] max-h-[80dvh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-xl sm:hidden"
+            className="fixed inset-x-0 bottom-0 z-[70] max-h-[80dvh] overflow-y-auto rounded-t-3xl border-t border-[var(--border)] bg-[var(--surface)] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl backdrop-blur-xl sm:hidden"
             role="dialog"
             aria-modal="true"
             aria-label={title}
           >
-            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300" aria-hidden="true" />
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[var(--border-strong)]" aria-hidden="true" />
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+              <h2 className="text-sm font-semibold text-[var(--text)]">{title}</h2>
               <button
                 type="button"
                 onClick={onClose}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-white/10"
                 aria-label="Close"
               >
                 ✕

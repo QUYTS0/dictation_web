@@ -1,0 +1,24 @@
+/*
+ * Dark/amber theme for the dictation player only, scoped under this class so
+ * it never leaks into the rest of the app (which stays on the light/indigo
+ * theme defined in src/app/globals.css). Token names mirror the approved
+ * Claude Design mockup so future layout work can reuse them directly.
+ */
+.player-dark-theme {
+  --bg: #0a0a0d;
+  --surface: #15151b;
+  --surface-2: #1d1d25;
+  --surface-glass: rgba(255, 255, 255, 0.05);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #f4f4f6;
+  --text-muted: #9a9aa6;
+  --text-faint: #6b6b76;
+  --accent: #f2a13d;
+  --accent-strong: #d9860f;
+  --accent-soft: rgba(242, 161, 61, 0.14);
+  --accent-border: rgba(242, 161, 61, 0.35);
+  --green: #3ddc97;
+  --purple: #b394f7;
+  --red: #f2685a;
+}

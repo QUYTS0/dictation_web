@@ -44,7 +44,7 @@ export function BookmarksList({
         <div
           key={item.id}
           className={clsx(
-            "rounded-lg border border-white/60 bg-white/50 backdrop-blur-md p-3 flex flex-col gap-1",
+            "rounded-lg border border-[var(--border)] bg-[var(--surface-2)] backdrop-blur-md p-3 flex flex-col gap-1",
             compact && "p-2 rounded-md"
           )}
         >
@@ -52,7 +52,7 @@ export function BookmarksList({
             <button
               onClick={() => onJump(item.segment_index)}
               className={clsx(
-                "text-sm font-semibold text-indigo-600 hover:underline",
+                "text-sm font-semibold text-[var(--accent)] hover:underline",
                 compact && "text-xs"
               )}
             >
@@ -61,7 +61,7 @@ export function BookmarksList({
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => beginEdit(item)}
-                className="h-5 px-1.5 rounded border border-slate-300 text-[10px] text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+                className="h-5 px-1.5 rounded border border-[var(--border)] text-[10px] text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--accent)]"
                 title="Edit note"
                 aria-label={`Edit note for sentence ${item.segment_index + 1}`}
               >
@@ -70,7 +70,7 @@ export function BookmarksList({
               <button
                 onClick={() => onDelete(item.id)}
                 disabled={deletingId === item.id}
-                className="h-5 w-5 rounded-full border border-slate-300 text-slate-500 hover:text-red-600 hover:border-red-300 focus:text-red-600 focus:border-red-300 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:opacity-40"
+                className="h-5 w-5 rounded-full border border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--red)] hover:border-[var(--red)] focus:text-[var(--red)] focus:border-[var(--red)] focus:outline-none focus:ring-2 focus:ring-[var(--red)]/30 disabled:opacity-40"
                 aria-label={
                   deletingId === item.id
                     ? `Removing bookmark for sentence ${item.segment_index + 1}`
@@ -92,11 +92,11 @@ export function BookmarksList({
               </button>
             </div>
           </div>
-          <span className={clsx("text-xs text-slate-600", compact && "text-[11px] line-clamp-2")}>
+          <span className={clsx("text-xs text-[var(--text-muted)]", compact && "text-[11px] line-clamp-2")}>
             {item.sentence_text}
           </span>
           {item.note && (
-            <span className={clsx("whitespace-pre-wrap text-xs text-slate-700", compact && "text-[11px]")}>
+            <span className={clsx("whitespace-pre-wrap text-xs text-[var(--text-muted)]", compact && "text-[11px]")}>
               📝 {item.note}
             </span>
           )}
@@ -108,7 +108,7 @@ export function BookmarksList({
                 placeholder="Optional note"
                 autoFocus
                 rows={2}
-                className="w-full min-w-0 resize-y rounded border border-slate-300 px-2 py-1 text-[11px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                className="w-full min-w-0 resize-y rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--text)] outline-none focus:border-[var(--accent-border)] focus:ring-2 focus:ring-[var(--accent-soft)]"
               />
               <div className="flex items-center gap-1.5">
                 <button
@@ -116,13 +116,13 @@ export function BookmarksList({
                     onUpdateNote(item.id, editingNote);
                     cancelEdit();
                   }}
-                  className="px-2 py-1 text-[11px] rounded border border-indigo-300 text-indigo-700 bg-indigo-50"
+                  className="px-2 py-1 text-[11px] rounded border border-[var(--accent-border)] text-[var(--accent)] bg-[var(--accent-soft)]"
                 >
                   Save
                 </button>
                 <button
                   onClick={cancelEdit}
-                  className="px-2 py-1 text-[11px] rounded border border-slate-300 text-slate-600"
+                  className="px-2 py-1 text-[11px] rounded border border-[var(--border)] text-[var(--text-muted)]"
                 >
                   Cancel
                 </button>

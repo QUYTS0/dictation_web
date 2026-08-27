@@ -11,7 +11,7 @@ export function ComparedSentenceText({
   emptyFallback?: string;
 }) {
   if (tokens.length === 0) {
-    return <p className="mt-0.5 text-sm text-slate-500">{emptyFallback ?? ""}</p>;
+    return <p className="mt-0.5 text-sm text-[var(--text-muted)]">{emptyFallback ?? ""}</p>;
   }
 
   return (
@@ -19,17 +19,20 @@ export function ComparedSentenceText({
       className={clsx(
         "mt-0.5 text-sm select-text cursor-text rounded px-1 -mx-1",
         tone === "expected"
-          ? "text-slate-900 hover:bg-emerald-100/60 focus:bg-emerald-100/60"
-          : "text-slate-800 hover:bg-slate-200/70 focus:bg-slate-200/70"
+          ? "text-[var(--text)] hover:bg-[var(--green)]/15 focus:bg-[var(--green)]/15"
+          : "text-[var(--text-muted)] hover:bg-white/10 focus:bg-white/10"
       )}
     >
       {tokens.map((token, index) => (
         <span
           key={`${token.word}-${index}`}
           className={clsx(
-            token.status === "missing" && "rounded bg-rose-100 px-0.5 text-rose-700",
-            token.status === "wrong" && "rounded bg-amber-100 px-0.5 text-amber-700",
-            token.status === "extra" && "rounded bg-violet-100 px-0.5 text-violet-700"
+            // In the expected/correct sentence, the word the user got wrong is
+            // highlighted (not flagged red) — it IS the correct word, just the
+            // point of difference worth drawing the eye to.
+            token.status === "missing" && "rounded bg-[var(--green)]/20 px-0.5",
+            token.status === "wrong" && "text-[var(--red)] line-through",
+            token.status === "extra" && "rounded bg-[var(--purple)]/20 px-0.5 text-[var(--purple)]"
           )}
         >
           {token.word}

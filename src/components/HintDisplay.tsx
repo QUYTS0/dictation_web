@@ -28,15 +28,15 @@ export default function HintDisplay({
   const nextLevel = Math.min(level + 1, 4) as HintLevel;
 
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-col gap-3">
+    <div className="rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-amber-700 font-semibold text-sm">
+        <span className="text-[var(--accent)] font-semibold text-sm">
           💡 {level === 0 ? "Need a hint?" : HINT_LABELS[level]}
         </span>
         {level < 4 && (
           <button
             onClick={() => onLevelChange(nextLevel)}
-            className="text-xs px-3 py-1 rounded-full bg-amber-200 text-amber-800 hover:bg-amber-300 font-medium transition-colors"
+            className="text-xs px-3 py-1 rounded-full bg-[var(--accent)]/25 text-[var(--accent)] hover:bg-[var(--accent)]/35 font-medium transition-colors"
           >
             {level === 0 ? "Show hint" : "More help"}
           </button>
@@ -47,7 +47,7 @@ export default function HintDisplay({
         <p
           className={clsx(
             "font-mono text-base tracking-wide",
-            level === 4 ? "text-emerald-700 font-semibold" : "text-amber-900"
+            level === 4 ? "text-[var(--green)] font-semibold" : "text-[var(--text)]"
           )}
         >
           {hint}

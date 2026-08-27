@@ -9,7 +9,7 @@ import {
   SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR,
 } from "./constants";
 import { getSelectedType, splitSentenceIntoWords, inferSavedItemType } from "./helpers";
-import type { LessonItemType, LessonSavedItem, SavedFilter, ScriptSelectionPopoverState } from "./types";
+import type { LessonItemType, LessonSavedItem, ScriptSelectionPopoverState } from "./types";
 
 interface UseLessonCaptureOptions {
   videoId: string;
@@ -50,7 +50,6 @@ export function useLessonCapture({
   const [learningSaving, setLearningSaving] = useState(false);
   const [learningDeletingId, setLearningDeletingId] = useState<string | null>(null);
   const [learningUpdatingId, setLearningUpdatingId] = useState<string | null>(null);
-  const [savedFilter, setSavedFilter] = useState<SavedFilter>("all");
   const [scriptPopover, setScriptPopover] = useState<ScriptSelectionPopoverState | null>(null);
   const [scriptPopoverPreview, setScriptPopoverPreview] = useState<VocabularyPreviewResponse | null>(null);
   const [scriptPopoverPreviewLoading, setScriptPopoverPreviewLoading] = useState(false);
@@ -203,11 +202,6 @@ export function useLessonCapture({
       ),
     [learningItems, videoId, pendingDeleteId, learningDeletingId]
   );
-  const filteredSavedItems = useMemo(() => {
-    if (savedFilter === "all") return lessonSavedInCurrentVideo;
-    return lessonSavedInCurrentVideo.filter((item) => item.type === savedFilter);
-  }, [lessonSavedInCurrentVideo, savedFilter]);
-
   const pendingDeleteItem = useMemo(
     () => (pendingDeleteId ? (learningItems.find((item) => item.id === pendingDeleteId) ?? null) : null),
     [learningItems, pendingDeleteId]
@@ -981,10 +975,7 @@ export function useLessonCapture({
     learningSaving,
     learningDeletingId,
     learningUpdatingId,
-    savedFilter,
-    setSavedFilter,
     lessonSavedInCurrentVideo,
-    filteredSavedItems,
     scriptPopover,
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,

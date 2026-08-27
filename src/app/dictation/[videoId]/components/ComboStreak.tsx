@@ -322,8 +322,8 @@ export function ComboStreak({ combo }: ComboStreakProps) {
           transition={tile.transition}
           className={clsx(
             "absolute inset-0 z-10 flex items-center justify-center rounded-2xl border shadow-sm",
-            level === 0 && "border-slate-200 bg-slate-100 dark:border-white/10 dark:bg-white/5",
-            level === 1 && "border-orange-200 bg-orange-50 dark:border-orange-300/30 dark:bg-orange-400/10"
+            level === 0 && "border-[var(--border)] bg-[var(--surface-2)]",
+            level === 1 && "border-[var(--accent-border)] bg-[var(--accent-soft)]"
           )}
           style={
             color
@@ -337,7 +337,7 @@ export function ComboStreak({ combo }: ComboStreakProps) {
             className={clsx(
               "font-black tabular-nums leading-none",
               color ? color.numberSize : "text-sm",
-              color ? "text-white" : level === 1 ? "text-orange-400 dark:text-orange-300" : "text-slate-400 dark:text-slate-500"
+              color ? "text-white" : level === 1 ? "text-[var(--accent)]" : "text-[var(--text-faint)]"
             )}
           >
             {combo}
@@ -347,7 +347,7 @@ export function ComboStreak({ combo }: ComboStreakProps) {
         {design === "infernoHalo" && <InfernoPulseGlints key={`glints-${combo}`} />}
       </div>
       <div className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex flex-col items-center">
-        <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500">Streak</span>
+        <span className="text-[10px] font-semibold text-[var(--text-faint)]">Streak</span>
       </div>
     </div>
   );

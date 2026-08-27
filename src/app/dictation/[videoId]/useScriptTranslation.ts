@@ -7,6 +7,9 @@ interface UseScriptTranslationOptions {
   transcriptId?: string;
   /** Only fetch while the caller actually needs translations (e.g. the Script tab is open). */
   enabled: boolean;
+  /** Fetch even if the Script tab's own "Show translation" toggle is off — e.g. the
+   * Default layout's inline translation line under the input, gated by subtitle visibility. */
+  wantTranslation?: boolean;
 }
 
 const TRANSLATION_QUERY_KEY_PREFIX = "dictation-script-translation";
@@ -17,7 +20,12 @@ const TRANSLATION_QUERY_KEY_PREFIX = "dictation-script-translation";
  * already free to show here. Fetched lazily (only while `enabled`) since
  * it's a secondary view, not the primary dictation flow.
  */
-export function useScriptTranslation({ videoId, transcriptId, enabled }: UseScriptTranslationOptions) {
+export function useScriptTranslation({
+  videoId,
+  transcriptId,
+  enabled,
+  wantTranslation = false,
+}: UseScriptTranslationOptions) {
   const [showTranslation, setShowTranslation] = useState(false);
   const [regeneratingTranslation, setRegeneratingTranslation] = useState(false);
   const [regenerateTranslationError, setRegenerateTranslationError] = useState<string | null>(null);
@@ -26,7 +34,7 @@ export function useScriptTranslation({ videoId, transcriptId, enabled }: UseScri
   const translationQuery = useQuery({
     queryKey: [TRANSLATION_QUERY_KEY_PREFIX, transcriptId],
     queryFn: () => fetchTranslation(videoId, transcriptId as string, "vi"),
-    enabled: enabled && showTranslation && !!transcriptId,
+    enabled: enabled && (showTranslation || wantTranslation) && !!transcriptId,
     retry: false,
     staleTime: Infinity,
   });
