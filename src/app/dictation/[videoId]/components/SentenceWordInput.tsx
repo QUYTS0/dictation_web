@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { clsx } from "clsx";
 import {
   buildFullValue,
@@ -11,10 +11,9 @@ import {
 } from "../wordSlots";
 import type { ComparedToken } from "../types";
 
-function Caret({ innerRef }: { innerRef?: RefObject<HTMLSpanElement | null> }) {
+function Caret() {
   return (
     <span
-      ref={innerRef}
       aria-hidden="true"
       className="dictation-caret -mb-[0.15em] inline-block h-[1.15em] w-[2px] shrink-0 self-center bg-[var(--accent)] align-middle"
     />
@@ -27,14 +26,12 @@ function renderWordNodes({
   isActive,
   maskLetters,
   wordKey,
-  caretRef,
 }: {
   word: WordSlots;
   typedChars: string;
   isActive: boolean;
   maskLetters: boolean;
   wordKey: string;
-  caretRef?: RefObject<HTMLSpanElement | null>;
 }): ReactNode[] {
   const nodes: ReactNode[] = [];
   let consumed = 0;
@@ -42,7 +39,7 @@ function renderWordNodes({
 
   word.slots.forEach((slot, i) => {
     if (isActive && !caretRendered && slot.editable && consumed >= typedChars.length) {
-      nodes.push(<Caret key={`${wordKey}-caret`} innerRef={caretRef} />);
+      nodes.push(<Caret key={`${wordKey}-caret`} />);
       caretRendered = true;
     }
     if (slot.editable) {
@@ -80,7 +77,7 @@ function renderWordNodes({
   }
 
   if (isActive && !caretRendered) {
-    nodes.push(<Caret key={`${wordKey}-caret-end`} innerRef={caretRef} />);
+    nodes.push(<Caret key={`${wordKey}-caret-end`} />);
   }
 
   return nodes;
@@ -110,8 +107,6 @@ export function SentenceWordInput({
   const words = useMemo(() => buildWordCharSlots(targetText), [targetText]);
   const [typedByWord, setTypedByWord] = useState<string[]>([]);
   const [activeWordIndex, setActiveWordIndex] = useState(0);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const caretRef = useRef<HTMLSpanElement>(null);
 
   // Reset per-word state whenever a new sentence loads or the answer is reset,
   // so the caret always starts at the first editable character of the first word.
@@ -126,10 +121,6 @@ export function SentenceWordInput({
     onValueChange(buildFullValue(words, typedByWord));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [words, typedByWord]);
-
-  useEffect(() => {
-    caretRef.current?.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [activeWordIndex, typedByWord]);
 
   useEffect(() => {
     const len = typedByWord[activeWordIndex]?.length ?? 0;
@@ -168,53 +159,6 @@ export function SentenceWordInput({
     inputRef.current?.focus();
   };
 
-  // Lets the user swipe horizontally to pan overflowed text (long sentences
-  // that don't fit on one line) instead of only relying on the caret.
-  useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-
-    const DRAG_THRESHOLD = 8;
-    let startX = 0;
-    let startScrollLeft = 0;
-    let isDragging = false;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      startX = e.touches[0].clientX;
-      startScrollLeft = el.scrollLeft;
-      isDragging = false;
-    };
-    const handleTouchMove = (e: TouchEvent) => {
-      const deltaX = e.touches[0].clientX - startX;
-      if (!isDragging && Math.abs(deltaX) < DRAG_THRESHOLD) return;
-      isDragging = true;
-      e.preventDefault();
-      el.scrollLeft = startScrollLeft - deltaX;
-    };
-    const handleTouchEnd = (e: TouchEvent) => {
-      if (isDragging) e.preventDefault();
-      isDragging = false;
-    };
-
-    el.addEventListener("touchstart", handleTouchStart, { passive: true });
-    el.addEventListener("touchmove", handleTouchMove, { passive: false });
-    el.addEventListener("touchend", handleTouchEnd);
-    return () => {
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove", handleTouchMove);
-      el.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, []);
-
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    if (el.scrollWidth <= el.clientWidth) return;
-    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    if (delta === 0) return;
-    e.preventDefault();
-    el.scrollLeft += delta;
-  };
-
   const allEmpty = typedByWord.every((typed) => !typed || typed.length === 0);
   const showPlaceholder = allEmpty && !showMask && !showErrorDiff;
 
@@ -236,36 +180,42 @@ export function SentenceWordInput({
       />
 
       {showErrorDiff ? (
-        <div className="w-full overflow-x-auto whitespace-nowrap px-16 py-4 text-center text-xl font-medium sm:px-14">
+        <div className="w-full px-16 py-4 text-center text-xl font-medium leading-loose sm:px-14">
           {errorDiffTokens.map((token, index) => (
-            <span key={index} className={token.status === "correct" ? "text-[var(--text)]" : "text-[var(--red)]"}>
-              {token.word}
-              {index < errorDiffTokens.length - 1 ? " " : ""}
-            </span>
+            <Fragment key={index}>
+              {index > 0 && " "}
+              <span
+                className={clsx(
+                  "inline-block whitespace-nowrap",
+                  token.status === "correct" ? "text-[var(--text)]" : "text-[var(--red)]"
+                )}
+              >
+                {token.word}
+              </span>
+            </Fragment>
           ))}
         </div>
       ) : (
         <div
-          ref={scrollContainerRef}
-          onWheel={handleWheel}
           className={clsx(
-            "w-full overflow-x-auto whitespace-nowrap px-16 py-4 text-center text-xl sm:px-14",
+            "w-full px-16 py-4 text-center text-xl leading-loose sm:px-14",
             showMask ? "font-mono tracking-wide" : "font-medium",
             maskBlurred && "blur-sm"
           )}
         >
           {words.map((word, wordIndex) => (
-            <span key={wordIndex} onClick={() => handleWordClick(wordIndex)}>
+            <Fragment key={wordIndex}>
               {wordIndex > 0 && " "}
-              {renderWordNodes({
-                word,
-                typedChars: typedByWord[wordIndex] ?? "",
-                isActive: wordIndex === activeWordIndex,
-                maskLetters: showMask,
-                wordKey: `w${wordIndex}`,
-                caretRef: wordIndex === activeWordIndex ? caretRef : undefined,
-              })}
-            </span>
+              <span onClick={() => handleWordClick(wordIndex)} className="inline-block whitespace-nowrap">
+                {renderWordNodes({
+                  word,
+                  typedChars: typedByWord[wordIndex] ?? "",
+                  isActive: wordIndex === activeWordIndex,
+                  maskLetters: showMask,
+                  wordKey: `w${wordIndex}`,
+                })}
+              </span>
+            </Fragment>
           ))}
           {showPlaceholder && <span className="text-[var(--text-faint)]"> Type what you hear...</span>}
         </div>
