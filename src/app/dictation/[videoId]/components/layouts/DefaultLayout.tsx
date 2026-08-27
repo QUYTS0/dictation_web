@@ -300,26 +300,26 @@ export function DefaultLayout({
             )}
           </AnimatePresence>
 
-          <AnimatePresence>
-            {shouldShowPreviousReview && previousReview && (
-              <motion.div
-                key="previous-review"
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25, ease: "easeInOut" }}
-                className="overflow-hidden mt-3"
-              >
-                <ReviewPreviousSentenceCard
-                  previousReview={previousReview}
-                  reviewTextContainerRef={reviewTextContainerRef}
-                  handleReviewMouseUp={handleReviewMouseUp}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <div className="mt-auto flex flex-col gap-2.5 pt-3">
+            <AnimatePresence>
+              {shouldShowPreviousReview && previousReview && (
+                <motion.div
+                  key="previous-review"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.25, ease: "easeInOut" }}
+                  className="overflow-hidden"
+                >
+                  <ReviewPreviousSentenceCard
+                    previousReview={previousReview}
+                    reviewTextContainerRef={reviewTextContainerRef}
+                    handleReviewMouseUp={handleReviewMouseUp}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-          <div className="mt-auto pt-3">
             <ControlBar
               videoId={videoId}
               currentSegIdx={currentSegIdx}
