@@ -4,7 +4,7 @@ import { useState } from "react";
 import { clsx } from "clsx";
 import { Eye } from "lucide-react";
 import type { TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
-import { buildScriptRenderItems } from "../helpers";
+import { buildScriptRenderItems, formatSegmentTimestamp } from "../helpers";
 
 export function ScriptTab({
   scriptContextSegments,
@@ -13,8 +13,6 @@ export function ScriptTab({
   setShowScriptContext,
   showPreviousScriptContext,
   setShowPreviousScriptContext,
-  showScriptTranslation,
-  setShowScriptTranslation,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
@@ -41,8 +39,6 @@ export function ScriptTab({
   setShowScriptContext: (updater: (prev: boolean) => boolean) => void;
   showPreviousScriptContext: boolean;
   setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
-  showScriptTranslation: boolean;
-  setShowScriptTranslation: (updater: (prev: boolean) => boolean) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
@@ -88,26 +84,13 @@ export function ScriptTab({
           </button>
         )}
         <button
-          onClick={() => setShowScriptTranslation((prev) => !prev)}
-          className={clsx(
-            "rounded-md border px-2.5 py-1 text-[11px] font-medium",
-            showScriptTranslation
-              ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
-              : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:bg-white/10"
-          )}
+          onClick={() => regenerateTranslation()}
+          disabled={regeneratingTranslation}
+          title="Re-translate this video's script if the Vietnamese doesn't match the English"
+          className="rounded-md border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {showScriptTranslation ? "Hide translation" : "Show translation"}
+          {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
         </button>
-        {showScriptTranslation && (
-          <button
-            onClick={() => regenerateTranslation()}
-            disabled={regeneratingTranslation}
-            title="Re-translate this video's script if the Vietnamese doesn't match the English"
-            className="rounded-md border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
-          </button>
-        )}
         <button
           onClick={onRegenerateScript}
           disabled={regenerating}
@@ -119,10 +102,10 @@ export function ScriptTab({
       </div>
       {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
       {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
-      {showScriptTranslation && scriptTranslationLoading && (
+      {scriptTranslationLoading && (
         <p className="text-xs text-[var(--text-muted)]">Translating…</p>
       )}
-      {showScriptTranslation && scriptTranslationError && (
+      {scriptTranslationError && (
         <p className="text-xs text-[var(--red)]">Couldn&apos;t load translation.</p>
       )}
       {vocabHighlightsError && (
@@ -138,7 +121,7 @@ export function ScriptTab({
         <div
           ref={scriptTextContainerRef}
           onMouseUp={handleScriptMouseUp}
-          className="relative flex flex-col gap-3 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
+          className="relative flex flex-col gap-2 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
         >
           {scriptContextSegments.map((segment) => {
             const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
@@ -153,7 +136,7 @@ export function ScriptTab({
                 key={segment.segmentIndex}
                 data-script-segment-index={segment.segmentIndex}
                 data-selection-sentence-text={segment.text}
-                className={`relative p-4 rounded-xl border transition-colors shadow-sm ${
+                className={`relative p-2.5 rounded-xl border transition-colors shadow-sm ${
                   isCurrentScriptSentence
                     ? "bg-[var(--accent-soft)] border-[var(--accent-border)] ring-2 ring-[var(--accent)]/20"
                     : "bg-[var(--surface-glass)] border-[var(--border)] opacity-80 hover:opacity-100"
@@ -173,7 +156,7 @@ export function ScriptTab({
                 )}
                 <div className={clsx(isBlurred && "select-none blur-sm")}>
                   <div
-                    className={`text-xs font-bold mb-1 flex items-center justify-between ${
+                    className={`text-xs font-bold mb-0.5 flex items-center justify-between gap-2 ${
                       isCurrentScriptSentence
                         ? "text-[var(--accent)]"
                         : isPreviousScriptSentence
@@ -181,8 +164,12 @@ export function ScriptTab({
                         : "text-[var(--text-faint)]"
                     }`}
                   >
-                    <span className="uppercase tracking-widest text-[9px]">Sentence #{segment.segmentIndex + 1}</span>
-                    {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />}
+                    <span className="flex items-center gap-1.5 uppercase tracking-widest text-[9px]">
+                      <span className="tabular-nums">{formatSegmentTimestamp(segment.start)}</span>
+                      <span>·</span>
+                      <span>Sentence #{segment.segmentIndex + 1}</span>
+                    </span>
+                    {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />}
                   </div>
                   <p
                     className={`text-sm leading-relaxed select-text ${
@@ -229,11 +216,9 @@ export function ScriptTab({
                       );
                     })}
                   </p>
-                  {showScriptTranslation && (
-                    <p className="mt-1 text-sm leading-relaxed text-[var(--accent)]">
-                      {translationBySegmentIndex.get(segment.segmentIndex) ?? "…"}
-                    </p>
-                  )}
+                  <p className="mt-0.5 text-sm leading-relaxed text-[var(--accent)]">
+                    {translationBySegmentIndex.get(segment.segmentIndex) ?? "…"}
+                  </p>
                 </div>
               </div>
             );

@@ -12,6 +12,7 @@ export function ControlBar({
   videoId,
   currentSegIdx,
   totalSegments,
+  accuracy,
   onReset,
   onPrevious,
   onReplay,
@@ -30,6 +31,7 @@ export function ControlBar({
   videoId: string;
   currentSegIdx: number;
   totalSegments: number;
+  accuracy: number;
   onReset: () => void;
   onPrevious: () => void;
   onReplay: () => void;
@@ -74,22 +76,33 @@ export function ControlBar({
   }, [showVisibilityPopover, showModePopover]);
 
   return (
-    <div className="flex-shrink-0 h-14 rounded-[18px] border border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-3 px-4">
-      <div className="flex items-center gap-3 shrink-0">
+    <div className="flex-shrink-0 min-h-14 rounded-[18px] border border-[var(--border)] bg-[var(--surface)] grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 px-2.5 sm:px-4 py-1.5">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3 justify-self-start">
         <button
           onClick={onReset}
           title="Reset this sentence's attempt"
           aria-label="Reset attempt"
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10 transition-colors"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10 transition-colors"
         >
           <RotateCcw size={14} />
         </button>
-        <span className="text-xs font-medium text-[var(--text-muted)] tabular-nums">
-          {totalSegments > 0 ? `${currentSegIdx + 1} / ${totalSegments}` : "—"}
+        <span className="min-w-0 truncate text-[11px] sm:text-xs font-medium text-[var(--text-muted)] tabular-nums">
+          {totalSegments > 0 ? (
+            <>
+              <span className="sm:hidden">
+                {currentSegIdx + 1}/{totalSegments} · {accuracy}%
+              </span>
+              <span className="hidden sm:inline">
+                {currentSegIdx + 1} / {totalSegments} · Accuracy {accuracy}%
+              </span>
+            </>
+          ) : (
+            "—"
+          )}
         </span>
       </div>
 
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1 sm:gap-2 justify-self-center">
         <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={onPrevious} disabled={prevDisabled} />
         <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={onReplay} />
         <ControlButton
@@ -102,7 +115,7 @@ export function ControlBar({
         <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={onNext} disabled={nextDisabled} />
       </div>
 
-      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+      <div className="flex min-w-0 items-center gap-1 sm:gap-2 justify-self-end">
         <ComboStreak combo={combo} />
         <div className="relative">
           <ControlButton

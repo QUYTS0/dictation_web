@@ -1,6 +1,14 @@
 import type { DiffToken, VocabHighlightPhrase, VocabularyItem } from "@/lib/types";
 import type { ComparedToken, LessonItemType } from "./types";
 
+/** Formats a segment's start time (seconds) as a YouTube-style "m:ss" timestamp. */
+export function formatSegmentTimestamp(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  const remainderSeconds = total % 60;
+  return `${minutes}:${remainderSeconds.toString().padStart(2, "0")}`;
+}
+
 export function getSelectedType(wordCount: number): LessonItemType | null {
   if (wordCount <= 0) return null;
   if (wordCount === 1) return "word";

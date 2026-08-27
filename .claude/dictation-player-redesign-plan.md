@@ -105,6 +105,213 @@ diffed it against the live code. Fixes made:
 
 New in this pass: `components/ModeSwitcher.tsx`.
 
+### Responsive fill pass (after the above, same session)
+
+User reported the layout stayed small with large dead/black areas on bigger monitors
+(1920×1080, 2560×1440 screenshots) instead of filling the viewport like the mockup does.
+Root causes and fixes:
+
+- `<main>` was capped at `max-w-7xl` (1280px) — raised to `max-w-[1800px]` so the layout
+  can actually use wide screens.
+- The video's height was capped at a flat `max-h-[320px]` (`sm:` and up) — tuned for
+  small laptop screens, way too small on a 1440p/4K monitor. Changed to viewport-relative
+  caps (`sm:max-h-[68vh]` default, `sm:max-h-[80vh]` Zen Mode) so it scales with the
+  window instead of staying pinned small.
+- The left column (`motion.div` wrapping video+DefaultLayout+the status-message card)
+  wasn't reliably stretching to the full available height — likely Framer Motion's
+  `layout` prop measuring/freezing a content-driven height rather than letting flexbox's
+  default stretch apply. Gave it an explicit `lg:h-full` alongside its existing
+  `lg:flex-1` so it has a definite height basis regardless.
+- Restructured which of the two stacked sections (DefaultLayout vs. the loading/ready/
+  session-complete status card) grows to fill that column, keyed off a new `isPracticing`
+  flag: while practicing, DefaultLayout grows (`lg:flex-1 lg:min-h-0`) and the status card
+  shrinks to content; otherwise it's the reverse (original behavior, unchanged for those
+  states). Previously both used a flat `lg:flex-1`, which meant an ALWAYS-empty status
+  card was silently claiming (and visibly showing as a blank surface-colored box under)
+  all the leftover space during practicing — a real bug, now fixed.
+- `DefaultLayout`'s root changed from a `<>` Fragment to `<div className="flex min-h-0
+  flex-1 flex-col">`, and the control bar's wrapper changed from `mt-4` to `mt-auto
+  pt-4` — mirroring the mockup's own `margin-top:auto` technique, so the control bar
+  (and whatever sits directly above it) is pushed flush to the bottom of the now-taller
+  column instead of leaving a gap below it, with a 16px minimum via `pt-4` even when
+  there's no slack to consume.
+
+### Layout-density pass (after the above, same session)
+
+User sent 2560×1440 and 1920×1080 screenshots plus a 12-point spec asking for a
+denser, edge-to-edge desktop layout — `<main>` was still leaving large black
+gutters on both sides, and the review card/toolbar had a big gap between them.
+
+- `<main>`'s `max-w-[1800px]` cap (added in the earlier responsive-fill pass)
+  was itself the main source of the gutters reported this round — removed
+  entirely so the layout is fluid to any viewport width, as requested
+  ("fix automatically with any screen size").
+- Video sizing itself was left untouched: `w-full aspect-video max-h-[Nvh]`
+  already derives height from width (not the other way around), so widening
+  `<main>` makes the video wider automatically with no distortion risk —
+  confirmed this arithmetic before touching anything, no need for a
+  letterbox/flex-1 rebuild.
+- `DefaultLayout`: the control bar's wrapper changed from `mt-auto pt-4` (which
+  deliberately pushed it to the bottom of the column, from the prior pass) to
+  a fixed `mt-3` — now sits directly below the review card as requested,
+  instead of leaving a big gap. Other internal gaps tightened from `mt-4` to
+  `mt-3`/`mt-2` throughout (progress bar, input row, correction panel, hint
+  panel, review card).
+- Removed the input row's "Check" button (idle state) and its separate Hint
+  (lightbulb) button — submission still works via Enter or auto-advance
+  on an exact match; Hint is already reachable from the control bar's center
+  cluster, so the input-row copy was redundant. Idle state now shows a
+  subtle non-interactive "Press Enter ↵" hint once the user has typed
+  something, instead of a clickable Check button.
+- Did NOT rebuild the input as a per-word blank/token component (the spec's
+  "type + space moves to next word") — the existing free-type `<input>`
+  already behaves this way character-by-character (space is just a normal
+  character), and Easy mode's word-shape mask overlay already renders
+  per-word blanks that fill in as you type. Re-architecting the input into
+  discrete per-word fields would be a much larger, riskier change to a
+  core interaction; flagged as a follow-up rather than guessed at.
+- Control bar's right cluster (streak, subtitle-visibility, volume,
+  mode-switch) was left as-is rather than fabricating "remaining attempts" /
+  "reveal answer" buttons the spec asked for — neither concept exists
+  anywhere in the app's data model (no per-sentence attempt cap, no distinct
+  reveal-answer action outside of cycling Hint to its final level), so
+  inventing UI for them would be non-functional. Flagged for the user rather
+  than guessed at.
+- Right panel ("Lesson panel"): removed the redundant "Lesson panel" heading
+  row; its collapse button now sits inline with the Script/Words/Sentences
+  tabs (`RightPanelTabs` gained an `onCollapse` prop). Reduced padding
+  throughout (tab row `p-1`/`mt-3`→`mt-2`, content `p-4`→`p-3`,
+  `gap-4`→`gap-3`, script cards `p-4`→`p-2.5`).
+- `ScriptTab`: removed the separate "Show/Hide translation" toggle — each
+  script entry now always shows its Vietnamese translation (translation data
+  was already being fetched independently via `wantTranslation`, so this
+  was a display-only gate, not a fetch change); "Regenerate translation" is
+  now always visible instead of conditional on that toggle. Added a
+  timestamp (`m:ss`, new `formatSegmentTimestamp` helper in `helpers.ts`)
+  next to each entry's "Sentence #N" label. Active-segment highlight
+  (amber/accent border + soft background) was already in place from Phase 2,
+  unchanged.
+
+### Fine-tuning pass (after the above, same session)
+
+User sent an in-practice screenshot with 7 specific fixes after the layout-density
+pass above:
+
+- The bottom-of-page status card (`bg-[var(--surface)] ... rounded-3xl p-4`,
+  meant for loading/processing/failed/ready/session-complete messages) was
+  rendering as an empty rounded box while practicing, since none of its
+  conditional blocks matched but the card itself wasn't gated — it only had
+  content for the Zen-mode exit button in that state. Now the whole block
+  (and its `py-3` outer padding) is skipped unless `!isPracticing ||
+  isZenMode`.
+- Control bar's wrapper went back to `mt-auto pt-3` (pinned to the bottom of
+  `DefaultLayout`'s flex column) per this round's explicit ask to keep it
+  "fixed at the bottom" — this reverses the prior pass's `mt-3`, but is safe
+  now because the video is also shorter (see below), so the recovered gap is
+  small instead of the large dead-space this same mechanism caused two
+  passes ago.
+- Video max-height reduced: default `sm:max-h-[68vh]` → `sm:max-h-[52vh]`,
+  Zen `sm:max-h-[80vh]` → `sm:max-h-[72vh]` — frees enough vertical room
+  for the review-previous-sentence card to render fully above the (now
+  pinned) control bar instead of being clipped by the column's
+  `overflow-hidden`.
+- Right column top-alignment: the mobile-only quick-settings row (a
+  `motion.div` inside `AnimatePresence`, previously always present in the
+  DOM with `sm:hidden` only on its *inner* content) was still consuming a
+  `gap-2` slot at desktop widths even though empty, and the left column's
+  `pt-2` had no equivalent on the right panel — together a ~16px top offset
+  between the video frame and the lesson panel. Fixed by adding `lg:hidden`
+  to the row's own wrapper (removing its flex-gap slot at `lg:`, not just
+  hiding its content) and `lg:pt-0` on the left column's top-level wrapper.
+- Right panel width trimmed `360px` → `320px` to give the left column more
+  room (`<main>`'s left side is `flex-1`, so it absorbs the difference).
+- `VIDEO_SIZE_MODE_CLASS.standard` changed from a flat `max-w-4xl` (896px)
+  to `max-w-[94%]` — with `<main>`'s width cap removed in the prior pass,
+  a fixed 896px cap on the video was producing dramatic letterboxing on
+  wide monitors (the actual bug behind "video has too much empty black
+  space around it"); a percentage cap scales with the frame at any screen
+  size instead of clamping to a fixed pixel value. `large` mode (`max-w-none`)
+  unchanged.
+- Inline Vietnamese translation (below the input) bumped `text-sm` → `text-base`
+  for readability, per explicit ask.
+
+### Input-feedback consolidation pass (after the above, same session)
+
+User asked to drop the standalone progress bar and "Correction Needed" block,
+move feedback into the input itself, and reclaim the vertical space so the
+review card stays visible above the (bottom-pinned) control bar.
+
+- Removed `ProgressBar` from `DefaultLayout` entirely (import + usage) — no
+  replacement element left in its place.
+- `ControlBar` gained an `accuracy: number` prop; the counter now reads
+  `"4 / 66 · Accuracy 47%"` instead of just `"4 / 66"`.
+- Removed the "Correction Needed" card (the `AnimatePresence` block that
+  showed the expected sentence with wrong words masked as `***`).
+- New in-input feedback: after a wrong submission, the input's own text
+  turns transparent (like the existing Easy-mode word-shape mask already
+  did) and a new overlay renders the **user's own typed words**, colored
+  red for anything not `status: "correct"` and the normal text color
+  otherwise. Built via the same `buildComparedTokens()` helper the review
+  card already uses (its `userTokens` output is exactly "the user's words,
+  each tagged correct/wrong/extra" — no new diffing logic needed). The
+  overlay reuses the existing `maskOverlayRef` rather than adding a new
+  ref/prop, since it's mutually exclusive with the Easy-mode mask
+  (`showMask` is now gated off whenever `showErrorDiff` is true).
+- Removed the "Try Again" button (the error state's only handler,
+  `onDismissCheckResult`, is now redundant since typing already clears
+  `checkResult` on every keystroke via the existing `handleWorkspaceInputChange`
+  — removed the prop end-to-end: `DefaultLayout`'s signature and the
+  `page.tsx` call site).
+- Removed the "Press Enter ↵" idle hint added in the prior pass (explicitly
+  asked to remove it this round).
+- Input box padding tightened `p-6` → `p-4`, reserved right-side space
+  `pr-32 sm:pr-28` → `pr-16 sm:pr-14` (no longer needs to fit a Check/Try
+  Again button, only the small checking-spinner/success-check indicator) —
+  applied identically across the real `<input>` and both overlay divs so
+  the three stay pixel-aligned.
+
+### Review-card, centering & control-bar-overflow pass (after the above, same session)
+
+- `ReviewPreviousSentenceCard`: stripped the outer card entirely (background,
+  border, rounded frame, "Review previous sentence" title, `#N` badge) —
+  now just the two "Correct sentence"/"Your answer" mini-cards in a bare
+  `flex gap-2.5` row (same-height via flexbox's default `align-items:
+  stretch`, no extra alignment code needed). `reviewTextContainerRef`/
+  `handleReviewMouseUp` moved onto that row directly since the wrapper
+  they were on is gone — the review card's use of `useLessonCapture`'s
+  selection-to-save DOM query pattern still works unchanged.
+- Answer input text is now centered: switched the input and both overlays
+  (Easy-mode word-shape mask, error-diff overlay) from asymmetric
+  `p-4 pr-16 sm:pr-14` to symmetric `px-16 sm:px-14 py-4` + `text-center` —
+  symmetric padding is what makes `text-align:center` land on the box's
+  true visual center rather than being skewed by the space reserved for
+  the checking-spinner/success-check indicator on the right.
+- **Found and fixed the actual root cause of icons overflowing the control
+  bar**: both `ControlButton` and `ComboStreak` rendered a caption label
+  (e.g. "Hint", "Streak") in a `flex-col` layout — always present in the
+  DOM, only `opacity-0` (not `display:none`) below the `sm:` hover reveal.
+  Since opacity doesn't remove an element from layout, every button's
+  column was taller than the control bar's fixed `h-14`, pushing icons
+  outside the bar's rounded frame at every viewport width. Fixed by
+  taking the label fully out of flow (`absolute top-full`, shown only
+  `sm:group-hover:block`) in both components, and switched the bar's own
+  height from fixed `h-14` to `min-h-14` as a second safety net. Button
+  size trimmed `w-11 h-11` → `w-10 h-10` at the base breakpoint (unchanged
+  at `sm:`).
+- `ControlBar`'s root changed from `flex justify-between` to CSS grid
+  `grid-cols-[1fr_auto_1fr]` with `justify-self-start/center/end` on the
+  three clusters — guarantees the center playback/nav cluster stays
+  visually centered regardless of how wide the left (counter+accuracy) or
+  right (streak/visibility/volume/mode) clusters are, which plain
+  `justify-between` doesn't. Left cluster gained `min-w-0 truncate` and an
+  abbreviated `sm:hidden` counter format (`"4/66 · 47%"`) vs. the full
+  `sm:`+ format (`"4 / 66 · Accuracy 47%"`) so the longer label doesn't
+  force overflow on narrow viewports.
+- Right lesson panel width changed from a fixed `320px` to
+  `clamp(340px,24vw,400px)`; the left column gained `lg:min-w-0` (it only
+  had `lg:min-h-0` before) so it can actually shrink to make room instead
+  of forcing horizontal overflow now that the panel can grow up to 400px.
+
 ## Phase 3 — Watch & Listen mode + Theater/Focus layouts (NOT STARTED)
 
 Goal: bring the remaining 7 mockup artboards to life.

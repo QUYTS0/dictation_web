@@ -6,7 +6,6 @@ import Link from "next/link";
 import { clsx } from "clsx";
 import {
   ArrowLeft,
-  PanelRightClose,
   PanelRightOpen,
   Check,
   X,
@@ -157,8 +156,6 @@ export default function DictationPage({ params }: PageProps) {
   } = useBookmarks(videoId, user);
 
   const {
-    showTranslation: showScriptTranslation,
-    setShowTranslation: setShowScriptTranslation,
     translationBySegmentIndex,
     translationLoading: scriptTranslationLoading,
     translationError: scriptTranslationError,
@@ -311,6 +308,11 @@ export default function DictationPage({ params }: PageProps) {
       uxState === "checking_answer" ||
       uxState === "playing") &&
     !!currentSegment;
+  // Same three states, without the currentSegment requirement — used to decide which
+  // of the two stacked sections (DefaultLayout vs the status-message card) should grow
+  // to fill the column's remaining height.
+  const isPracticing =
+    uxState === "paused_waiting_input" || uxState === "checking_answer" || uxState === "playing";
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -606,16 +608,16 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col overflow-y-auto px-4 gap-4 lg:flex-row lg:overflow-hidden">
+      <main className="mx-auto flex w-full flex-1 flex-col overflow-y-auto px-4 gap-4 lg:flex-row lg:overflow-hidden">
         <motion.div
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
-            "flex flex-col lg:min-h-0 lg:flex-1 lg:overflow-hidden",
+            "flex flex-col lg:h-full lg:min-h-0 lg:min-w-0 lg:flex-1 lg:overflow-hidden",
             isZenMode && "z-50"
           )}
         >
-          <div className="flex-shrink-0 space-y-2 pt-2">
+          <div className={clsx("flex flex-col gap-2 pt-2 lg:pt-0", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0")}>
           <AnimatePresence initial={false}>
             {!isZenMode && (
               <motion.div
@@ -624,7 +626,7 @@ export default function DictationPage({ params }: PageProps) {
                 animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.3, ease: "easeInOut" }}
-                className="overflow-hidden"
+                className="overflow-hidden lg:hidden"
               >
                 {/* Phone-only compact row: the most-used controls stay one tap away,
                     the rest move into the "More settings" sheet below. */}
@@ -801,7 +803,6 @@ export default function DictationPage({ params }: PageProps) {
             workspaceStatus={workspaceStatus}
             isCheckingWorkspace={isCheckingWorkspace}
             isLastResultClean={isLastResultClean}
-            onDismissCheckResult={() => setCheckResult(null)}
             checkAnswerError={checkAnswerError}
             checkResult={checkResult}
             showHintPanel={showHintPanel}
@@ -817,7 +818,8 @@ export default function DictationPage({ params }: PageProps) {
           />
           </div>
 
-          <div className="py-3 lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
+          {(!isPracticing || isZenMode) && (
+          <div className={clsx("py-3", !isPracticing && "lg:min-h-0 lg:flex-1 lg:overflow-y-auto")}>
           <div className="bg-[var(--surface)] backdrop-blur-xl border border-[var(--border)] rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-300 ease-out text-[var(--text)]">
 
             {uxState === "loading_transcript" && (
@@ -1003,6 +1005,7 @@ export default function DictationPage({ params }: PageProps) {
             )}
           </div>
           </div>
+          )}
         </motion.div>
 
         <AnimatePresence initial={false} mode="popLayout">
@@ -1017,23 +1020,12 @@ export default function DictationPage({ params }: PageProps) {
                 "shrink-0 overflow-hidden",
                 isZenMode
                   ? "w-full sm:fixed sm:top-4 sm:right-4 sm:bottom-4 sm:z-[60] sm:w-[360px] sm:max-w-[calc(100vw-2rem)]"
-                  : "w-full lg:h-full lg:w-[360px]"
+                  : "w-full lg:h-full lg:w-[clamp(340px,24vw,400px)]"
               )}
             >
                 <div className="w-full h-full flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
-              <div className="p-4 border-b border-[var(--border)] bg-[var(--surface-2)]/60 backdrop-blur-md">
-                <div className="mb-4 flex items-center justify-between gap-2">
-                  <h2 className="font-semibold text-[var(--text)]">Lesson panel</h2>
-                  <button
-                    onClick={() => setShowLearningPanel(false)}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] shadow-sm backdrop-blur-md transition-all hover:bg-white/10"
-                    aria-label="Hide lesson panel"
-                  >
-                    <PanelRightClose size={16} />
-                  </button>
-                </div>
-              </div>
                 <RightPanelTabs
+                  onCollapse={() => setShowLearningPanel(false)}
                   rightPanelTab={rightPanelTab}
                   setRightPanelTab={setRightPanelTab}
                   scriptContextSegments={scriptContextSegments}
@@ -1042,8 +1034,6 @@ export default function DictationPage({ params }: PageProps) {
                   setShowScriptContext={setShowScriptContext}
                   showPreviousScriptContext={showPreviousScriptContext}
                   setShowPreviousScriptContext={setShowPreviousScriptContext}
-                  showScriptTranslation={showScriptTranslation}
-                  setShowScriptTranslation={setShowScriptTranslation}
                   translationBySegmentIndex={translationBySegmentIndex}
                   scriptTranslationLoading={scriptTranslationLoading}
                   scriptTranslationError={scriptTranslationError}

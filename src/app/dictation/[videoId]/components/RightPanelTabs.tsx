@@ -1,4 +1,4 @@
-import { FileText, Type, AlignLeft } from "lucide-react";
+import { FileText, Type, AlignLeft, PanelRightClose } from "lucide-react";
 import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
@@ -6,6 +6,7 @@ import { SentencesTab } from "./SentencesTab";
 import type { LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
 
 export function RightPanelTabs({
+  onCollapse,
   rightPanelTab,
   setRightPanelTab,
   scriptContextSegments,
@@ -14,8 +15,6 @@ export function RightPanelTabs({
   setShowScriptContext,
   showPreviousScriptContext,
   setShowPreviousScriptContext,
-  showScriptTranslation,
-  setShowScriptTranslation,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
@@ -50,6 +49,7 @@ export function RightPanelTabs({
   onUpdateBookmarkNote,
   onJumpBookmark,
 }: {
+  onCollapse: () => void;
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
   scriptContextSegments: TranscriptSegment[];
@@ -58,8 +58,6 @@ export function RightPanelTabs({
   setShowScriptContext: (updater: (prev: boolean) => boolean) => void;
   showPreviousScriptContext: boolean;
   setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
-  showScriptTranslation: boolean;
-  setShowScriptTranslation: (updater: (prev: boolean) => boolean) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
@@ -107,50 +105,60 @@ export function RightPanelTabs({
 }) {
   return (
     <>
-      <div className="flex bg-[var(--surface-2)] border border-[var(--border)] p-1 rounded-xl shadow-inner text-[var(--text)] mx-4 mt-3">
+      <div className="flex items-center gap-2 mx-3 mt-2">
+        <div className="flex flex-1 bg-[var(--surface-2)] border border-[var(--border)] p-1 rounded-xl shadow-inner text-[var(--text)]">
+          <button
+            onClick={() => setRightPanelTab("script")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-bold rounded-lg transition-all ${
+              rightPanelTab === "script"
+                ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
+                : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+            }`}
+          >
+            <FileText size={15} /> Script
+          </button>
+          <button
+            onClick={() => setRightPanelTab("words")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-bold rounded-lg transition-all ${
+              rightPanelTab === "words"
+                ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
+                : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+            }`}
+          >
+            <Type size={15} /> Words
+            {wordItems.length > 0 && (
+              <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                {wordItems.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setRightPanelTab("sentences")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-bold rounded-lg transition-all ${
+              rightPanelTab === "sentences"
+                ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
+                : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+            }`}
+          >
+            <AlignLeft size={15} /> Sentences
+            {sentenceItems.length + bookmarks.length > 0 && (
+              <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                {sentenceItems.length + bookmarks.length}
+              </span>
+            )}
+          </button>
+        </div>
         <button
-          onClick={() => setRightPanelTab("script")}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${
-            rightPanelTab === "script"
-              ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
-              : "text-[var(--text-muted)] hover:text-[var(--accent)]"
-          }`}
+          onClick={onCollapse}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] shadow-sm transition-colors hover:bg-white/10"
+          aria-label="Hide lesson panel"
+          title="Hide lesson panel"
         >
-          <FileText size={16} /> Script
-        </button>
-        <button
-          onClick={() => setRightPanelTab("words")}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${
-            rightPanelTab === "words"
-              ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
-              : "text-[var(--text-muted)] hover:text-[var(--accent)]"
-          }`}
-        >
-          <Type size={16} /> Words
-          {wordItems.length > 0 && (
-            <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
-              {wordItems.length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setRightPanelTab("sentences")}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all ${
-            rightPanelTab === "sentences"
-              ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
-              : "text-[var(--text-muted)] hover:text-[var(--accent)]"
-          }`}
-        >
-          <AlignLeft size={16} /> Sentences
-          {sentenceItems.length + bookmarks.length > 0 && (
-            <span className="rounded-full bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
-              {sentenceItems.length + bookmarks.length}
-            </span>
-          )}
+          <PanelRightClose size={15} />
         </button>
       </div>
 
-      <div className="flex flex-col gap-4 p-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+      <div className="flex flex-col gap-3 p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {rightPanelTab === "script" ? (
           <ScriptTab
             scriptContextSegments={scriptContextSegments}
@@ -159,8 +167,6 @@ export function RightPanelTabs({
             setShowScriptContext={setShowScriptContext}
             showPreviousScriptContext={showPreviousScriptContext}
             setShowPreviousScriptContext={setShowPreviousScriptContext}
-            showScriptTranslation={showScriptTranslation}
-            setShowScriptTranslation={setShowScriptTranslation}
             translationBySegmentIndex={translationBySegmentIndex}
             scriptTranslationLoading={scriptTranslationLoading}
             scriptTranslationError={scriptTranslationError}

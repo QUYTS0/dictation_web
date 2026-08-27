@@ -19,7 +19,7 @@ export const SUBTITLE_VISIBILITY_STORAGE_KEY = "dictation.subtitle-visibility";
 // Every Nth combo tick plays a brighter "milestone" chime instead of the normal tick.
 export const COMBO_MILESTONE_INTERVAL = 3;
 export const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
-  standard: "max-w-4xl",
+  standard: "max-w-[94%]",
   large: "max-w-none",
 };
 export const PLAYBACK_RATE_OPTIONS = [0.75, 1, 1.25, 1.5] as const;

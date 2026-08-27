@@ -2,15 +2,15 @@
 
 import { clsx } from "clsx";
 import type { ReactNode, RefObject } from "react";
-import { Check, Lightbulb } from "lucide-react";
+import { Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import HintDisplay from "@/components/HintDisplay";
-import ProgressBar from "@/components/ProgressBar";
 import type { UXState, CheckAnswerResponse, HintLevel } from "@/lib/types";
 import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { getWordShapeMask, overlayTypedOntoMask } from "@/lib/utils/segment";
+import { buildComparedTokens } from "../../helpers";
 import type { PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 
 interface CurrentSegment {
@@ -46,7 +46,6 @@ export function DefaultLayout({
   workspaceStatus,
   isCheckingWorkspace,
   isLastResultClean,
-  onDismissCheckResult,
   checkAnswerError,
   checkResult,
   showHintPanel,
@@ -88,7 +87,6 @@ export function DefaultLayout({
   workspaceStatus: "idle" | "success" | "error";
   isCheckingWorkspace: boolean;
   isLastResultClean: boolean;
-  onDismissCheckResult: () => void;
   checkAnswerError: string | null;
   checkResult: CheckAnswerResponse | null;
   showHintPanel: boolean;
@@ -103,15 +101,25 @@ export function DefaultLayout({
   translationText: string | undefined;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
-  const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
+  const showErrorDiff = workspaceStatus === "error" && !!checkResult;
+  const showMask =
+    practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment && !showErrorDiff;
   const maskBlurred = subtitleVisibility.original === "blur";
+  const errorDiffTokens =
+    showErrorDiff && checkResult && currentSegment
+      ? buildComparedTokens({
+          diff: checkResult.diff,
+          expectedText: currentSegment.text,
+          userText: workspaceInputValue,
+        }).userTokens
+      : [];
 
   return (
-    <>
+    <div className="flex min-h-0 flex-1 flex-col">
       <div
         className={clsx(
           "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-[var(--border-strong)] shrink-0 bg-black transition-all duration-300 ease-out",
-          isZenMode ? "max-h-[50dvh] sm:max-h-[65vh]" : "max-h-[38dvh] sm:max-h-[320px]"
+          isZenMode ? "max-h-[50dvh] sm:max-h-[72vh]" : "max-h-[38dvh] sm:max-h-[52vh]"
         )}
       >
         <div
@@ -133,16 +141,10 @@ export function DefaultLayout({
         </div>
       </div>
 
-      {isPracticing && totalSegments > 0 && (
-        <div className="mt-4">
-          <ProgressBar currentIndex={currentSegIdx} totalSegments={totalSegments} accuracy={accuracy} tone="zen" />
-        </div>
-      )}
-
       {isPracticing && (
         <>
-          <div className="flex items-stretch gap-2 mt-4">
-            <div className="relative flex-1 min-w-0">
+          <div className="mt-3">
+            <div className="relative min-w-0">
               <div
                 onClick={() => workspaceInputRef.current?.focus()}
                 className={`relative h-full rounded-2xl overflow-hidden border transition-all ${
@@ -158,11 +160,28 @@ export function DefaultLayout({
                     ref={maskOverlayRef}
                     aria-hidden="true"
                     className={clsx(
-                      "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre p-6 pr-32 sm:pr-28 text-xl font-mono tracking-wide text-[var(--text)]",
+                      "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-16 sm:px-14 py-4 text-center text-xl font-mono tracking-wide text-[var(--text)]",
                       maskBlurred && "blur-sm"
                     )}
                   >
                     {overlayTypedOntoMask(getWordShapeMask(currentSegment?.text ?? ""), workspaceInputValue)}
+                  </div>
+                )}
+                {showErrorDiff && (
+                  <div
+                    ref={maskOverlayRef}
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-16 sm:px-14 py-4 text-center text-xl font-medium"
+                  >
+                    {errorDiffTokens.map((token, index) => (
+                      <span
+                        key={index}
+                        className={token.status === "correct" ? "text-[var(--text)]" : "text-[var(--red)]"}
+                      >
+                        {token.word}
+                        {index < errorDiffTokens.length - 1 ? " " : ""}
+                      </span>
+                    ))}
                   </div>
                 )}
                 <input
@@ -185,9 +204,11 @@ export function DefaultLayout({
                   }}
                   placeholder="Type what you hear..."
                   className={clsx(
-                    "w-full bg-transparent p-6 pr-32 sm:pr-28 text-xl outline-none",
+                    "w-full bg-transparent px-16 sm:px-14 py-4 text-xl text-center outline-none",
                     showMask
                       ? "font-mono tracking-wide text-transparent caret-[var(--text)] placeholder:text-transparent"
+                      : showErrorDiff
+                      ? "font-medium text-transparent caret-[var(--text)] placeholder:text-transparent"
                       : "font-medium text-[var(--text)] placeholder:text-[var(--text-faint)]"
                   )}
                   autoComplete="off"
@@ -223,28 +244,7 @@ export function DefaultLayout({
                         <Check size={20} strokeWidth={3} />
                         <span className="sr-only">Correct</span>
                       </motion.div>
-                    ) : workspaceStatus === "error" ? (
-                      <motion.button
-                        key="error"
-                        onClick={onDismissCheckResult}
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="bg-[var(--red)] text-white px-4 py-2 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all"
-                      >
-                        Try Again
-                      </motion.button>
-                    ) : (
-                      <motion.button
-                        key="idle"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        onClick={onWorkspaceCheck}
-                        disabled={!workspaceInputValue.trim()}
-                        className="bg-[var(--accent)] text-[#1a1206] px-6 py-2.5 rounded-xl font-bold text-sm hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg active:scale-95"
-                      >
-                        Check
-                      </motion.button>
-                    )}
+                    ) : null}
                   </AnimatePresence>
                 </div>
               </div>
@@ -263,27 +263,12 @@ export function DefaultLayout({
                 )}
               </AnimatePresence>
             </div>
-            <button
-              type="button"
-              onClick={onToggleHintPanel}
-              title={showHintPanel ? "Hide hint" : "Show hint"}
-              aria-label={showHintPanel ? "Hide hint" : "Show hint"}
-              aria-pressed={showHintPanel}
-              className={clsx(
-                "shrink-0 w-12 sm:w-14 flex items-center justify-center rounded-2xl border-2 transition-all active:scale-95",
-                showHintPanel
-                  ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                  : "border-[var(--accent-border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:bg-[var(--accent-soft)]"
-              )}
-            >
-              <Lightbulb size={20} />
-            </button>
           </div>
 
           {translationText && subtitleVisibility.translation !== "hide" && (
             <p
               className={clsx(
-                "mt-2 text-center text-sm text-[var(--text-muted)]",
+                "mt-2 text-center text-base text-[var(--text-muted)]",
                 subtitleVisibility.translation === "blur" && "blur-sm select-none"
               )}
             >
@@ -301,41 +286,6 @@ export function DefaultLayout({
           )}
 
           <AnimatePresence>
-            {workspaceStatus === "error" && checkResult && (
-              <motion.div
-                initial={{ height: 0, opacity: 0, scale: 0.95 }}
-                animate={{ height: "auto", opacity: 1, scale: 1 }}
-                exit={{ height: 0, opacity: 0, scale: 0.95 }}
-                className="overflow-hidden"
-              >
-                <div className="bg-[var(--red)]/10 border border-[var(--red)]/30 rounded-2xl p-5 mt-4">
-                  <h4 className="text-[10px] font-black text-[var(--red)] uppercase tracking-[0.2em] mb-3">Correction Needed</h4>
-                  <p className="font-mono text-sm leading-relaxed">
-                    {checkResult.diff
-                      .filter((t) => t.status !== "extra")
-                      .map((t, i, arr) => (
-                        <span key={i} className={clsx(t.status === "correct" ? "text-[var(--green)] font-medium" : "text-[var(--text-faint)]")}>
-                          {t.status === "correct" ? t.word : "***"}
-                          {i < arr.length - 1 ? " " : ""}
-                        </span>
-                      ))}
-                  </p>
-                  {(() => {
-                    const userWordCount = checkResult.normalizedUser.split(" ").filter(Boolean).length;
-                    const expectedWordCount = checkResult.normalizedExpected.split(" ").filter(Boolean).length;
-                    const extraCount = userWordCount > expectedWordCount ? userWordCount - expectedWordCount : 0;
-                    return extraCount > 0 ? (
-                      <span className="mt-2 inline-block rounded-full bg-[var(--purple)]/20 px-2 py-0.5 text-[11px] font-medium text-[var(--purple)]">
-                        Extra: {extraCount}
-                      </span>
-                    ) : null;
-                  })()}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
             {showHintPanel && currentSegment && !checkResult?.isCorrect && (
               <motion.div
                 key="hint-panel"
@@ -343,7 +293,7 @@ export function DefaultLayout({
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.2, ease: "easeInOut" }}
-                className="overflow-hidden mt-4"
+                className="overflow-hidden mt-3"
               >
                 <HintDisplay text={currentSegment.text} level={hintLevel} onLevelChange={onHintLevelChange} />
               </motion.div>
@@ -358,7 +308,7 @@ export function DefaultLayout({
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
                 transition={{ duration: 0.25, ease: "easeInOut" }}
-                className="overflow-hidden mt-4"
+                className="overflow-hidden mt-3"
               >
                 <ReviewPreviousSentenceCard
                   previousReview={previousReview}
@@ -369,11 +319,12 @@ export function DefaultLayout({
             )}
           </AnimatePresence>
 
-          <div className="mt-4">
+          <div className="mt-auto pt-3">
             <ControlBar
               videoId={videoId}
               currentSegIdx={currentSegIdx}
               totalSegments={totalSegments}
+              accuracy={accuracy}
               onReset={onReset}
               onPrevious={onPrevious}
               onReplay={onReplay}
@@ -392,6 +343,6 @@ export function DefaultLayout({
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }
