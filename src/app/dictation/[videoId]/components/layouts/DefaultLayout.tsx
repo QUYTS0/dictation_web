@@ -9,7 +9,7 @@ import type { UXState, CheckAnswerResponse, HintLevel } from "@/lib/types";
 import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
-import { getWordShapeMask, overlayTypedOntoMask } from "@/lib/utils/segment";
+import { SentenceWordInput } from "../SentenceWordInput";
 import { buildComparedTokens } from "../../helpers";
 import type { PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 
@@ -37,10 +37,9 @@ export function DefaultLayout({
   setOriginalVisibility,
   setTranslationVisibility,
   workspaceInputRef,
-  maskOverlayRef,
+  resetSignal,
   workspaceInputValue,
-  onWorkspaceInputChange,
-  onWorkspaceInputKeyDown,
+  onWorkspaceValueChange,
   onWorkspaceCheck,
   practiceMode,
   workspaceStatus,
@@ -78,10 +77,9 @@ export function DefaultLayout({
   setOriginalVisibility: (value: SubtitleVisibility) => void;
   setTranslationVisibility: (value: SubtitleVisibility) => void;
   workspaceInputRef: RefObject<HTMLInputElement | null>;
-  maskOverlayRef: RefObject<HTMLDivElement | null>;
+  resetSignal: number;
   workspaceInputValue: string;
-  onWorkspaceInputChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
-  onWorkspaceInputKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  onWorkspaceValueChange: (value: string) => void;
   onWorkspaceCheck: () => void;
   practiceMode: PracticeMode;
   workspaceStatus: "idle" | "success" | "error";
@@ -155,66 +153,16 @@ export function DefaultLayout({
                     : `border-transparent bg-transparent focus-within:border-[var(--accent-border)] focus-within:bg-[var(--surface)] focus-within:ring-4 focus-within:ring-[var(--accent-soft)] ${isZenMode ? "focus-within:shadow-2xl" : ""}`
                 }`}
               >
-                {showMask && (
-                  <div
-                    ref={maskOverlayRef}
-                    aria-hidden="true"
-                    className={clsx(
-                      "pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-16 sm:px-14 py-4 text-center text-xl font-mono tracking-wide text-[var(--text)]",
-                      maskBlurred && "blur-sm"
-                    )}
-                  >
-                    {overlayTypedOntoMask(getWordShapeMask(currentSegment?.text ?? ""), workspaceInputValue)}
-                  </div>
-                )}
-                {showErrorDiff && (
-                  <div
-                    ref={maskOverlayRef}
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-16 sm:px-14 py-4 text-center text-xl font-medium"
-                  >
-                    {errorDiffTokens.map((token, index) => (
-                      <span
-                        key={index}
-                        className={token.status === "correct" ? "text-[var(--text)]" : "text-[var(--red)]"}
-                      >
-                        {token.word}
-                        {index < errorDiffTokens.length - 1 ? " " : ""}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <input
-                  ref={workspaceInputRef}
-                  type="text"
-                  value={workspaceInputValue}
-                  onChange={onWorkspaceInputChange}
-                  onKeyDown={onWorkspaceInputKeyDown}
-                  enterKeyHint="done"
-                  onScroll={(e) => {
-                    if (maskOverlayRef.current) maskOverlayRef.current.scrollLeft = e.currentTarget.scrollLeft;
-                  }}
-                  onWheel={(e) => {
-                    const el = e.currentTarget;
-                    if (el.scrollWidth <= el.clientWidth) return;
-                    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-                    if (delta === 0) return;
-                    e.preventDefault();
-                    el.scrollLeft += delta;
-                  }}
-                  placeholder="Type what you hear..."
-                  className={clsx(
-                    "w-full bg-transparent px-16 sm:px-14 py-4 text-xl text-center outline-none",
-                    showMask
-                      ? "font-mono tracking-wide text-transparent caret-[var(--text)] placeholder:text-transparent"
-                      : showErrorDiff
-                      ? "font-medium text-transparent caret-[var(--text)] placeholder:text-transparent"
-                      : "font-medium text-[var(--text)] placeholder:text-[var(--text-faint)]"
-                  )}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
+                <SentenceWordInput
+                  targetText={currentSegment?.text ?? ""}
+                  resetToken={`${currentSegIdx}:${resetSignal}`}
+                  inputRef={workspaceInputRef}
+                  showMask={showMask}
+                  maskBlurred={maskBlurred}
+                  showErrorDiff={showErrorDiff}
+                  errorDiffTokens={errorDiffTokens}
+                  onValueChange={onWorkspaceValueChange}
+                  onSubmit={onWorkspaceCheck}
                 />
 
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">

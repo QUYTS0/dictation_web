@@ -22,3 +22,13 @@
   --purple: #b394f7;
   --red: #f2685a;
 }
+
+@keyframes dictation-caret-blink {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.dictation-caret {
+  animation: dictation-caret-blink 1s step-end infinite;
+}

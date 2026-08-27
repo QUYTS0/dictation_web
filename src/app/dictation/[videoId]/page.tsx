@@ -96,6 +96,7 @@ export default function DictationPage({ params }: PageProps) {
   const [showMoreSettings, setShowMoreSettings] = useState(false);
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [resetSignal, setResetSignal] = useState(0);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -106,7 +107,6 @@ export default function DictationPage({ params }: PageProps) {
   const { streakDays } = useStreak(user);
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
-  const maskOverlayRef = useRef<HTMLDivElement>(null);
   const previousShowVideoRef = useRef(showVideo);
 
   const {
@@ -207,16 +207,6 @@ export default function DictationPage({ params }: PageProps) {
     void handleAnswerSubmit(trimmed);
   }, [handleAnswerSubmit, workspaceInputValue]);
 
-  const handleWorkspaceInputKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        handleWorkspaceCheck();
-      }
-    },
-    [handleWorkspaceCheck]
-  );
-
   // ---- Keyboard shortcuts ----
   const { inputFocusSignal } = useKeyboardShortcuts({
     onReplay: handleReplay,
@@ -243,9 +233,8 @@ export default function DictationPage({ params }: PageProps) {
   // Auto-advance: as soon as the typed text exactly matches the sentence
   // (post-normalization), submit automatically instead of waiting for
   // Enter/Check — lets confident typists skip the manual submit step.
-  const handleWorkspaceInputChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const value = event.target.value;
+  const handleWorkspaceValueChange = useCallback(
+    (value: string) => {
       setWorkspaceInputValue(value);
       setCheckResult(null);
 
@@ -325,48 +314,6 @@ export default function DictationPage({ params }: PageProps) {
     const t = window.setTimeout(() => workspaceInputRef.current?.focus(), 30);
     return () => window.clearTimeout(t);
   }, [inputFocusSignal, shouldShowInput]);
-
-  // Lets the user swipe horizontally to pan overflowed text instead of only
-  // dragging the caret. A short tap still falls through to native cursor
-  // placement; only a clear horizontal drag hijacks the gesture.
-  useEffect(() => {
-    const el = workspaceInputRef.current;
-    if (!el || !shouldShowInput) return;
-
-    const DRAG_THRESHOLD = 8;
-    let startX = 0;
-    let startScrollLeft = 0;
-    let isDragging = false;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      startX = e.touches[0].clientX;
-      startScrollLeft = el.scrollLeft;
-      isDragging = false;
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      const deltaX = e.touches[0].clientX - startX;
-      if (!isDragging && Math.abs(deltaX) < DRAG_THRESHOLD) return;
-      isDragging = true;
-      e.preventDefault();
-      el.scrollLeft = startScrollLeft - deltaX;
-    };
-
-    const handleTouchEnd = (e: TouchEvent) => {
-      if (isDragging) e.preventDefault();
-      isDragging = false;
-    };
-
-    el.addEventListener("touchstart", handleTouchStart, { passive: true });
-    el.addEventListener("touchmove", handleTouchMove, { passive: false });
-    el.addEventListener("touchend", handleTouchEnd);
-
-    return () => {
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove", handleTouchMove);
-      el.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, [shouldShowInput]);
 
   const shouldShowPreviousReview =
     !!previousReview &&
@@ -782,6 +729,7 @@ export default function DictationPage({ params }: PageProps) {
               setWorkspaceInputValue("");
               setCheckResult(null);
               setShowHintPanel(false);
+              setResetSignal((v) => v + 1);
             }}
             onPrevious={handlePrevious}
             onReplay={handleReplay}
@@ -794,10 +742,9 @@ export default function DictationPage({ params }: PageProps) {
             setOriginalVisibility={setOriginalVisibility}
             setTranslationVisibility={setTranslationVisibility}
             workspaceInputRef={workspaceInputRef}
-            maskOverlayRef={maskOverlayRef}
+            resetSignal={resetSignal}
             workspaceInputValue={workspaceInputValue}
-            onWorkspaceInputChange={handleWorkspaceInputChange}
-            onWorkspaceInputKeyDown={handleWorkspaceInputKeyDown}
+            onWorkspaceValueChange={handleWorkspaceValueChange}
             onWorkspaceCheck={handleWorkspaceCheck}
             practiceMode={practiceMode}
             workspaceStatus={workspaceStatus}
