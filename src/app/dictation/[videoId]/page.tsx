@@ -233,10 +233,12 @@ export default function DictationPage({ params }: PageProps) {
   // Auto-advance: as soon as the typed text exactly matches the sentence
   // (post-normalization), submit automatically instead of waiting for
   // Enter/Check — lets confident typists skip the manual submit step.
+  // Deliberately does NOT clear checkResult on every keystroke: after a wrong
+  // submission, per-word red highlighting must persist across edits to other
+  // words (it only updates once the user resubmits or fixes that word).
   const handleWorkspaceValueChange = useCallback(
     (value: string) => {
       setWorkspaceInputValue(value);
-      setCheckResult(null);
 
       if (!autoAdvance || !currentSegment) return;
       if (uxState !== "paused_waiting_input" && uxState !== "playing") return;
@@ -246,7 +248,7 @@ export default function DictationPage({ params }: PageProps) {
         void handleAnswerSubmit(trimmed);
       }
     },
-    [autoAdvance, currentSegment, uxState, handleAnswerSubmit, setCheckResult]
+    [autoAdvance, currentSegment, uxState, handleAnswerSubmit]
   );
 
   const handleToggleCurrentBookmark = useCallback(() => {
@@ -743,7 +745,6 @@ export default function DictationPage({ params }: PageProps) {
             setTranslationVisibility={setTranslationVisibility}
             workspaceInputRef={workspaceInputRef}
             resetSignal={resetSignal}
-            workspaceInputValue={workspaceInputValue}
             onWorkspaceValueChange={handleWorkspaceValueChange}
             onWorkspaceCheck={handleWorkspaceCheck}
             practiceMode={practiceMode}

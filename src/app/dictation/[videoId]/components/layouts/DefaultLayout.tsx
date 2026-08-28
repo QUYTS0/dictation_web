@@ -10,7 +10,6 @@ import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
-import { buildComparedTokens } from "../../helpers";
 import type { PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 
 interface CurrentSegment {
@@ -38,7 +37,6 @@ export function DefaultLayout({
   setTranslationVisibility,
   workspaceInputRef,
   resetSignal,
-  workspaceInputValue,
   onWorkspaceValueChange,
   onWorkspaceCheck,
   practiceMode,
@@ -78,7 +76,6 @@ export function DefaultLayout({
   setTranslationVisibility: (value: SubtitleVisibility) => void;
   workspaceInputRef: RefObject<HTMLInputElement | null>;
   resetSignal: number;
-  workspaceInputValue: string;
   onWorkspaceValueChange: (value: string) => void;
   onWorkspaceCheck: () => void;
   practiceMode: PracticeMode;
@@ -99,18 +96,9 @@ export function DefaultLayout({
   translationText: string | undefined;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
-  const showErrorDiff = workspaceStatus === "error" && !!checkResult;
-  const showMask =
-    practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment && !showErrorDiff;
+  const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
+  const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
-  const errorDiffTokens =
-    showErrorDiff && checkResult && currentSegment
-      ? buildComparedTokens({
-          diff: checkResult.diff,
-          expectedText: currentSegment.text,
-          userText: workspaceInputValue,
-        }).userTokens
-      : [];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -159,8 +147,7 @@ export function DefaultLayout({
                   inputRef={workspaceInputRef}
                   showMask={showMask}
                   maskBlurred={maskBlurred}
-                  showErrorDiff={showErrorDiff}
-                  errorDiffTokens={errorDiffTokens}
+                  hasWrongSubmission={hasWrongSubmission}
                   onValueChange={onWorkspaceValueChange}
                   onSubmit={onWorkspaceCheck}
                 />

@@ -86,3 +86,43 @@ export function buildFullValue(words: WordSlots[], typedByWord: string[]): strin
     .filter((word) => word.length > 0)
     .join(" ");
 }
+
+/** The word's target letters/digits only (punctuation excluded), in order. */
+export function getWordEditableLetters(word: WordSlots): string {
+  let result = "";
+  for (const slot of word.slots) {
+    if (slot.editable) result += slot.char;
+  }
+  return result;
+}
+
+/**
+ * A word "counts" as answered correctly once its typed letters match the
+ * target letters (case-insensitively — punctuation is never graded since
+ * it's auto-filled). Punctuation-only tokens are trivially always correct
+ * since there's nothing to grade.
+ */
+export function isWordAnsweredCorrectly(word: WordSlots, typedChars: string): boolean {
+  const target = getWordEditableLetters(word);
+  if (!target) return true;
+  return typedChars.toLowerCase() === target.toLowerCase();
+}
+
+/**
+ * Finds the nearest typable word starting at `from` and moving in
+ * `direction` whose current answer doesn't yet match the target — used to
+ * jump the caret directly between mistakes after a failed check.
+ */
+export function findIncorrectWordIndex(
+  words: WordSlots[],
+  typedByWord: string[],
+  from: number,
+  direction: 1 | -1
+): number | null {
+  let i = from;
+  while (i >= 0 && i < words.length) {
+    if (isWordTypable(words[i]) && !isWordAnsweredCorrectly(words[i], typedByWord[i] ?? "")) return i;
+    i += direction;
+  }
+  return null;
+}

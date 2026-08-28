@@ -5,11 +5,12 @@ import { clsx } from "clsx";
 import {
   buildFullValue,
   buildWordCharSlots,
+  findIncorrectWordIndex,
   findTypableWordIndex,
+  isWordAnsweredCorrectly,
   isWordTypable,
   type WordSlots,
 } from "../wordSlots";
-import type { ComparedToken } from "../types";
 
 function Caret() {
   return (
@@ -24,13 +25,19 @@ function renderWordNodes({
   word,
   typedChars,
   isActive,
+  caretPos,
   maskLetters,
+  colorClass,
+  isIncorrect,
   wordKey,
 }: {
   word: WordSlots;
   typedChars: string;
   isActive: boolean;
+  caretPos: number;
   maskLetters: boolean;
+  colorClass: string;
+  isIncorrect: boolean;
   wordKey: string;
 }): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -38,42 +45,44 @@ function renderWordNodes({
   let caretRendered = false;
 
   word.slots.forEach((slot, i) => {
-    if (isActive && !caretRendered && slot.editable && consumed >= typedChars.length) {
+    if (isActive && !caretRendered && consumed === caretPos) {
       nodes.push(<Caret key={`${wordKey}-caret`} />);
       caretRendered = true;
     }
     if (slot.editable) {
       if (consumed < typedChars.length) {
         nodes.push(
-          <span key={`${wordKey}-c${i}`} className="text-[var(--text)]">
+          <span key={`${wordKey}-c${i}`} className={colorClass}>
             {typedChars[consumed]}
           </span>
         );
         consumed++;
-      } else if (maskLetters) {
+      } else if (maskLetters || isIncorrect) {
         nodes.push(
-          <span key={`${wordKey}-c${i}`} className="text-[var(--text-faint)]">
+          <span key={`${wordKey}-c${i}`} className={isIncorrect ? "text-[var(--red)]" : "text-[var(--text-faint)]"}>
             _
           </span>
         );
       }
     } else {
       nodes.push(
-        <span key={`${wordKey}-c${i}`} className="text-[var(--text)]">
+        <span key={`${wordKey}-c${i}`} className={colorClass}>
           {slot.char}
         </span>
       );
     }
   });
 
-  if (consumed < typedChars.length) {
-    for (let k = consumed; k < typedChars.length; k++) {
-      nodes.push(
-        <span key={`${wordKey}-ov${k}`} className="text-[var(--text)]">
-          {typedChars[k]}
-        </span>
-      );
+  for (let k = consumed; k < typedChars.length; k++) {
+    if (isActive && !caretRendered && k === caretPos) {
+      nodes.push(<Caret key={`${wordKey}-caret-ov${k}`} />);
+      caretRendered = true;
     }
+    nodes.push(
+      <span key={`${wordKey}-ov${k}`} className={colorClass}>
+        {typedChars[k]}
+      </span>
+    );
   }
 
   if (isActive && !caretRendered) {
@@ -89,8 +98,7 @@ export function SentenceWordInput({
   inputRef,
   showMask,
   maskBlurred,
-  showErrorDiff,
-  errorDiffTokens,
+  hasWrongSubmission,
   onValueChange,
   onSubmit,
 }: {
@@ -99,20 +107,21 @@ export function SentenceWordInput({
   inputRef: RefObject<HTMLInputElement | null>;
   showMask: boolean;
   maskBlurred: boolean;
-  showErrorDiff: boolean;
-  errorDiffTokens: ComparedToken[];
+  hasWrongSubmission: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
 }) {
   const words = useMemo(() => buildWordCharSlots(targetText), [targetText]);
   const [typedByWord, setTypedByWord] = useState<string[]>([]);
   const [activeWordIndex, setActiveWordIndex] = useState(0);
+  const [caretPos, setCaretPos] = useState(0);
 
   // Reset per-word state whenever a new sentence loads or the answer is reset,
   // so the caret always starts at the first editable character of the first word.
   useEffect(() => {
     setTypedByWord(words.map(() => ""));
     setActiveWordIndex(findTypableWordIndex(words, 0, 1) ?? 0);
+    setCaretPos(0);
     inputRef.current?.setSelectionRange(0, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [words, resetToken]);
@@ -122,45 +131,120 @@ export function SentenceWordInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [words, typedByWord]);
 
+  // Keeps the real (invisible) input's native cursor in sync with caretPos —
+  // essential when jumping between words, since the controlled `value` swaps
+  // to the new word's content and the native cursor must move to match.
   useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
     const len = typedByWord[activeWordIndex]?.length ?? 0;
-    inputRef.current?.setSelectionRange(len, len);
-  }, [activeWordIndex, typedByWord, inputRef]);
+    const pos = Math.max(0, Math.min(caretPos, len));
+    if (input.selectionStart !== pos || input.selectionEnd !== pos) {
+      input.setSelectionRange(pos, pos);
+    }
+  }, [activeWordIndex, caretPos, typedByWord, inputRef]);
+
+  const jumpToWord = (index: number, position: "start" | "end") => {
+    setActiveWordIndex(index);
+    setCaretPos(position === "start" ? 0 : typedByWord[index]?.length ?? 0);
+  };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const sanitized = event.target.value.replace(/\s+/g, "");
+    const pos = Math.min(event.target.selectionStart ?? sanitized.length, sanitized.length);
     setTypedByWord((prev) => {
       const next = [...prev];
       next[activeWordIndex] = sanitized;
       return next;
     });
+    setCaretPos(pos);
+  };
+
+  const handleSelect = (event: React.SyntheticEvent<HTMLInputElement>) => {
+    setCaretPos(event.currentTarget.selectionStart ?? 0);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+
     if (event.key === "Enter") {
       event.preventDefault();
       onSubmit();
       return;
     }
+
     if (event.key === " " || event.code === "Space") {
       event.preventDefault();
-      setActiveWordIndex((current) => findTypableWordIndex(words, current + 1, 1) ?? current);
+      const next = findTypableWordIndex(words, activeWordIndex + 1, 1);
+      if (next !== null) jumpToWord(next, "start");
       return;
     }
+
     if (event.key === "Backspace" && (typedByWord[activeWordIndex]?.length ?? 0) === 0) {
       event.preventDefault();
-      setActiveWordIndex((current) => findTypableWordIndex(words, current - 1, -1) ?? current);
+      const prev = findTypableWordIndex(words, activeWordIndex - 1, -1);
+      if (prev !== null) jumpToWord(prev, "end");
+      return;
+    }
+
+    if (hasWrongSubmission && event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      const dir = event.key === "ArrowLeft" ? -1 : 1;
+      const target = findIncorrectWordIndex(words, typedByWord, activeWordIndex + dir, dir);
+      if (target !== null) jumpToWord(target, "start");
+      return;
+    }
+
+    if (event.ctrlKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      const dir = event.key === "ArrowLeft" ? -1 : 1;
+      const target = findTypableWordIndex(words, activeWordIndex + dir, dir);
+      if (target !== null) jumpToWord(target, dir === -1 ? "end" : "start");
+      return;
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      const first = findTypableWordIndex(words, 0, 1);
+      if (first !== null) jumpToWord(first, "start");
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      const last = findTypableWordIndex(words, words.length - 1, -1);
+      if (last !== null) jumpToWord(last, "end");
+      return;
+    }
+
+    if (event.key === "ArrowLeft" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (input.selectionStart === 0 && input.selectionEnd === 0) {
+        event.preventDefault();
+        const prev = findTypableWordIndex(words, activeWordIndex - 1, -1);
+        if (prev !== null) jumpToWord(prev, "end");
+      }
+      return;
+    }
+
+    if (event.key === "ArrowRight" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const len = input.value.length;
+      if (input.selectionStart === len && input.selectionEnd === len) {
+        event.preventDefault();
+        const next = findTypableWordIndex(words, activeWordIndex + 1, 1);
+        if (next !== null) jumpToWord(next, "start");
+      }
     }
   };
 
   const handleWordClick = (index: number) => {
     if (!isWordTypable(words[index])) return;
     setActiveWordIndex(index);
+    setCaretPos(typedByWord[index]?.length ?? 0);
     inputRef.current?.focus();
   };
 
   const allEmpty = typedByWord.every((typed) => !typed || typed.length === 0);
-  const showPlaceholder = allEmpty && !showMask && !showErrorDiff;
+  const showPlaceholder = allEmpty && !showMask && !hasWrongSubmission;
 
   return (
     <>
@@ -169,6 +253,7 @@ export function SentenceWordInput({
         type="text"
         value={typedByWord[activeWordIndex] ?? ""}
         onChange={handleChange}
+        onSelect={handleSelect}
         onKeyDown={handleKeyDown}
         enterKeyHint="done"
         aria-label="Type what you hear"
@@ -179,47 +264,45 @@ export function SentenceWordInput({
         spellCheck={false}
       />
 
-      {showErrorDiff ? (
-        <div className="w-full px-16 py-4 text-center text-xl font-medium leading-loose sm:px-14">
-          {errorDiffTokens.map((token, index) => (
-            <Fragment key={index}>
-              {index > 0 && " "}
-              <span
-                className={clsx(
-                  "inline-block whitespace-nowrap",
-                  token.status === "correct" ? "text-[var(--text)]" : "text-[var(--red)]"
-                )}
-              >
-                {token.word}
-              </span>
-            </Fragment>
-          ))}
-        </div>
-      ) : (
-        <div
-          className={clsx(
-            "w-full px-16 py-4 text-center text-xl leading-loose sm:px-14",
-            showMask ? "font-mono tracking-wide" : "font-medium",
-            maskBlurred && "blur-sm"
-          )}
-        >
-          {words.map((word, wordIndex) => (
+      <div
+        className={clsx(
+          "w-full px-16 py-4 text-center text-xl leading-loose sm:px-14",
+          showMask ? "font-mono tracking-wide" : "font-medium",
+          maskBlurred && "blur-sm"
+        )}
+      >
+        {words.map((word, wordIndex) => {
+          const typedChars = typedByWord[wordIndex] ?? "";
+          const isActive = wordIndex === activeWordIndex;
+          const isIncorrect =
+            hasWrongSubmission && isWordTypable(word) && !isWordAnsweredCorrectly(word, typedChars);
+          const colorClass = isIncorrect ? "text-[var(--red)]" : "text-[var(--text)]";
+          return (
             <Fragment key={wordIndex}>
               {wordIndex > 0 && " "}
-              <span onClick={() => handleWordClick(wordIndex)} className="inline-block whitespace-nowrap">
+              <span
+                onClick={() => handleWordClick(wordIndex)}
+                className={clsx(
+                  "-mx-1 -my-0.5 inline-block cursor-pointer whitespace-nowrap rounded px-1 py-0.5 transition-colors",
+                  isActive && "bg-[var(--accent-soft)]"
+                )}
+              >
                 {renderWordNodes({
                   word,
-                  typedChars: typedByWord[wordIndex] ?? "",
-                  isActive: wordIndex === activeWordIndex,
+                  typedChars,
+                  isActive,
+                  caretPos,
                   maskLetters: showMask,
+                  colorClass,
+                  isIncorrect,
                   wordKey: `w${wordIndex}`,
                 })}
               </span>
             </Fragment>
-          ))}
-          {showPlaceholder && <span className="text-[var(--text-faint)]"> Type what you hear...</span>}
-        </div>
-      )}
+          );
+        })}
+        {showPlaceholder && <span className="text-[var(--text-faint)]"> Type what you hear...</span>}
+      </div>
     </>
   );
 }
