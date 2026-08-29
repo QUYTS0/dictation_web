@@ -37,8 +37,12 @@ export function useKeyboardShortcuts({
         return;
       }
 
+      // Shift+Space (replay) takes priority over the answer input's own plain-Space
+      // word-advance handler. Handled once here on keydown; stopping propagation keeps
+      // it from being reinterpreted by anything else the event might still reach.
       if (e.shiftKey && e.code === "Space") {
         e.preventDefault();
+        e.stopPropagation();
         onReplay();
         return;
       }

@@ -203,7 +203,9 @@ export function SentenceWordInput({
       return;
     }
 
-    if (event.key === " " || event.code === "Space") {
+    // Plain Space only — Shift+Space (replay), Ctrl/Alt/Meta+Space, etc. are left
+    // alone so they keep bubbling up to the page-level shortcut handler untouched.
+    if ((event.key === " " || event.code === "Space") && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
       event.preventDefault();
       const next = findTypableWordIndex(words, activeWordIndex + 1, 1);
       if (next !== null) jumpToWord(next, "start");

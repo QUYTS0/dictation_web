@@ -55,6 +55,7 @@ import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 import { ConfettiBurst } from "./components/ConfettiBurst";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { SettingsDrawer } from "./components/SettingsDrawer";
+import { KeyboardShortcutsButton } from "./components/KeyboardShortcutsButton";
 import { RightPanelTabs } from "./components/RightPanelTabs";
 import { DefaultLayout } from "./components/layouts/DefaultLayout";
 import {
@@ -64,6 +65,7 @@ import {
   VIDEO_SIZE_MODE_CLASS,
   COMBO_MILESTONE_INTERVAL,
   PLAYBACK_RATE_OPTIONS,
+  REPLAY_HINT_SEEN_KEY,
 } from "./constants";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import type { RightPanelTab } from "./types";
@@ -97,6 +99,7 @@ export default function DictationPage({ params }: PageProps) {
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
+  const [showReplayHint, setShowReplayHint] = useState(false);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -108,6 +111,7 @@ export default function DictationPage({ params }: PageProps) {
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
   const previousShowVideoRef = useRef(showVideo);
+  const replayHintShownRef = useRef(false);
 
   const {
     currentSegIdx,
@@ -308,6 +312,19 @@ export default function DictationPage({ params }: PageProps) {
   // to fill the column's remaining height.
   const isPracticing =
     uxState === "paused_waiting_input" || uxState === "checking_answer" || uxState === "playing";
+
+  // One-time hint pointing new users at Shift+Space replay, shown the first
+  // time the answer box appears in this browser (never again after that).
+  useEffect(() => {
+    if (!shouldShowInput || replayHintShownRef.current) return;
+    replayHintShownRef.current = true;
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem(REPLAY_HINT_SEEN_KEY)) return;
+    window.localStorage.setItem(REPLAY_HINT_SEEN_KEY, "1");
+    setShowReplayHint(true);
+    const t = window.setTimeout(() => setShowReplayHint(false), 5000);
+    return () => window.clearTimeout(t);
+  }, [shouldShowInput]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -526,6 +543,7 @@ export default function DictationPage({ params }: PageProps) {
                 >
                   <Bookmark size={15} className={currentSegment && bookmarkedSegmentIndexes.has(currentSegIdx) ? "fill-[var(--accent)]" : undefined} />
                 </button>
+                <KeyboardShortcutsButton />
                 <button
                   onClick={() => setShowSettingsDrawer(true)}
                   className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 sm:flex"
@@ -1297,6 +1315,35 @@ export default function DictationPage({ params }: PageProps) {
           )}
         </AnimatePresence>
       </main>
+
+      <AnimatePresence>
+        {showReplayHint && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
+            role="status"
+            className="fixed left-1/2 top-20 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--accent-border)] bg-[var(--surface)] px-4 py-2 text-xs font-medium text-[var(--text)] shadow-xl backdrop-blur-xl"
+          >
+            <span>
+              Tip: press{" "}
+              <kbd className="rounded border border-[var(--border-strong)] bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
+                Shift + Space
+              </kbd>{" "}
+              to replay the sentence
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowReplayHint(false)}
+              className="text-[var(--text-faint)] transition-colors hover:text-[var(--text)]"
+              aria-label="Dismiss hint"
+            >
+              <X size={12} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {pendingDeleteItem && (

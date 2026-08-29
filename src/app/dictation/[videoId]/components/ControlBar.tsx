@@ -103,8 +103,20 @@ export function ControlBar({
       </div>
 
       <div className="flex items-center gap-1 sm:gap-2 justify-self-center">
-        <ControlButton icon={<SkipBack size={18} />} shortcut="Shift + <-" label="Prev" onClick={onPrevious} disabled={prevDisabled} />
-        <ControlButton icon={<Repeat size={18} />} shortcut="Shift + Space" label="Replay" primary onClick={onReplay} />
+        <ControlButton
+          icon={<SkipBack size={18} />}
+          shortcut="Previous sentence — Shift + ←"
+          label="Prev"
+          onClick={onPrevious}
+          disabled={prevDisabled}
+        />
+        <ControlButton
+          icon={<Repeat size={18} />}
+          shortcut="Replay current sentence — Shift + Space"
+          label="Replay"
+          primary
+          onClick={onReplay}
+        />
         <ControlButton
           icon={<Lightbulb size={18} />}
           shortcut="Hint"
@@ -112,7 +124,13 @@ export function ControlBar({
           active={showHintPanel}
           onClick={onToggleHint}
         />
-        <ControlButton icon={<SkipForward size={18} />} shortcut="Shift + ->" label="Next" onClick={onNext} disabled={nextDisabled} />
+        <ControlButton
+          icon={<SkipForward size={18} />}
+          shortcut="Next sentence — Shift + →"
+          label="Next"
+          onClick={onNext}
+          disabled={nextDisabled}
+        />
       </div>
 
       <div className="flex min-w-0 items-center gap-1 sm:gap-2 justify-self-end">

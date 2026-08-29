@@ -4,7 +4,26 @@ import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import { Sparkles, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { PLAYBACK_RATE_OPTIONS, SHORTCUTS } from "../constants";
+import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS, PLAYBACK_RATE_OPTIONS } from "../constants";
+import type { ShortcutEntry } from "../types";
+
+function ShortcutGroup({ title, shortcuts }: { title: string; shortcuts: ShortcutEntry[] }) {
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">{title}</p>
+      <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+        {shortcuts.map((shortcut) => (
+          <div key={shortcut.keys + shortcut.label} className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-[var(--text-muted)]">{shortcut.label}</span>
+            <kbd className="shrink-0 rounded border border-[var(--border-strong)] bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--text-muted)]">
+              {shortcut.keys}
+            </kbd>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 import type { PracticeMode, VideoSizeMode } from "../types";
 
 const FOCUSABLE_SELECTOR =
@@ -225,18 +244,12 @@ export function SettingsDrawer({
             </div>
 
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
                 Keyboard shortcuts
               </p>
-              <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                {SHORTCUTS.map((shortcut) => (
-                  <div key={shortcut.keys} className="flex items-center justify-between gap-3 text-xs">
-                    <span className="text-[var(--text-muted)]">{shortcut.label}</span>
-                    <kbd className="shrink-0 rounded border border-[var(--border-strong)] bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[var(--text-muted)]">
-                      {shortcut.keys}
-                    </kbd>
-                  </div>
-                ))}
+              <div className="flex flex-col gap-4">
+                <ShortcutGroup title="Dictation" shortcuts={DICTATION_SHORTCUTS} />
+                <ShortcutGroup title="General" shortcuts={GENERAL_SHORTCUTS} />
               </div>
             </div>
           </motion.div>
