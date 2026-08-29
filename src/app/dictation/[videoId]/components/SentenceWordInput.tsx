@@ -11,6 +11,7 @@ import {
   isWordTypable,
   type WordSlots,
 } from "../wordSlots";
+import type { PersistedInputState } from "../sessionPersistence";
 
 function Caret() {
   return (
@@ -101,6 +102,9 @@ export function SentenceWordInput({
   hasWrongSubmission,
   onValueChange,
   onSubmit,
+  initialInputState,
+  onRestoreConsumed,
+  onInputStateChange,
 }: {
   targetText: string;
   resetToken: string;
@@ -110,6 +114,13 @@ export function SentenceWordInput({
   hasWrongSubmission: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
+  /** A sessionStorage-restored word/caret position to seed this sentence with once, in
+   *  place of the usual blank reset — e.g. after a tab switch or accidental remount. */
+  initialInputState?: PersistedInputState | null;
+  /** Called once initialInputState has been applied, so later resets go back to blank. */
+  onRestoreConsumed?: () => void;
+  /** Mirrors the live word/caret position up so it can be included in the session snapshot. */
+  onInputStateChange?: (state: PersistedInputState) => void;
 }) {
   const words = useMemo(() => buildWordCharSlots(targetText), [targetText]);
   const [typedByWord, setTypedByWord] = useState<string[]>([]);
@@ -118,11 +129,25 @@ export function SentenceWordInput({
 
   // Reset per-word state whenever a new sentence loads or the answer is reset,
   // so the caret always starts at the first editable character of the first word.
+  // A pending restored snapshot seeds it instead, once, for this resetToken.
   useEffect(() => {
-    setTypedByWord(words.map(() => ""));
-    setActiveWordIndex(findTypableWordIndex(words, 0, 1) ?? 0);
-    setCaretPos(0);
-    inputRef.current?.setSelectionRange(0, 0);
+    if (initialInputState) {
+      const restoredTyped = words.map((_, i) => initialInputState.typedByWord[i] ?? "");
+      const firstTypable = findTypableWordIndex(words, 0, 1) ?? 0;
+      const restoredActive = Math.min(
+        Math.max(initialInputState.activeWordIndex, 0),
+        Math.max(words.length - 1, 0)
+      );
+      setTypedByWord(restoredTyped);
+      setActiveWordIndex(Number.isFinite(restoredActive) ? restoredActive : firstTypable);
+      setCaretPos(initialInputState.caretPos);
+      onRestoreConsumed?.();
+    } else {
+      setTypedByWord(words.map(() => ""));
+      setActiveWordIndex(findTypableWordIndex(words, 0, 1) ?? 0);
+      setCaretPos(0);
+      inputRef.current?.setSelectionRange(0, 0);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [words, resetToken]);
 
@@ -130,6 +155,11 @@ export function SentenceWordInput({
     onValueChange(buildFullValue(words, typedByWord));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [words, typedByWord]);
+
+  useEffect(() => {
+    onInputStateChange?.({ typedByWord, activeWordIndex, caretPos });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typedByWord, activeWordIndex, caretPos]);
 
   // Keeps the real (invisible) input's native cursor in sync with caretPos —
   // essential when jumping between words, since the controlled `value` swaps

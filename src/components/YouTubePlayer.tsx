@@ -16,6 +16,8 @@ interface YouTubePlayerProps {
   segments: TranscriptSegment[];
   /** Called when the player pauses at the end of a segment */
   onSegmentEnd: (segmentIndex: number) => void;
+  /** Called once the underlying YouTube player is ready to accept commands */
+  onReady?: () => void;
 }
 
 // Small safety margin subtracted from a segment's start time before seeking, so that
@@ -31,7 +33,7 @@ declare global {
 }
 
 const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
-  function YouTubePlayer({ videoId, segments, onSegmentEnd }, ref) {
+  function YouTubePlayer({ videoId, segments, onSegmentEnd, onReady }, ref) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const playerRef = useRef<any>(null);
     const playerReadyRef = useRef<boolean>(false);
@@ -56,6 +58,11 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     useEffect(() => {
       onSegmentEndRef.current = onSegmentEnd;
     }, [onSegmentEnd]);
+
+    const onReadyRef = useRef(onReady);
+    useEffect(() => {
+      onReadyRef.current = onReady;
+    }, [onReady]);
 
     const startTick = useCallback(() => {
       if (tickRef.current) clearInterval(tickRef.current);
@@ -124,6 +131,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
             setDuration(event.target.getDuration());
             event.target.setPlaybackRate(playbackRateRef.current);
             console.log("[YouTubePlayer] player ready, videoId=", videoId);
+            onReadyRef.current?.();
           },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onStateChange: (event: any) => {

@@ -16,6 +16,22 @@ import {
   regenerateTranscript,
 } from "./api";
 import type { MistakeRecord, CompletedSentenceReview, ResumeState } from "./types";
+import {
+  RESTORABLE_UX_STATES,
+  saveDictationSessionSnapshot,
+  loadDictationSessionSnapshot,
+  clearDictationSessionSnapshot,
+  type PersistedInputState,
+} from "./sessionPersistence";
+
+// uxStates whose in-progress session is worth persisting/protecting — anything
+// outside this set (loading, transcript_*) has no session state to lose.
+const ACTIVE_SESSION_UX_STATES: UXState[] = [
+  "playing",
+  "paused_waiting_input",
+  "checking_answer",
+  "session_completed",
+];
 
 interface UseDictationSessionOptions {
   videoId: string;
@@ -60,6 +76,13 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [previousRunSnapshot, setPreviousRunSnapshot] = useState<{ accuracy: number; totalAttempts: number } | null>(
     null
   );
+  // Word/caret position within the current sentence, mirrored up from
+  // SentenceWordInput purely so it can be included in the sessionStorage
+  // snapshot below — the input box itself still owns this state.
+  const [liveInputState, setLiveInputState] = useState<PersistedInputState | null>(null);
+  // A restored snapshot's word/caret state, consumed once by SentenceWordInput
+  // to seed itself, then cleared so later segment changes reset normally.
+  const [restoredInputState, setRestoredInputState] = useState<PersistedInputState | null>(null);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -75,9 +98,20 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const uxStateRef = useRef<UXState>("loading_transcript");
   const resumeLoadedRef = useRef(false);
   const firstAttemptBySegmentRef = useRef<Record<number, string>>({});
+  // Guards the sessionStorage restore below to a single attempt per video —
+  // set the instant we've decided (found a snapshot or not), so a later
+  // background transcript refetch can't re-trigger it.
+  const snapshotRestoreAttemptedRef = useRef(false);
+  // A video timestamp to seek to once the YouTube player reports ready —
+  // set by the snapshot restore if the player isn't ready yet at that point.
+  const pendingRestoreSeekSecRef = useRef<number | null>(null);
+  const playerReadyForRestoreRef = useRef(false);
 
   useEffect(() => {
     resumeLoadedRef.current = false;
+    snapshotRestoreAttemptedRef.current = false;
+    pendingRestoreSeekSecRef.current = null;
+    playerReadyForRestoreRef.current = false;
     setResumeState(null);
     firstAttemptBySegmentRef.current = {};
     // The session store (sessionId, attempt/correct counts) is global and
@@ -98,6 +132,11 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       return status === "processing" ? 3000 : false;
     },
     enabled: !!videoId,
+    // A transcript never changes mid-session, so there's nothing to gain from
+    // revalidating it when the tab regains focus — and doing so used to reset
+    // an in-progress dictation session back to the "Start Dictation" screen
+    // (see the uxState-sync effect below).
+    refetchOnWindowFocus: false,
   });
 
   const segments: TranscriptSegment[] = useMemo(
@@ -111,6 +150,80 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     playerStore.setSegments(segments);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments]);
+
+  // ---- Restore an active session persisted in sessionStorage (see
+  // sessionPersistence.ts) — takes priority over the "Start Dictation" screen
+  // and even the server-side resume banner, since it reflects this exact
+  // tab's in-progress state from moments ago (before a remount, refresh, or
+  // a background tab getting reclaimed by the browser).
+  const applyRestoredSnapshot = useCallback(
+    (snapshot: ReturnType<typeof loadDictationSessionSnapshot>): boolean => {
+      if (!snapshot || !RESTORABLE_UX_STATES.has(snapshot.uxState)) return false;
+
+      const segIdx = Math.min(Math.max(snapshot.currentSegIdx, 0), Math.max(segments.length - 1, 0));
+      currentSegIdxRef.current = segIdx;
+      setCurrentSegIdx(segIdx);
+      // A snapshot taken mid-check or mid-playback can't be resumed in that
+      // exact state — land on "paused_waiting_input" instead so nothing
+      // auto-plays or auto-advances on its own.
+      const restoredUxState: UXState =
+        snapshot.uxState === "playing" || snapshot.uxState === "checking_answer"
+          ? "paused_waiting_input"
+          : snapshot.uxState;
+      uxStateRef.current = restoredUxState;
+      setUxState(restoredUxState);
+      // A "checking_answer" or "playing" snapshot is inherently transient (mid-flight
+      // check, or the brief correct-answer checkmark before auto-advancing) — its
+      // checkResult isn't safe to replay since the segment it refers to may not be
+      // "current" anymore. Only "paused_waiting_input"/"session_completed" snapshots
+      // have a checkResult that genuinely describes the restored segment's state.
+      setCheckResult(
+        snapshot.uxState === "paused_waiting_input" || snapshot.uxState === "session_completed"
+          ? snapshot.checkResult
+          : null
+      );
+      setWrongAttempts(snapshot.wrongAttempts);
+      setHintLevel(snapshot.hintLevel);
+      setMistakes(snapshot.mistakes);
+      setPreviousReview(snapshot.previousReview);
+      setCombo(snapshot.combo);
+      setBestCombo(snapshot.bestCombo);
+      setCleanSolveCount(snapshot.cleanSolveCount);
+      setIsLastResultClean(snapshot.isLastResultClean);
+      setPreviousRunSnapshot(snapshot.previousRunSnapshot);
+      setRestoredInputState(snapshot.inputState);
+      firstAttemptBySegmentRef.current = snapshot.firstAttemptBySegment ?? {};
+
+      sessionStore.setSessionId(snapshot.sessionId);
+      sessionStore.hydrateAccuracy(snapshot.totalAttempts, snapshot.correctCount);
+
+      // A local-tab snapshot is more precise than the server's "resume"
+      // record and takes priority over it — skip the server resume fetch.
+      resumeLoadedRef.current = true;
+      setResumeState(null);
+
+      if (snapshot.videoCurrentTimeSec > 0) {
+        if (playerReadyForRestoreRef.current) {
+          ytPlayerRef.current?.seekTo(snapshot.videoCurrentTimeSec, false);
+        } else {
+          pendingRestoreSeekSecRef.current = snapshot.videoCurrentTimeSec;
+        }
+      }
+      return true;
+    },
+    [segments.length, sessionStore]
+  );
+
+  // Called when the YouTube player reports ready — applies a seek that a
+  // snapshot restore queued up before the player existed yet.
+  const handlePlayerReady = useCallback(() => {
+    playerReadyForRestoreRef.current = true;
+    if (pendingRestoreSeekSecRef.current !== null) {
+      const timeSec = pendingRestoreSeekSecRef.current;
+      pendingRestoreSeekSecRef.current = null;
+      ytPlayerRef.current?.seekTo(timeSec, false);
+    }
+  }, []);
 
   // Update UX state based on transcript status. Keyed on dataUpdatedAt (not
   // just status/segments.length) because handleRegenerateTranscript forces
@@ -129,12 +242,22 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     } else if (transcriptStatus === "failed") {
       setUxState("transcript_failed");
     } else if (transcriptStatus === "ready" && segments.length > 0) {
+      // A background refetch of an already-ready transcript (e.g. a
+      // stale-data revalidation) must never interrupt or discard an
+      // already-active session — only ever adopt "transcript_ready" (the
+      // pre-start screen) when a session isn't already underway.
+      if (ACTIVE_SESSION_UX_STATES.includes(uxStateRef.current)) return;
+
+      if (!snapshotRestoreAttemptedRef.current) {
+        snapshotRestoreAttemptedRef.current = true;
+        if (applyRestoredSnapshot(loadDictationSessionSnapshot(videoId))) return;
+      }
       setUxState("transcript_ready");
     } else if (transcriptStatus === "ready" && segments.length === 0) {
       // Transcript marked ready but no segments — treat as failed so user gets feedback
       setUxState("transcript_failed");
     }
-  }, [transcriptStatus, transcriptQuery.isLoading, transcriptQuery.dataUpdatedAt, segments.length]);
+  }, [transcriptStatus, transcriptQuery.isLoading, transcriptQuery.dataUpdatedAt, segments.length, videoId, applyRestoredSnapshot]);
 
   useEffect(() => {
     uxStateRef.current = uxState;
@@ -356,6 +479,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
 
   // ---- Regenerate transcript from YouTube captions (discards the cached script) ----
   const handleRegenerateTranscript = useCallback(async () => {
+    clearDictationSessionSnapshot(videoId);
     setRegenerating(true);
     setRegenerateError(null);
     ytPlayerRef.current?.pauseVideo();
@@ -417,21 +541,30 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       });
   }, [transcriptStatus, user, videoId]);
 
-  // ---- Autosave when tab is hidden / page is being closed ----
+  // ---- Pause playback and autosave when the tab is hidden / page is being
+  // closed. This must ONLY pause and persist — it must never call setUxState
+  // or otherwise touch segment/answer state, since the sessionStorage
+  // snapshot effect below (plus the guard in the uxState-sync effect above)
+  // is what keeps the active session intact across a hide/show cycle. ----
   useEffect(() => {
-    if (!user) return;
+    const practicingStates: UXState[] = ["playing", "paused_waiting_input", "checking_answer"];
     const persist = () => {
       // Only autosave if dictation practice actually started this visit —
       // otherwise merely opening a video and switching tabs/closing it
       // spawns a fresh "active" session at segment 0, which then shows up
       // as bogus in-progress state even for a video the user already
       // completed (or never touched).
-      const practicingStates: UXState[] = ["playing", "paused_waiting_input", "checking_answer"];
-      if (!practicingStates.includes(uxStateRef.current)) return;
+      if (!user || !practicingStates.includes(uxStateRef.current)) return;
       triggerAutoSave(currentSegIdxRef.current, "active");
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") persist();
+      if (document.visibilityState !== "hidden") return;
+      // Pause the video rather than leaving it playing in the background —
+      // the segment/answer state underneath is left completely untouched.
+      if (practicingStates.includes(uxStateRef.current)) {
+        ytPlayerRef.current?.pauseVideo();
+      }
+      persist();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pagehide", persist);
@@ -440,6 +573,59 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       window.removeEventListener("pagehide", persist);
     };
   }, [triggerAutoSave, user]);
+
+  // ---- Persist the active session to sessionStorage on every meaningful
+  // change, so a component remount, an accidental page refresh, or a mobile
+  // browser reclaiming this backgrounded tab can restore it (see
+  // applyRestoredSnapshot above and sessionPersistence.ts). Debounced
+  // slightly since typing updates liveInputState on every keystroke. ----
+  useEffect(() => {
+    if (!ACTIVE_SESSION_UX_STATES.includes(uxState)) return;
+    const timeoutId = window.setTimeout(() => {
+      const state = useSessionStore.getState();
+      saveDictationSessionSnapshot(videoId, {
+        uxState,
+        currentSegIdx,
+        checkResult,
+        wrongAttempts,
+        hintLevel,
+        mistakes,
+        previousReview,
+        combo,
+        bestCombo,
+        cleanSolveCount,
+        isLastResultClean,
+        previousRunSnapshot,
+        firstAttemptBySegment: firstAttemptBySegmentRef.current,
+        videoCurrentTimeSec: playerStore.currentTimeSec,
+        inputState: liveInputState,
+        sessionId: state.sessionId,
+        totalAttempts: state.totalAttempts,
+        correctCount: state.correctCount,
+      });
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    videoId,
+    uxState,
+    currentSegIdx,
+    checkResult,
+    wrongAttempts,
+    hintLevel,
+    mistakes,
+    previousReview,
+    combo,
+    bestCombo,
+    cleanSolveCount,
+    isLastResultClean,
+    previousRunSnapshot,
+    liveInputState,
+    playerStore.currentTimeSec,
+  ]);
+
+  // Consumed once by SentenceWordInput after it seeds itself from a restored
+  // snapshot, so later segment changes go back to resetting normally.
+  const consumeRestoredInputState = useCallback(() => setRestoredInputState(null), []);
 
   const handleResume = useCallback(() => {
     if (!resumeState || segments.length === 0) return;
@@ -485,6 +671,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     if (!user) return;
     void restartSession(videoId, resumeState?.sessionId)
       .then(() => {
+        // An explicit restart is the one thing allowed to discard the
+        // sessionStorage snapshot — everything else (tab switches, minimizing,
+        // remounts) must leave it intact.
+        clearDictationSessionSnapshot(videoId);
         firstAttemptBySegmentRef.current = {};
         setResumeState(null);
         setCombo(0);
@@ -521,6 +711,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     transcriptTitle: transcriptQuery.data?.title,
     transcriptIsLoading: transcriptQuery.isLoading,
     ytPlayerRef,
+    restoredInputState,
+    consumeRestoredInputState,
+    reportInputState: setLiveInputState,
+    handlePlayerReady,
     handleSegmentEnd,
     handleAnswerSubmit,
     handleStart,

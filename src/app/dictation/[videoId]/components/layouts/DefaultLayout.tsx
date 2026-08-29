@@ -11,6 +11,7 @@ import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
 import type { PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
+import type { PersistedInputState } from "../../sessionPersistence";
 
 interface CurrentSegment {
   text: string;
@@ -55,6 +56,9 @@ export function DefaultLayout({
   handleReviewMouseUp,
   accuracy,
   translationText,
+  initialInputState,
+  onRestoreConsumed,
+  onInputStateChange,
 }: {
   videoId: string;
   isZenMode: boolean;
@@ -94,6 +98,9 @@ export function DefaultLayout({
   handleReviewMouseUp: (event: React.MouseEvent<HTMLDivElement>) => void;
   accuracy: number;
   translationText: string | undefined;
+  initialInputState?: PersistedInputState | null;
+  onRestoreConsumed?: () => void;
+  onInputStateChange?: (state: PersistedInputState) => void;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
@@ -150,6 +157,9 @@ export function DefaultLayout({
                   hasWrongSubmission={hasWrongSubmission}
                   onValueChange={onWorkspaceValueChange}
                   onSubmit={onWorkspaceCheck}
+                  initialInputState={initialInputState}
+                  onRestoreConsumed={onRestoreConsumed}
+                  onInputStateChange={onInputStateChange}
                 />
 
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">

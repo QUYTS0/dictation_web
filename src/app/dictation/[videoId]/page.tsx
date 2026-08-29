@@ -131,6 +131,10 @@ export default function DictationPage({ params }: PageProps) {
     segments,
     transcriptTitle,
     ytPlayerRef,
+    restoredInputState,
+    consumeRestoredInputState,
+    reportInputState,
+    handlePlayerReady,
     handleSegmentEnd,
     handleAnswerSubmit,
     handleStart,
@@ -348,6 +352,7 @@ export default function DictationPage({ params }: PageProps) {
           videoId={videoId}
           segments={segments}
           onSegmentEnd={handleSegmentEnd}
+          onReady={handlePlayerReady}
         />
       </div>
     </div>
@@ -763,6 +768,9 @@ export default function DictationPage({ params }: PageProps) {
             handleReviewMouseUp={handleReviewMouseUp}
             accuracy={accuracy}
             translationText={translationBySegmentIndex.get(currentSegIdx)}
+            initialInputState={restoredInputState}
+            onRestoreConsumed={consumeRestoredInputState}
+            onInputStateChange={reportInputState}
           />
           </div>
 
