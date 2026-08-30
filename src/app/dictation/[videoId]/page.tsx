@@ -91,7 +91,6 @@ export default function DictationPage({ params }: PageProps) {
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("script");
   const [showPreviousScriptContext, setShowPreviousScriptContext] = useState(false);
-  const [showScriptContext, setShowScriptContext] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
   const [workspaceInputValue, setWorkspaceInputValue] = useState("");
   const [isZenMode, setIsZenMode] = useState(false);
@@ -459,7 +458,6 @@ export default function DictationPage({ params }: PageProps) {
     segments,
     currentSegIdx,
     currentSegmentText: currentSegment?.text,
-    showScriptContext,
     phrasesBySegmentIndex,
     onAfterSave: () => setShowLearningPanel(true),
   });
@@ -474,9 +472,7 @@ export default function DictationPage({ params }: PageProps) {
   );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowPreviousScriptContext(false);
-    setShowScriptContext(true);
   }, [videoId]);
 
   useEffect(() => {
@@ -720,6 +716,15 @@ export default function DictationPage({ params }: PageProps) {
             setAutoAdvance={setAutoAdvance}
             practiceMode={practiceMode}
             setPracticeMode={setPracticeMode}
+            regenerateTranslation={() => void regenerateTranslation()}
+            regeneratingTranslation={regeneratingTranslation}
+            regenerateTranslationError={regenerateTranslationError}
+            onRegenerateScript={handleRegenerateClick}
+            regenerating={regenerating}
+            regenerateError={regenerateError}
+            onLoadSrtFile={handleLoadSrtClick}
+            srtParsing={srtParsing}
+            srtUploadError={srtUploadError}
           />
 
           <MobileBottomSheet open={showMoreSettings} onClose={() => setShowMoreSettings(false)} title="More settings">
@@ -788,6 +793,36 @@ export default function DictationPage({ params }: PageProps) {
                   >
                     Hard
                   </button>
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Script</p>
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={() => void regenerateTranslation()}
+                    disabled={regeneratingTranslation}
+                    className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2.5 text-sm font-semibold text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
+                  </button>
+                  <button
+                    onClick={handleRegenerateClick}
+                    disabled={regenerating}
+                    className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2.5 text-sm font-semibold text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {regenerating ? "Regenerating…" : "Regenerate script"}
+                  </button>
+                  <button
+                    onClick={handleLoadSrtClick}
+                    disabled={srtParsing}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-sm font-semibold text-[var(--text-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {srtParsing ? "Loading…" : "📄 Load .srt file"}
+                  </button>
+                  {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
+                  {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
+                  {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
                 </div>
               </div>
             </div>
@@ -1099,27 +1134,15 @@ export default function DictationPage({ params }: PageProps) {
             >
                 <div className="w-full h-full flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
                 <RightPanelTabs
-                  onCollapse={() => setShowLearningPanel(false)}
                   rightPanelTab={rightPanelTab}
                   setRightPanelTab={setRightPanelTab}
                   scriptContextSegments={scriptContextSegments}
                   currentSegIdx={currentSegIdx}
-                  showScriptContext={showScriptContext}
-                  setShowScriptContext={setShowScriptContext}
                   showPreviousScriptContext={showPreviousScriptContext}
                   setShowPreviousScriptContext={setShowPreviousScriptContext}
                   translationBySegmentIndex={translationBySegmentIndex}
                   scriptTranslationLoading={scriptTranslationLoading}
                   scriptTranslationError={scriptTranslationError}
-                  regenerateTranslation={() => void regenerateTranslation()}
-                  regeneratingTranslation={regeneratingTranslation}
-                  regenerateTranslationError={regenerateTranslationError}
-                  regenerating={regenerating}
-                  regenerateError={regenerateError}
-                  onRegenerateScript={handleRegenerateClick}
-                  onLoadSrtFile={handleLoadSrtClick}
-                  srtParsing={srtParsing}
-                  srtUploadError={srtUploadError}
                   phrasesBySegmentIndex={phrasesBySegmentIndex}
                   vocabHighlightsError={vocabHighlightsError}
                   scriptTextContainerRef={scriptTextContainerRef}

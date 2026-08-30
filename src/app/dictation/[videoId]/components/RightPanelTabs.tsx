@@ -1,4 +1,4 @@
-import { FileText, Type, AlignLeft, PanelRightClose } from "lucide-react";
+import { FileText, Type, AlignLeft } from "lucide-react";
 import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
@@ -6,27 +6,15 @@ import { SentencesTab } from "./SentencesTab";
 import type { LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
 
 export function RightPanelTabs({
-  onCollapse,
   rightPanelTab,
   setRightPanelTab,
   scriptContextSegments,
   currentSegIdx,
-  showScriptContext,
-  setShowScriptContext,
   showPreviousScriptContext,
   setShowPreviousScriptContext,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
-  regenerateTranslation,
-  regeneratingTranslation,
-  regenerateTranslationError,
-  regenerating,
-  regenerateError,
-  onRegenerateScript,
-  onLoadSrtFile,
-  srtParsing,
-  srtUploadError,
   phrasesBySegmentIndex,
   vocabHighlightsError,
   scriptTextContainerRef,
@@ -52,27 +40,15 @@ export function RightPanelTabs({
   onUpdateBookmarkNote,
   onJumpBookmark,
 }: {
-  onCollapse: () => void;
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
   scriptContextSegments: TranscriptSegment[];
   currentSegIdx: number;
-  showScriptContext: boolean;
-  setShowScriptContext: (updater: (prev: boolean) => boolean) => void;
   showPreviousScriptContext: boolean;
   setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
-  regenerateTranslation: () => void;
-  regeneratingTranslation: boolean;
-  regenerateTranslationError: string | null;
-  regenerating: boolean;
-  regenerateError: string | null;
-  onRegenerateScript: () => void;
-  onLoadSrtFile: () => void;
-  srtParsing: boolean;
-  srtUploadError: string | null;
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   vocabHighlightsError: boolean;
   scriptTextContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -154,14 +130,6 @@ export function RightPanelTabs({
             )}
           </button>
         </div>
-        <button
-          onClick={onCollapse}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] shadow-sm transition-colors hover:bg-white/10"
-          aria-label="Hide lesson panel"
-          title="Hide lesson panel"
-        >
-          <PanelRightClose size={15} />
-        </button>
       </div>
 
       <div className="flex flex-col gap-3 p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
@@ -169,22 +137,11 @@ export function RightPanelTabs({
           <ScriptTab
             scriptContextSegments={scriptContextSegments}
             currentSegIdx={currentSegIdx}
-            showScriptContext={showScriptContext}
-            setShowScriptContext={setShowScriptContext}
             showPreviousScriptContext={showPreviousScriptContext}
             setShowPreviousScriptContext={setShowPreviousScriptContext}
             translationBySegmentIndex={translationBySegmentIndex}
             scriptTranslationLoading={scriptTranslationLoading}
             scriptTranslationError={scriptTranslationError}
-            regenerateTranslation={regenerateTranslation}
-            regeneratingTranslation={regeneratingTranslation}
-            regenerateTranslationError={regenerateTranslationError}
-            regenerating={regenerating}
-            regenerateError={regenerateError}
-            onRegenerateScript={onRegenerateScript}
-            onLoadSrtFile={onLoadSrtFile}
-            srtParsing={srtParsing}
-            srtUploadError={srtUploadError}
             phrasesBySegmentIndex={phrasesBySegmentIndex}
             vocabHighlightsError={vocabHighlightsError}
             learningError={learningError}

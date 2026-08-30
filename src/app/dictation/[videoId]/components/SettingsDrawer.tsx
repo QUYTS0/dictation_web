@@ -49,6 +49,15 @@ export function SettingsDrawer({
   setAutoAdvance,
   practiceMode,
   setPracticeMode,
+  regenerateTranslation,
+  regeneratingTranslation,
+  regenerateTranslationError,
+  onRegenerateScript,
+  regenerating,
+  regenerateError,
+  onLoadSrtFile,
+  srtParsing,
+  srtUploadError,
 }: {
   open: boolean;
   onClose: () => void;
@@ -63,6 +72,15 @@ export function SettingsDrawer({
   setAutoAdvance: (updater: (prev: boolean) => boolean) => void;
   practiceMode: PracticeMode;
   setPracticeMode: (mode: PracticeMode) => void;
+  regenerateTranslation: () => void;
+  regeneratingTranslation: boolean;
+  regenerateTranslationError: string | null;
+  onRegenerateScript: () => void;
+  regenerating: boolean;
+  regenerateError: string | null;
+  onLoadSrtFile: () => void;
+  srtParsing: boolean;
+  srtUploadError: string | null;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -240,6 +258,39 @@ export function SettingsDrawer({
                 >
                   Hard
                 </button>
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Script</p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={regenerateTranslation}
+                  disabled={regeneratingTranslation}
+                  title="Re-translate this video's script if the Vietnamese doesn't match the English"
+                  className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-xs font-semibold text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
+                </button>
+                <button
+                  onClick={onRegenerateScript}
+                  disabled={regenerating}
+                  title="Re-fetch this video's script from YouTube's captions if it doesn't match the audio"
+                  className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-xs font-semibold text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {regenerating ? "Regenerating…" : "Regenerate script"}
+                </button>
+                <button
+                  onClick={onLoadSrtFile}
+                  disabled={srtParsing}
+                  title="Replace this video's script by loading a .srt subtitle file"
+                  className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs font-semibold text-[var(--text-muted)] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {srtParsing ? "Loading…" : "📄 Load .srt file"}
+                </button>
+                {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
+                {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
+                {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
               </div>
             </div>
 

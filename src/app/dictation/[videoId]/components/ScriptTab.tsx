@@ -9,22 +9,11 @@ import { buildScriptRenderItems, formatSegmentTimestamp } from "../helpers";
 export function ScriptTab({
   scriptContextSegments,
   currentSegIdx,
-  showScriptContext,
-  setShowScriptContext,
   showPreviousScriptContext,
   setShowPreviousScriptContext,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
-  regenerateTranslation,
-  regeneratingTranslation,
-  regenerateTranslationError,
-  regenerating,
-  regenerateError,
-  onRegenerateScript,
-  onLoadSrtFile,
-  srtParsing,
-  srtUploadError,
   phrasesBySegmentIndex,
   vocabHighlightsError,
   learningError,
@@ -38,22 +27,11 @@ export function ScriptTab({
 }: {
   scriptContextSegments: TranscriptSegment[];
   currentSegIdx: number;
-  showScriptContext: boolean;
-  setShowScriptContext: (updater: (prev: boolean) => boolean) => void;
   showPreviousScriptContext: boolean;
   setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
-  regenerateTranslation: () => void;
-  regeneratingTranslation: boolean;
-  regenerateTranslationError: string | null;
-  regenerating: boolean;
-  regenerateError: string | null;
-  onRegenerateScript: () => void;
-  onLoadSrtFile: () => void;
-  srtParsing: boolean;
-  srtUploadError: string | null;
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   vocabHighlightsError: boolean;
   learningError: string | null;
@@ -74,49 +52,16 @@ export function ScriptTab({
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => setShowScriptContext((prev) => !prev)}
-          className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/10"
-        >
-          {showScriptContext ? "Hide script" : "Show script"}
-        </button>
-        {currentSegIdx > 0 && (
+      {currentSegIdx > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setShowPreviousScriptContext((prev) => !prev)}
             className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/10"
           >
             {showPreviousScriptContext ? "Hide previous" : "Show previous"}
           </button>
-        )}
-        <button
-          onClick={() => regenerateTranslation()}
-          disabled={regeneratingTranslation}
-          title="Re-translate this video's script if the Vietnamese doesn't match the English"
-          className="rounded-md border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
-        </button>
-        <button
-          onClick={onRegenerateScript}
-          disabled={regenerating}
-          title="Re-fetch this video's script from YouTube's captions if it doesn't match the audio"
-          className="rounded-md border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {regenerating ? "Regenerating…" : "Regenerate script"}
-        </button>
-        <button
-          onClick={onLoadSrtFile}
-          disabled={srtParsing}
-          title="Replace this video's script by loading a .srt subtitle file"
-          className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {srtParsing ? "Loading…" : "📄 Load .srt file"}
-        </button>
-      </div>
-      {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
-      {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
-      {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
+        </div>
+      )}
       {scriptTranslationLoading && (
         <p className="text-xs text-[var(--text-muted)]">Translating…</p>
       )}
@@ -128,10 +73,6 @@ export function ScriptTab({
       )}
       {scriptContextSegments.length === 0 ? (
         <p className="text-xs text-[var(--text-muted)]">Script is not available yet.</p>
-      ) : !showScriptContext ? (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs text-[var(--text-muted)]">
-          Script context is hidden. Use Show script when you want to reveal it.
-        </div>
       ) : (
         <div
           ref={scriptTextContainerRef}

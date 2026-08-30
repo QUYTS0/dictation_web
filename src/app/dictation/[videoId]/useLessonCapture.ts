@@ -18,7 +18,6 @@ interface UseLessonCaptureOptions {
   segments: TranscriptSegment[];
   currentSegIdx: number;
   currentSegmentText: string | undefined;
-  showScriptContext: boolean;
   /** AI-picked phrases (with in-context translations) per segment, from useVocabHighlights. */
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   /** Called after any successful save (e.g. to reveal the lesson panel). */
@@ -40,7 +39,6 @@ export function useLessonCapture({
   segments,
   currentSegIdx,
   currentSegmentText,
-  showScriptContext,
   phrasesBySegmentIndex,
   onAfterSave,
 }: UseLessonCaptureOptions) {
@@ -258,13 +256,6 @@ export function useLessonCapture({
     clearLearningNoteInputs();
     clearScriptPopoverSavedFeedback();
   }, [clearScriptSelection, clearLearningNoteInputs, clearScriptPopoverSavedFeedback]);
-
-  useEffect(() => {
-    if (showScriptContext) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    dismissScriptSelection();
-    setScriptPopoverNoteMode(false);
-  }, [dismissScriptSelection, showScriptContext]);
 
   const saveLessonCaptureAtSegment = useCallback(
     (

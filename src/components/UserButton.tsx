@@ -55,9 +55,6 @@ export default function UserButton() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm text-slate-600 hidden sm:block truncate max-w-[160px]">
-        {user.email}
-      </span>
       <div className="relative" ref={containerRef}>
         <button
           type="button"
