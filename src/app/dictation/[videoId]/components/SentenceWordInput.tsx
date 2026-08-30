@@ -26,6 +26,7 @@ function renderWordNodes({
   word,
   typedChars,
   isActive,
+  isReached,
   caretPos,
   maskLetters,
   colorClass,
@@ -35,6 +36,9 @@ function renderWordNodes({
   word: WordSlots;
   typedChars: string;
   isActive: boolean;
+  /** Has the caret reached or passed this word yet? Gates punctuation reveal
+   *  in Hard Mode so nothing about a not-yet-reached word leaks early. */
+  isReached: boolean;
   caretPos: number;
   maskLetters: boolean;
   colorClass: string;
@@ -44,6 +48,9 @@ function renderWordNodes({
   const nodes: ReactNode[] = [];
   let consumed = 0;
   let caretRendered = false;
+  // Once we hit an untyped editable slot, any punctuation further along in
+  // this word hasn't been "confirmed" yet either — hide it too in Hard Mode.
+  let hitPending = false;
 
   word.slots.forEach((slot, i) => {
     if (isActive && !caretRendered && consumed === caretPos) {
@@ -58,14 +65,17 @@ function renderWordNodes({
           </span>
         );
         consumed++;
-      } else if (maskLetters || isIncorrect) {
-        nodes.push(
-          <span key={`${wordKey}-c${i}`} className={isIncorrect ? "text-[var(--red)]" : "text-[var(--text-faint)]"}>
-            _
-          </span>
-        );
+      } else {
+        hitPending = true;
+        if (maskLetters || isIncorrect) {
+          nodes.push(
+            <span key={`${wordKey}-c${i}`} className={isIncorrect ? "text-[var(--red)]" : "text-[var(--text-faint)]"}>
+              _
+            </span>
+          );
+        }
       }
-    } else {
+    } else if (maskLetters || isIncorrect || (isReached && !hitPending)) {
       nodes.push(
         <span key={`${wordKey}-c${i}`} className={colorClass}>
           {slot.char}
@@ -303,37 +313,47 @@ export function SentenceWordInput({
           maskBlurred && "blur-sm"
         )}
       >
-        {words.map((word, wordIndex) => {
-          const typedChars = typedByWord[wordIndex] ?? "";
-          const isActive = wordIndex === activeWordIndex;
-          const isIncorrect =
-            hasWrongSubmission && isWordTypable(word) && !isWordAnsweredCorrectly(word, typedChars);
-          const colorClass = isIncorrect ? "text-[var(--red)]" : "text-[var(--text)]";
-          return (
-            <Fragment key={wordIndex}>
-              {wordIndex > 0 && " "}
-              <span
-                onClick={() => handleWordClick(wordIndex)}
-                className={clsx(
-                  "-mx-1 -my-0.5 inline-block cursor-pointer whitespace-nowrap rounded px-1 py-0.5 transition-colors",
-                  isActive && "bg-[var(--accent-soft)]"
-                )}
-              >
-                {renderWordNodes({
-                  word,
-                  typedChars,
-                  isActive,
-                  caretPos,
-                  maskLetters: showMask,
-                  colorClass,
-                  isIncorrect,
-                  wordKey: `w${wordIndex}`,
-                })}
-              </span>
-            </Fragment>
-          );
-        })}
-        {showPlaceholder && <span className="text-[var(--text-faint)]"> Type what you hear...</span>}
+        {showPlaceholder ? (
+          // Nothing has been typed anywhere yet: show only the caret immediately
+          // followed by the placeholder, as one centered unit — no per-word
+          // scaffolding (and no punctuation from the answer) leaks through.
+          <span className="inline-flex whitespace-nowrap align-baseline">
+            <Caret />
+            <span className="text-[var(--text-faint)]">Type what you hear...</span>
+          </span>
+        ) : (
+          words.map((word, wordIndex) => {
+            const typedChars = typedByWord[wordIndex] ?? "";
+            const isActive = wordIndex === activeWordIndex;
+            const isIncorrect =
+              hasWrongSubmission && isWordTypable(word) && !isWordAnsweredCorrectly(word, typedChars);
+            const colorClass = isIncorrect ? "text-[var(--red)]" : "text-[var(--text)]";
+            return (
+              <Fragment key={wordIndex}>
+                {wordIndex > 0 && " "}
+                <span
+                  onClick={() => handleWordClick(wordIndex)}
+                  className={clsx(
+                    "-mx-1 -my-0.5 inline-block cursor-pointer whitespace-nowrap rounded px-1 py-0.5 transition-colors",
+                    isActive && "bg-[var(--accent-soft)]"
+                  )}
+                >
+                  {renderWordNodes({
+                    word,
+                    typedChars,
+                    isActive,
+                    isReached: wordIndex <= activeWordIndex,
+                    caretPos,
+                    maskLetters: showMask,
+                    colorClass,
+                    isIncorrect,
+                    wordKey: `w${wordIndex}`,
+                  })}
+                </span>
+              </Fragment>
+            );
+          })
+        )}
       </div>
     </>
   );
