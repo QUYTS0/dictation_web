@@ -152,8 +152,11 @@ export async function POST(request: NextRequest) {
       try {
         ytItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
       } catch (captionErr) {
-        console.error("[transcript generate] YouTube caption fetch error:", captionErr);
+        // Expected/handled condition (no captions, or disabled) — the caller
+        // falls back to the manual-paste UI, so this isn't a server error.
+        // Log a concise line instead of the full stack trace.
         const errMsg = captionErr instanceof Error ? captionErr.message : String(captionErr);
+        console.warn(`[transcript generate] caption fetch unavailable for ${videoId}: ${errMsg}`);
         const isLangUnavailable = errMsg.toLowerCase().includes("no transcripts") ||
           errMsg.toLowerCase().includes("language");
         const userMessage = isLangUnavailable
