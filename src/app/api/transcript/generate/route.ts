@@ -228,6 +228,29 @@ export async function POST(request: NextRequest) {
         console.error("[transcript generate] previous segment cleanup error:", previousSegmentDeleteError);
         return NextResponse.json({ error: "Failed to reset transcript segments" }, { status: 500 });
       }
+
+      // Translations and vocab highlights are cached by (transcript_id,
+      // segment_index) — since the transcript row is being reused, stale
+      // rows here would otherwise get replayed against the new segments'
+      // unrelated text just because the index happens to match.
+      const { error: previousTranslationDeleteError } = await supabase
+        .from("transcript_translations")
+        .delete()
+        .eq("transcript_id", canonicalTranscript.id);
+      if (previousTranslationDeleteError) {
+        console.error("[transcript generate] previous translation cleanup error:", previousTranslationDeleteError);
+        return NextResponse.json({ error: "Failed to reset transcript translations" }, { status: 500 });
+      }
+
+      const { error: previousVocabHighlightDeleteError } = await supabase
+        .from("transcript_vocab_highlights")
+        .delete()
+        .eq("transcript_id", canonicalTranscript.id);
+      if (previousVocabHighlightDeleteError) {
+        console.error("[transcript generate] previous vocab highlight cleanup error:", previousVocabHighlightDeleteError);
+        return NextResponse.json({ error: "Failed to reset vocab highlights" }, { status: 500 });
+      }
+
       transcriptId = canonicalTranscript.id;
     } else {
       const { data: transcript, error: tError } = await supabase

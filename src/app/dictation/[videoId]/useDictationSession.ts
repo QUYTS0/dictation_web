@@ -14,7 +14,9 @@ import {
   fetchResumeSession,
   restartSession,
   regenerateTranscript,
+  saveManualTranscript,
 } from "./api";
+import type { ManualSegmentInput } from "@/lib/utils/segment";
 import type { MistakeRecord, CompletedSentenceReview, ResumeState } from "./types";
 import {
   RESTORABLE_UX_STATES,
@@ -477,8 +479,10 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     [transcriptQuery]
   );
 
-  // ---- Regenerate transcript from YouTube captions (discards the cached script) ----
-  const handleRegenerateTranscript = useCallback(async () => {
+  // ---- Regenerate transcript, either from YouTube captions (no args) or from
+  // caller-supplied segments (manual paste / .srt upload) — either way the
+  // cached script and any in-progress session state are discarded. ----
+  const handleRegenerateTranscript = useCallback(async (providedSegments?: ManualSegmentInput[]) => {
     clearDictationSessionSnapshot(videoId);
     setRegenerating(true);
     setRegenerateError(null);
@@ -499,7 +503,9 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
     firstAttemptBySegmentRef.current = {};
 
     try {
-      const result = await regenerateTranscript(videoId);
+      const result = providedSegments
+        ? await saveManualTranscript(videoId, providedSegments)
+        : await regenerateTranscript(videoId);
       if (result.transcriptId) setTranscriptId(result.transcriptId);
     } catch (err) {
       setRegenerateError(err instanceof Error ? err.message : "Failed to regenerate transcript.");

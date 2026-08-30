@@ -37,6 +37,8 @@ import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { useAuth, useRequireAuth } from "@/context/auth";
 import { useManualTranscriptPaste } from "./useManualTranscriptPaste";
+import { useSrtTranscriptUpload } from "./useSrtTranscriptUpload";
+import { useAutoTranscribeSpeech } from "./useAutoTranscribeSpeech";
 import { useVideoSizeMode } from "./useVideoSizeMode";
 import { useSoundPreference } from "./useSoundPreference";
 import { usePlaybackRatePreference } from "./usePlaybackRatePreference";
@@ -236,6 +238,49 @@ export default function DictationPage({ params }: PageProps) {
     onTranscriptSaved: handleManualTranscriptSaved,
   });
 
+  // ---- Load a .srt file — available both from the "transcript failed"
+  // fallback screen and from the Script tab so an existing (auto-fetched)
+  // script can be swapped out for one with better accuracy. Routes through
+  // handleRegenerateTranscript so a replacement resets any in-progress
+  // session the same way "Regenerate script" does. ----
+  const {
+    srtFileInputRef,
+    srtParsing,
+    srtUploadError,
+    openSrtFilePicker,
+    handleSrtFileInputChange,
+  } = useSrtTranscriptUpload({
+    onSegmentsParsed: (parsedSegments) => handleRegenerateTranscript(parsedSegments),
+  });
+
+  const handleLoadSrtClick = useCallback(() => {
+    if (segments.length > 0) {
+      const confirmed = window.confirm(
+        "Load a .srt file to replace this video's script? The current script and your progress in this session will be replaced."
+      );
+      if (!confirmed) return;
+    }
+    openSrtFilePicker();
+  }, [segments.length, openSrtFilePicker]);
+
+  // ---- Experimental mic-based auto-transcribe (see useAutoTranscribeSpeech
+  // for why this can't listen to the video's audio directly) — fills the
+  // manual-paste textarea above so the user still reviews before saving.
+  const {
+    isSupported: autoTranscribeSupported,
+    status: autoTranscribeStatus,
+    error: autoTranscribeError,
+    liveText: autoTranscribeLiveText,
+    start: startAutoTranscribe,
+    stop: stopAutoTranscribe,
+  } = useAutoTranscribeSpeech({ ytPlayerRef });
+
+  useEffect(() => {
+    if (autoTranscribeStatus === "listening" || autoTranscribeStatus === "done") {
+      setManualPasteText(autoTranscribeLiveText);
+    }
+  }, [autoTranscribeLiveText, autoTranscribeStatus, setManualPasteText]);
+
   const currentSegment = segments[currentSegIdx];
 
   // Auto-advance: as soon as the typed text exactly matches the sentence
@@ -356,8 +401,7 @@ export default function DictationPage({ params }: PageProps) {
   );
   const shouldRenderVideoPlayer =
     uxState !== "loading_transcript" &&
-    uxState !== "transcript_processing" &&
-    uxState !== "transcript_failed";
+    uxState !== "transcript_processing";
   // Zen mode is meant to be immersive, so it always shows the video at its
   // largest size regardless of the user's saved Standard/Large preference.
   const effectiveVideoSizeMode = isZenMode ? "large" : videoSizeMode;
@@ -481,6 +525,13 @@ export default function DictationPage({ params }: PageProps) {
   // ---- Render ----
   return (
     <div className="player-dark-theme relative h-dvh overflow-hidden flex flex-col w-full bg-[var(--bg)] font-sans text-[var(--text)] antialiased">
+      <input
+        ref={srtFileInputRef}
+        type="file"
+        accept=".srt,text/srt,application/x-subrip"
+        onChange={handleSrtFileInputChange}
+        className="hidden"
+      />
       <AnimatePresence>
         {isZenMode && (
           <motion.div
@@ -820,6 +871,55 @@ export default function DictationPage({ params }: PageProps) {
                     so use Replay to resync as needed.
                   </p>
                 </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleLoadSrtClick}
+                    disabled={srtParsing}
+                    className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {srtParsing ? "Loading…" : "📄 Load .srt file"}
+                  </button>
+                  <span className="text-xs text-[var(--text-muted)]">Keeps the file&apos;s real timing.</span>
+                </div>
+                {srtUploadError && (
+                  <p className="text-sm text-[var(--red)]">{srtUploadError}</p>
+                )}
+                {autoTranscribeSupported && (
+                  <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Experimental: play the video out loud and let your microphone listen along
+                      to auto-fill the box below. Turn your speakers up (don&apos;t use
+                      headphones) and allow mic access when prompted — accuracy varies a lot with
+                      audio quality, so review the result before saving.
+                    </p>
+                    <div className="flex items-center gap-2">
+                      {autoTranscribeStatus === "listening" ? (
+                        <button
+                          onClick={stopAutoTranscribe}
+                          className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+                        >
+                          Stop listening
+                        </button>
+                      ) : (
+                        <button
+                          onClick={startAutoTranscribe}
+                          className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+                        >
+                          🎙 Auto-transcribe (experimental)
+                        </button>
+                      )}
+                      {autoTranscribeStatus === "listening" && (
+                        <span className="text-xs text-[var(--text-muted)] animate-pulse">Listening…</span>
+                      )}
+                      {autoTranscribeStatus === "done" && (
+                        <span className="text-xs text-[var(--text-muted)]">Done — review the text below.</span>
+                      )}
+                    </div>
+                    {autoTranscribeError && (
+                      <p className="text-sm text-[var(--red)]">{autoTranscribeError}</p>
+                    )}
+                  </div>
+                )}
                 <textarea
                   value={manualPasteText}
                   onChange={(e) => setManualPasteText(e.target.value)}
@@ -1017,6 +1117,9 @@ export default function DictationPage({ params }: PageProps) {
                   regenerating={regenerating}
                   regenerateError={regenerateError}
                   onRegenerateScript={handleRegenerateClick}
+                  onLoadSrtFile={handleLoadSrtClick}
+                  srtParsing={srtParsing}
+                  srtUploadError={srtUploadError}
                   phrasesBySegmentIndex={phrasesBySegmentIndex}
                   vocabHighlightsError={vocabHighlightsError}
                   scriptTextContainerRef={scriptTextContainerRef}

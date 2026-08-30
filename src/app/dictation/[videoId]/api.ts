@@ -6,6 +6,7 @@ import type {
   TranslateTranscriptResponse,
   VocabHighlightsResponse,
 } from "@/lib/types";
+import type { ManualSegmentInput } from "@/lib/utils/segment";
 
 export async function fetchTranscript(videoId: string): Promise<TranscriptResponse> {
   const res = await fetch(`/api/transcript/${videoId}?lang=en`);
@@ -24,6 +25,21 @@ export async function regenerateTranscript(
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Failed to regenerate transcript");
+  return data;
+}
+
+/** Saves caller-supplied segments (manual paste, .srt upload) as the video's transcript. */
+export async function saveManualTranscript(
+  videoId: string,
+  segments: ManualSegmentInput[]
+): Promise<{ transcriptId?: string; status: string; error?: string }> {
+  const res = await fetch("/api/transcript/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ videoId, segments, force: true }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Failed to save transcript");
   return data;
 }
 

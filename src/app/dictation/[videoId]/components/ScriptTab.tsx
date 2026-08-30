@@ -22,6 +22,9 @@ export function ScriptTab({
   regenerating,
   regenerateError,
   onRegenerateScript,
+  onLoadSrtFile,
+  srtParsing,
+  srtUploadError,
   phrasesBySegmentIndex,
   vocabHighlightsError,
   learningError,
@@ -48,6 +51,9 @@ export function ScriptTab({
   regenerating: boolean;
   regenerateError: string | null;
   onRegenerateScript: () => void;
+  onLoadSrtFile: () => void;
+  srtParsing: boolean;
+  srtUploadError: string | null;
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   vocabHighlightsError: boolean;
   learningError: string | null;
@@ -99,8 +105,17 @@ export function ScriptTab({
         >
           {regenerating ? "Regenerating…" : "Regenerate script"}
         </button>
+        <button
+          onClick={onLoadSrtFile}
+          disabled={srtParsing}
+          title="Replace this video's script by loading a .srt subtitle file"
+          className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {srtParsing ? "Loading…" : "📄 Load .srt file"}
+        </button>
       </div>
       {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
+      {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
       {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
       {scriptTranslationLoading && (
         <p className="text-xs text-[var(--text-muted)]">Translating…</p>

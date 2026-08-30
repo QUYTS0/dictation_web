@@ -24,6 +24,9 @@ export function RightPanelTabs({
   regenerating,
   regenerateError,
   onRegenerateScript,
+  onLoadSrtFile,
+  srtParsing,
+  srtUploadError,
   phrasesBySegmentIndex,
   vocabHighlightsError,
   scriptTextContainerRef,
@@ -67,6 +70,9 @@ export function RightPanelTabs({
   regenerating: boolean;
   regenerateError: string | null;
   onRegenerateScript: () => void;
+  onLoadSrtFile: () => void;
+  srtParsing: boolean;
+  srtUploadError: string | null;
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>;
   vocabHighlightsError: boolean;
   scriptTextContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -176,6 +182,9 @@ export function RightPanelTabs({
             regenerating={regenerating}
             regenerateError={regenerateError}
             onRegenerateScript={onRegenerateScript}
+            onLoadSrtFile={onLoadSrtFile}
+            srtParsing={srtParsing}
+            srtUploadError={srtUploadError}
             phrasesBySegmentIndex={phrasesBySegmentIndex}
             vocabHighlightsError={vocabHighlightsError}
             learningError={learningError}
