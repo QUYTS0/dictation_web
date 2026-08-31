@@ -308,7 +308,7 @@ export function SentenceWordInput({
 
       <div
         className={clsx(
-          "w-full px-16 py-4 text-center text-xl leading-loose sm:px-14",
+          "w-full px-4 py-4 text-center text-xl leading-loose md:px-14",
           showMask ? "font-mono tracking-wide" : "font-medium",
           maskBlurred && "blur-sm"
         )}

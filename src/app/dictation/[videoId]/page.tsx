@@ -10,7 +10,6 @@ import {
   Check,
   X,
   Bookmark,
-  Sparkles,
   Type,
   Quote,
   AlignLeft,
@@ -19,7 +18,6 @@ import {
   Volume2,
   Undo2,
   Flame,
-  SlidersHorizontal,
   Download,
   Settings,
   Maximize,
@@ -56,7 +54,6 @@ import { useBookmarks } from "@/hooks/useBookmarks";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 
 import { ConfettiBurst } from "./components/ConfettiBurst";
-import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { KeyboardShortcutsButton } from "./components/KeyboardShortcutsButton";
 import { RightPanelTabs } from "./components/RightPanelTabs";
@@ -65,7 +62,6 @@ import {
   SCRIPT_POPOVER_MAX_WIDTH_PX,
   VIDEO_SIZE_MODE_CLASS,
   COMBO_MILESTONE_INTERVAL,
-  PLAYBACK_RATE_OPTIONS,
   REPLAY_HINT_SEEN_KEY,
 } from "./constants";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
@@ -94,7 +90,6 @@ export default function DictationPage({ params }: PageProps) {
   const [isZenMode, setIsZenMode] = useState(false);
   const [showHintPanel, setShowHintPanel] = useState(false);
   const [bookmarkDeletingId, setBookmarkDeletingId] = useState<string | null>(null);
-  const [showMoreSettings, setShowMoreSettings] = useState(false);
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
@@ -406,7 +401,7 @@ export default function DictationPage({ params }: PageProps) {
   // largest size regardless of the user's saved Standard/Large preference.
   const effectiveVideoSizeMode = isZenMode ? "large" : videoSizeMode;
   const videoBlock = shouldRenderVideoPlayer && (
-    <div className={clsx("mx-auto flex h-full w-full transition-all duration-300", VIDEO_SIZE_MODE_CLASS[effectiveVideoSizeMode])}>
+    <div className={clsx("mx-auto flex h-full w-full max-md:!max-w-none transition-all duration-300", VIDEO_SIZE_MODE_CLASS[effectiveVideoSizeMode])}>
       <div className="h-full w-full">
         <YouTubePlayer
           ref={ytPlayerRef}
@@ -509,7 +504,7 @@ export default function DictationPage({ params }: PageProps) {
 
   // ---- Render ----
   return (
-    <div className="player-dark-theme relative h-dvh overflow-hidden flex flex-col w-full bg-[var(--bg)] font-sans text-[var(--text)] antialiased">
+    <div className="player-dark-theme relative flex min-h-dvh h-auto w-full flex-col overflow-x-hidden overflow-y-auto bg-[var(--bg)] font-sans text-[var(--text)] antialiased md:h-dvh md:overflow-hidden">
       <input
         ref={srtFileInputRef}
         type="file"
@@ -549,17 +544,17 @@ export default function DictationPage({ params }: PageProps) {
               </div>
               <div className="flex shrink-0 items-center gap-2 sm:gap-3">
                 {user && streakDays > 0 && (
-                  <div className="flex items-center gap-1 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent-border)] px-2 py-1 text-[var(--accent)] sm:gap-1.5 sm:px-2.5">
+                  <div className="hidden items-center gap-1 rounded-lg bg-[var(--accent-soft)] border border-[var(--accent-border)] px-2 py-1 text-[var(--accent)] md:flex sm:gap-1.5 sm:px-2.5">
                     <Flame size={14} className="fill-[var(--accent)]/30" />
                     <span className="text-xs font-semibold sm:hidden">{streakDays}</span>
                     <span className="hidden text-xs font-semibold sm:inline">{streakDays} day streak</span>
                   </div>
                 )}
-                <div className="hidden h-6 w-px bg-[var(--border)] sm:block" />
+                <div className="hidden h-6 w-px bg-[var(--border)] md:block" />
                 <button
                   onClick={handleDownloadTranscript}
                   disabled={segments.length === 0}
-                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 sm:flex"
+                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 md:flex"
                   title="Download transcript"
                   aria-label="Download transcript"
                 >
@@ -569,7 +564,7 @@ export default function DictationPage({ params }: PageProps) {
                   onClick={handleToggleCurrentBookmark}
                   disabled={!currentSegment}
                   className={clsx(
-                    "hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:flex",
+                    "hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40 md:flex",
                     currentSegment && bookmarkedSegmentIndexes.has(currentSegIdx)
                       ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
                       : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10"
@@ -579,10 +574,12 @@ export default function DictationPage({ params }: PageProps) {
                 >
                   <Bookmark size={15} className={currentSegment && bookmarkedSegmentIndexes.has(currentSegIdx) ? "fill-[var(--accent)]" : undefined} />
                 </button>
-                <KeyboardShortcutsButton />
+                <div className="hidden md:block">
+                  <KeyboardShortcutsButton />
+                </div>
                 <button
                   onClick={() => setShowSettingsDrawer(true)}
-                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 sm:flex"
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10"
                   title="Settings"
                   aria-label="Open settings"
                 >
@@ -590,7 +587,7 @@ export default function DictationPage({ params }: PageProps) {
                 </button>
                 <button
                   onClick={handleToggleFullscreen}
-                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 sm:flex"
+                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 md:flex"
                   title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                   aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
                 >
@@ -599,7 +596,7 @@ export default function DictationPage({ params }: PageProps) {
                 <button
                   onClick={() => setShowLearningPanel((prev) => !prev)}
                   className={clsx(
-                    "hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors sm:flex",
+                    "hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors md:flex",
                     showLearningPanel
                       ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
                       : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10"
@@ -616,79 +613,17 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full flex-1 min-h-0 flex-col overflow-hidden px-4 gap-4 lg:flex-row">
+      <main className="mx-auto flex w-full flex-col gap-4 px-4 md:flex-1 md:min-h-0 md:overflow-hidden lg:flex-row">
         <motion.div
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
-            "flex flex-col min-h-0 overflow-y-auto overflow-x-hidden lg:h-full lg:min-w-0 lg:flex-1 lg:overflow-hidden",
-            !isPracticing && "flex-1",
+            "flex flex-col md:min-h-0 md:overflow-y-auto md:overflow-x-hidden lg:h-full lg:min-w-0 lg:flex-1 lg:overflow-hidden",
+            !isPracticing && "md:flex-1",
             isZenMode && "z-50"
           )}
         >
           <div className={clsx("flex flex-col gap-2 pt-2 lg:pt-3", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0")}>
-          <AnimatePresence initial={false}>
-            {!isZenMode && (
-              <motion.div
-                key="video-toolbar"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.3, ease: "easeInOut" }}
-                className="overflow-hidden lg:hidden"
-              >
-                {/* Phone-only compact row: the most-used controls stay one tap away,
-                    the rest move into the "More settings" sheet below. */}
-                <div className="flex sm:hidden items-center gap-2">
-                  <button
-                    onClick={() => setIsZenMode(true)}
-                    aria-label="Zen Mode"
-                    title="Zen Mode"
-                    className="h-11 w-11 flex items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] active:scale-95 transition-all"
-                  >
-                    <Sparkles size={18} className="text-[var(--accent)]" />
-                  </button>
-                  <button
-                    onClick={() => setShowVideo((v) => !v)}
-                    aria-label={showVideo ? "Enable Audio Mode" : "Exit Audio Mode"}
-                    aria-pressed={!showVideo}
-                    title={showVideo ? "Audio Mode" : "Exit Audio Mode"}
-                    className={clsx(
-                      "h-11 w-11 flex items-center justify-center rounded-xl border transition-all active:scale-95",
-                      !showVideo
-                        ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                        : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)]"
-                    )}
-                  >
-                    <Sparkles size={18} />
-                  </button>
-                  <button
-                    onClick={() =>
-                      setPlaybackRate(
-                        PLAYBACK_RATE_OPTIONS[
-                          (PLAYBACK_RATE_OPTIONS.indexOf(playbackRate) + 1) % PLAYBACK_RATE_OPTIONS.length
-                        ]
-                      )
-                    }
-                    aria-label={`Playback speed: ${playbackRate}x, tap to change`}
-                    className="h-11 min-w-11 px-2 flex items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-glass)] text-xs font-bold text-[var(--text-muted)] active:scale-95 transition-all"
-                  >
-                    {playbackRate}x
-                  </button>
-                  <button
-                    onClick={() => setShowMoreSettings(true)}
-                    aria-label="More settings"
-                    title="More settings"
-                    className="h-11 w-11 flex items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] active:scale-95 transition-all"
-                  >
-                    <SlidersHorizontal size={18} />
-                  </button>
-                </div>
-
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           <SettingsDrawer
             open={showSettingsDrawer}
             onClose={() => setShowSettingsDrawer(false)}
@@ -706,6 +641,10 @@ export default function DictationPage({ params }: PageProps) {
             setAutoAdvance={setAutoAdvance}
             practiceMode={practiceMode}
             setPracticeMode={setPracticeMode}
+            inputMode={inputMode}
+            onSelectInputMode={setInputMode}
+            soundEnabled={soundEnabled}
+            onToggleSound={() => setSoundEnabled(!soundEnabled)}
             regenerateTranslation={() => void regenerateTranslation()}
             regeneratingTranslation={regeneratingTranslation}
             regenerateTranslationError={regenerateTranslationError}
@@ -716,107 +655,6 @@ export default function DictationPage({ params }: PageProps) {
             srtParsing={srtParsing}
             srtUploadError={srtUploadError}
           />
-
-          <MobileBottomSheet open={showMoreSettings} onClose={() => setShowMoreSettings(false)} title="More settings">
-            <div className="flex flex-col gap-4">
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Video size</p>
-                <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-1 shadow-sm">
-                  <button
-                    onClick={() => setVideoSizeMode("standard")}
-                    className={clsx(
-                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
-                      videoSizeMode === "standard" ? "bg-[var(--accent)] text-[#1a1206]" : "text-[var(--text-muted)]"
-                    )}
-                  >
-                    Standard
-                  </button>
-                  <button
-                    onClick={() => setVideoSizeMode("large")}
-                    className={clsx(
-                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
-                      videoSizeMode === "large" ? "bg-[var(--accent)] text-[#1a1206]" : "text-[var(--text-muted)]"
-                    )}
-                  >
-                    Large
-                  </button>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setAutoAdvance((v) => !v)}
-                className={clsx(
-                  "flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-semibold transition-colors",
-                  autoAdvance
-                    ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)]"
-                )}
-              >
-                <span className="flex items-center gap-2">
-                  <Sparkles size={16} className="text-[var(--accent)]" />
-                  Auto-advance
-                </span>
-                <span>{autoAdvance ? "On" : "Off"}</span>
-              </button>
-
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Practice mode</p>
-                <div
-                  className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-1 shadow-sm"
-                  title="Easy mode always shows the sentence's word/letter shape. Hard mode hides it until you ask for a hint."
-                >
-                  <button
-                    onClick={() => setPracticeMode("easy")}
-                    className={clsx(
-                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
-                      practiceMode === "easy" ? "bg-[var(--accent)] text-[#1a1206]" : "text-[var(--text-muted)]"
-                    )}
-                  >
-                    Easy
-                  </button>
-                  <button
-                    onClick={() => setPracticeMode("hard")}
-                    className={clsx(
-                      "flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors",
-                      practiceMode === "hard" ? "bg-[var(--accent)] text-[#1a1206]" : "text-[var(--text-muted)]"
-                    )}
-                  >
-                    Hard
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Script</p>
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => void regenerateTranslation()}
-                    disabled={regeneratingTranslation}
-                    className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2.5 text-sm font-semibold text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
-                  </button>
-                  <button
-                    onClick={handleRegenerateClick}
-                    disabled={regenerating}
-                    className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2.5 text-sm font-semibold text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {regenerating ? "Regenerating…" : "Regenerate script"}
-                  </button>
-                  <button
-                    onClick={handleLoadSrtClick}
-                    disabled={srtParsing}
-                    className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 text-sm font-semibold text-[var(--text-muted)] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {srtParsing ? "Loading…" : "📄 Load .srt file"}
-                  </button>
-                  {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
-                  {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
-                  {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
-                </div>
-              </div>
-            </div>
-          </MobileBottomSheet>
 
           <DefaultLayout
             isZenMode={isZenMode}
@@ -870,6 +708,8 @@ export default function DictationPage({ params }: PageProps) {
             onTogglePlayback={handleTogglePlayback}
             currentTimeSec={playerStore.currentTimeSec}
             durationSec={playerStore.durationSec}
+            playbackRate={playbackRate}
+            setPlaybackRate={setPlaybackRate}
           />
           </div>
 
@@ -1121,10 +961,11 @@ export default function DictationPage({ params }: PageProps) {
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
-                "flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-none",
+                "flex h-[min(60dvh,560px)] min-h-[360px] w-full flex-col overflow-hidden pb-[env(safe-area-inset-bottom)]",
+                "md:h-auto md:min-h-0 md:flex-1 md:pb-0 lg:flex-none",
                 isZenMode
-                  ? "w-full sm:fixed sm:top-4 sm:right-4 sm:bottom-4 sm:z-[60] sm:w-[360px] sm:max-w-[calc(100vw-2rem)]"
-                  : "w-full lg:h-full lg:pt-3 lg:w-[clamp(340px,24vw,400px)]"
+                  ? "md:fixed md:top-4 md:right-4 md:bottom-4 md:z-[60] md:w-[360px] md:max-w-[calc(100vw-2rem)]"
+                  : "lg:h-full lg:pt-3 lg:w-[clamp(340px,24vw,400px)]"
               )}
             >
                 <div className="w-full h-full min-h-0 flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
@@ -1177,7 +1018,7 @@ export default function DictationPage({ params }: PageProps) {
           <div
             className={clsx(
               isZenMode
-                ? "fixed inset-x-0 bottom-4 z-[60] flex justify-center sm:inset-x-auto sm:top-4 sm:right-4 sm:bottom-auto"
+                ? "fixed inset-x-0 bottom-4 z-[60] flex justify-center md:inset-x-auto md:top-4 md:right-4 md:bottom-auto"
                 : "flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3"
             )}
           >

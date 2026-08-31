@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { clsx } from "clsx";
 import { Eye, Lightbulb, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, Volume2, VolumeX, LayoutGrid } from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
@@ -8,6 +9,7 @@ import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { MobileBottomSheet } from "./MobileBottomSheet";
 import { formatClockTime } from "../helpers";
+import { PLAYBACK_RATE_OPTIONS } from "../constants";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
 
 export function ControlBar({
@@ -34,6 +36,8 @@ export function ControlBar({
   onTogglePlayback,
   currentTimeSec,
   durationSec,
+  playbackRate,
+  setPlaybackRate,
 }: {
   currentSegIdx: number;
   totalSegments: number;
@@ -58,16 +62,20 @@ export function ControlBar({
   onTogglePlayback: () => void;
   currentTimeSec: number;
   durationSec: number;
+  playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
+  setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
 }) {
   const isListeningMode = inputMode === "listening";
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
   const modePopoverRef = useRef<HTMLDivElement>(null);
+  const [showSpeedPopover, setShowSpeedPopover] = useState(false);
+  const speedPopoverRef = useRef<HTMLDivElement>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   useEffect(() => {
-    if (!showVisibilityPopover && !showModePopover) return;
+    if (!showVisibilityPopover && !showModePopover && !showSpeedPopover) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (visibilityPopoverRef.current && !visibilityPopoverRef.current.contains(event.target as Node)) {
         setShowVisibilityPopover(false);
@@ -75,11 +83,15 @@ export function ControlBar({
       if (modePopoverRef.current && !modePopoverRef.current.contains(event.target as Node)) {
         setShowModePopover(false);
       }
+      if (speedPopoverRef.current && !speedPopoverRef.current.contains(event.target as Node)) {
+        setShowSpeedPopover(false);
+      }
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setShowVisibilityPopover(false);
       setShowModePopover(false);
+      setShowSpeedPopover(false);
     };
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleEscape);
@@ -87,7 +99,7 @@ export function ControlBar({
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [showVisibilityPopover, showModePopover]);
+  }, [showVisibilityPopover, showModePopover, showSpeedPopover]);
 
   const playPauseOrHintButton = isListeningMode ? (
     <ControlButton
@@ -106,37 +118,33 @@ export function ControlBar({
     />
   );
 
+  const timeStatusText =
+    totalSegments > 0
+      ? isListeningMode
+        ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
+        : `${accuracy}% accuracy`
+      : "";
+
   return (
     <div className="flex-shrink-0 min-h-14 rounded-[18px] border border-[var(--border)] bg-[var(--surface)]">
-      {/* Phone-only (<640px) layout: the single-row grid below overlaps at this
-          width, so this stacks sentence/time info on its own row and moves
-          low-priority controls (Reset, Visibility, Mode) into a "More" sheet. */}
-      <div className="flex flex-col gap-1.5 px-2.5 py-2 sm:hidden">
-        <div className="flex items-center justify-between gap-2 px-0.5">
-          <span className="min-w-0 truncate text-xs font-medium text-[var(--text-muted)] tabular-nums">
-            {totalSegments > 0 ? `${currentSegIdx + 1} / ${totalSegments}` : "—"}
-          </span>
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="truncate text-xs font-medium text-[var(--text-muted)] tabular-nums">
-              {totalSegments > 0
-                ? isListeningMode
-                  ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
-                  : `${accuracy}% accuracy`
-                : ""}
-            </span>
-            <ComboStreak combo={combo} />
-          </div>
-        </div>
-        <div className="flex items-center justify-center gap-1.5">
+      {/* Mobile (<768px): a single row — the sentence counter, primary
+          transport controls, playback speed, and streak count all fit on
+          one line; anything lower-priority (Reset, time/status, subtitle
+          visibility) lives in the "More" sheet instead. */}
+      <div className="flex md:hidden items-center gap-1 px-1.5 py-1.5">
+        <span className="shrink-0 min-w-0 truncate text-[11px] font-semibold text-[var(--text-muted)] tabular-nums">
+          {totalSegments > 0 ? `${currentSegIdx + 1}/${totalSegments}` : "—"}
+        </span>
+        <div className="flex flex-1 items-center justify-center gap-1">
           <ControlButton
-            icon={<SkipBack size={18} />}
+            icon={<SkipBack size={16} />}
             shortcut="Previous sentence — Shift + ←"
             label="Prev"
             onClick={onPrevious}
             disabled={prevDisabled}
           />
           <ControlButton
-            icon={<Repeat size={18} />}
+            icon={<Repeat size={16} />}
             shortcut="Replay current sentence — Shift + Space"
             label="Replay"
             primary
@@ -144,31 +152,60 @@ export function ControlBar({
           />
           {playPauseOrHintButton}
           <ControlButton
-            icon={<SkipForward size={18} />}
+            icon={<SkipForward size={16} />}
             shortcut="Next sentence — Shift + →"
             label="Next"
             onClick={onNext}
             disabled={nextDisabled}
           />
-          <ControlButton
-            icon={soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-            shortcut="Sound"
-            label={soundEnabled ? "Sound on" : "Sound off"}
-            active={soundEnabled}
-            onClick={onToggleSound}
-          />
-          <ControlButton
-            icon={<MoreHorizontal size={18} />}
-            shortcut="More controls"
-            label="More"
-            active={showMoreMenu}
-            onClick={() => setShowMoreMenu(true)}
-          />
+          <div className="relative">
+            <ControlButton
+              icon={<span className="text-[11px] font-bold leading-none">{playbackRate}×</span>}
+              shortcut="Playback speed"
+              label={`${playbackRate}×`}
+              active={showSpeedPopover}
+              onClick={() => setShowSpeedPopover((v) => !v)}
+            />
+            {showSpeedPopover && (
+              <div
+                ref={speedPopoverRef}
+                className="absolute bottom-full right-0 z-50 mb-2 flex gap-1 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] p-1.5 shadow-2xl"
+              >
+                {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                  <button
+                    key={rate}
+                    onClick={() => {
+                      setPlaybackRate(rate);
+                      setShowSpeedPopover(false);
+                    }}
+                    className={clsx(
+                      "rounded-lg px-2.5 py-2 text-xs font-semibold transition-colors",
+                      playbackRate === rate
+                        ? "bg-[var(--accent)] text-[#1a1206]"
+                        : "text-[var(--text-muted)] hover:bg-white/10"
+                    )}
+                  >
+                    {rate}×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+        <div className="shrink-0">
+          <ComboStreak combo={combo} />
+        </div>
+        <ControlButton
+          icon={<MoreHorizontal size={16} />}
+          shortcut="More controls"
+          label="More"
+          active={showMoreMenu}
+          onClick={() => setShowMoreMenu(true)}
+        />
       </div>
 
-      {/* sm and up (tablet/desktop): original single-row layout, unchanged. */}
-      <div className="hidden sm:grid sm:grid-cols-[1fr_auto_1fr] sm:items-center sm:gap-3 sm:px-4 sm:py-1.5">
+      {/* md and up (tablet/desktop): original single-row layout, unchanged. */}
+      <div className="hidden md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-3 md:px-4 md:py-1.5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3 justify-self-start">
           <button
             onClick={onReset}
@@ -272,6 +309,10 @@ export function ControlBar({
 
       <MobileBottomSheet open={showMoreMenu} onClose={() => setShowMoreMenu(false)} title="More controls">
         <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm font-medium text-[var(--text-muted)] tabular-nums">
+            <span>Sentence {totalSegments > 0 ? `${currentSegIdx + 1} / ${totalSegments}` : "—"}</span>
+            {timeStatusText && <span>{timeStatusText}</span>}
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -287,15 +328,6 @@ export function ControlBar({
               subtitleVisibility={subtitleVisibility}
               setOriginalVisibility={setOriginalVisibility}
               setTranslationVisibility={setTranslationVisibility}
-            />
-          </div>
-          <div className="flex justify-center">
-            <ModeSwitcher
-              inputMode={inputMode}
-              onSelectMode={(mode) => {
-                onSelectInputMode(mode);
-                setShowMoreMenu(false);
-              }}
             />
           </div>
         </div>

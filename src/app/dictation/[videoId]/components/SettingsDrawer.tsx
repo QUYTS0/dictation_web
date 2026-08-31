@@ -2,10 +2,11 @@
 
 import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
-import { Sparkles, X } from "lucide-react";
+import { Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS, PLAYBACK_RATE_OPTIONS } from "../constants";
-import type { ShortcutEntry } from "../types";
+import { ModeSwitcher } from "./ModeSwitcher";
+import type { InputMode, ShortcutEntry } from "../types";
 
 function ShortcutGroup({ title, shortcuts }: { title: string; shortcuts: ShortcutEntry[] }) {
   return (
@@ -30,10 +31,13 @@ const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 /**
- * Desktop-only (hidden sm:block) settings drawer consolidating the controls
- * that used to live in the always-visible desktop toolbar row: Audio mode,
- * Zen mode, video size, playback rate, auto-advance, and practice mode.
- * Mobile keeps its own phone toolbar + MobileBottomSheet, unaffected.
+ * Settings drawer consolidating controls that don't need to be one tap away:
+ * Audio mode, Zen mode, video size, playback rate, auto-advance, practice
+ * mode, input mode (Dictation/Listening), and the sound-effect toggle.
+ * Renders as a floating right-side panel on desktop/tablet and (via the
+ * same positioning classes, which collapse to a near-full-width card below
+ * `md`) a full-width panel on mobile, where it's reached from the top nav's
+ * Settings button.
  */
 export function SettingsDrawer({
   open,
@@ -49,6 +53,10 @@ export function SettingsDrawer({
   setAutoAdvance,
   practiceMode,
   setPracticeMode,
+  inputMode,
+  onSelectInputMode,
+  soundEnabled,
+  onToggleSound,
   regenerateTranslation,
   regeneratingTranslation,
   regenerateTranslationError,
@@ -72,6 +80,10 @@ export function SettingsDrawer({
   setAutoAdvance: (updater: (prev: boolean) => boolean) => void;
   practiceMode: PracticeMode;
   setPracticeMode: (mode: PracticeMode) => void;
+  inputMode: InputMode;
+  onSelectInputMode: (mode: InputMode) => void;
+  soundEnabled: boolean;
+  onToggleSound: () => void;
   regenerateTranslation: () => void;
   regeneratingTranslation: boolean;
   regenerateTranslationError: string | null;
@@ -124,7 +136,7 @@ export function SettingsDrawer({
   return (
     <AnimatePresence>
       {open && (
-        <div className="hidden sm:block">
+        <>
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -295,6 +307,27 @@ export function SettingsDrawer({
             </div>
 
             <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Practice input mode</p>
+              <ModeSwitcher inputMode={inputMode} onSelectMode={onSelectInputMode} />
+            </div>
+
+            <button
+              onClick={onToggleSound}
+              className={clsx(
+                "flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-semibold transition-colors",
+                soundEnabled
+                  ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                  : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)]"
+              )}
+            >
+              <span className="flex items-center gap-2">
+                {soundEnabled ? <Volume2 size={16} className="text-[var(--accent)]" /> : <VolumeX size={16} />}
+                Sound effects
+              </span>
+              <span>{soundEnabled ? "On" : "Off"}</span>
+            </button>
+
+            <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
                 Keyboard shortcuts
               </p>
@@ -304,7 +337,7 @@ export function SettingsDrawer({
               </div>
             </div>
           </motion.div>
-        </div>
+        </>
       )}
     </AnimatePresence>
   );

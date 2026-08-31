@@ -13,6 +13,7 @@ import { SentenceWordInput } from "../SentenceWordInput";
 import { ListeningTranscript } from "../ListeningTranscript";
 import type { InputMode, PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 import type { PersistedInputState } from "../../sessionPersistence";
+import type { PLAYBACK_RATE_OPTIONS } from "../../constants";
 
 interface CurrentSegment {
   text: string;
@@ -65,6 +66,8 @@ export function DefaultLayout({
   onTogglePlayback,
   currentTimeSec,
   durationSec,
+  playbackRate,
+  setPlaybackRate,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -112,6 +115,8 @@ export function DefaultLayout({
   onTogglePlayback: () => void;
   currentTimeSec: number;
   durationSec: number;
+  playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
+  setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -123,8 +128,14 @@ export function DefaultLayout({
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         className={clsx(
-          "relative w-full aspect-video rounded-3xl overflow-hidden shadow-xl border border-[var(--border-strong)] shrink-0 bg-black transition-all duration-300 ease-out",
-          isZenMode ? "max-h-[50dvh] sm:max-h-[72vh]" : "max-h-[38dvh] sm:max-h-[52vh]"
+          "relative aspect-video shrink-0 overflow-hidden bg-black transition-all duration-300 ease-out",
+          // Mobile: edge-to-edge, no card chrome — breaks out of `main`'s
+          // px-4 so the video spans the full viewport width like a normal
+          // mobile YouTube embed. Neutralized at `md` and up, where the
+          // original bordered/rounded/shadowed card is restored unchanged.
+          "-mx-4 w-[calc(100%+2rem)] rounded-none border-0 shadow-none",
+          "md:mx-0 md:w-full md:rounded-3xl md:border md:border-[var(--border-strong)] md:shadow-xl",
+          isZenMode ? "md:max-h-[72vh]" : "md:max-h-[52vh]"
         )}
       >
         <div
@@ -316,6 +327,8 @@ export function DefaultLayout({
               onTogglePlayback={onTogglePlayback}
               currentTimeSec={currentTimeSec}
               durationSec={durationSec}
+              playbackRate={playbackRate}
+              setPlaybackRate={setPlaybackRate}
             />
           </div>
         </>
