@@ -1,11 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { Eye } from "lucide-react";
 import type { TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import { buildScriptRenderItems, formatSegmentTimestamp } from "../helpers";
 import type { InputMode } from "../types";
+
+// Keeps the active sentence anchored just below the previous one instead of
+// letting it drift to wherever scrollIntoView last landed it.
+const SCRIPT_ANCHOR_TOP_PADDING = 8;
+
+function computeAnchoredScrollTop(container: HTMLElement, activeCard: HTMLElement): number {
+  const anchorCard = (activeCard.previousElementSibling as HTMLElement | null) ?? activeCard;
+  const target = anchorCard.offsetTop - SCRIPT_ANCHOR_TOP_PADDING;
+  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+  return Math.min(Math.max(target, 0), maxScrollTop);
+}
 
 export function ScriptTab({
   scriptSegments,
@@ -53,6 +64,27 @@ export function ScriptTab({
   const revealSegment = (segmentIndex: number) =>
     setRevealedSegmentIndexes((prev) => new Set(prev).add(segmentIndex));
 
+  // First layout after this component (re)mounts — e.g. switching tabs back to
+  // Script, or reopening the right panel — snaps to the anchored position with
+  // no animation so the user never sees a scroll-from-the-top flash. Every
+  // later run (plain sentence navigation while already mounted) animates.
+  const hasPositionedRef = useRef(false);
+  useLayoutEffect(() => {
+    const container = scriptTextContainerRef.current;
+    if (!container) return;
+    const activeCard = container.querySelector<HTMLElement>(
+      `[data-script-segment-index="${currentSegIdx}"]`
+    );
+    if (!activeCard) return;
+    const target = computeAnchoredScrollTop(container, activeCard);
+    if (!hasPositionedRef.current) {
+      container.scrollTop = target;
+      hasPositionedRef.current = true;
+    } else {
+      container.scrollTo({ top: target, behavior: "smooth" });
+    }
+  }, [currentSegIdx, scriptSegments.length, scriptTextContainerRef]);
+
   return (
     <>
       {scriptTranslationLoading && (
@@ -70,7 +102,7 @@ export function ScriptTab({
         <div
           ref={scriptTextContainerRef}
           onMouseUp={handleScriptMouseUp}
-          className="relative flex flex-col gap-2 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
+          className="script-scrollbar relative flex flex-col gap-2 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
         >
           {scriptSegments.map((segment) => {
             const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
@@ -88,10 +120,10 @@ export function ScriptTab({
                 data-selection-sentence-text={segment.text}
                 onClick={() => onSeekToSegment(segment.segmentIndex)}
                 title={`Play from sentence ${segment.segmentIndex + 1}`}
-                className={`relative p-2.5 rounded-xl border transition-colors shadow-sm cursor-pointer ${
+                className={`relative p-2.5 rounded-xl border transition-colors cursor-pointer ${
                   isCurrentScriptSentence
-                    ? "bg-[var(--accent-soft)] border-[var(--accent-border)] ring-2 ring-[var(--accent)]/20"
-                    : "bg-[var(--surface-glass)] border-[var(--border)] opacity-80 hover:opacity-100"
+                    ? "bg-[var(--accent-soft)] border-[var(--accent-border)] ring-2 ring-[var(--accent)]/20 shadow-sm"
+                    : "bg-transparent border-transparent hover:bg-white/[0.04] hover:border-[var(--border)]"
                 }`}
               >
                 {isBlurred && (
@@ -142,7 +174,7 @@ export function ScriptTab({
                               onMouseLeave={handlePhraseMouseLeave}
                               onClick={(event) => event.stopPropagation()}
                               title="Hover or tap to see the meaning"
-                              className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-[var(--accent)] decoration-2 underline-offset-2 transition-colors hover:bg-[var(--accent-soft)]"
+                              className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-[var(--accent)] decoration-2 underline-offset-2 [text-decoration-skip-ink:none] transition-colors hover:bg-[var(--accent-soft)]"
                             >
                               {item.text}
                             </span>
@@ -173,7 +205,7 @@ export function ScriptTab({
                       );
                     })}
                   </p>
-                  <p className="mt-0.5 text-sm leading-relaxed text-[var(--accent)]">
+                  <p className="mt-0.5 text-sm leading-relaxed text-[var(--accent-muted)]">
                     {translationBySegmentIndex.get(segment.segmentIndex) ?? "…"}
                   </p>
                 </div>

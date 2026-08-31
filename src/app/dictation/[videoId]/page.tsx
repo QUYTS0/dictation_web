@@ -484,25 +484,6 @@ export default function DictationPage({ params }: PageProps) {
     ytPlayerRef.current?.setPlaybackRate(playbackRate);
   }, [playbackRate, ytPlayerRef]);
 
-  // Auto-scroll the active sentence into view as playback advances — but only
-  // when it isn't already visible, so continuous playback (Listening Mode)
-  // doesn't yank the list on every sentence and a manual scroll stays put
-  // until the active sentence actually scrolls out of view.
-  useEffect(() => {
-    if (!showLearningPanel || rightPanelTab !== "script") return;
-    const container = scriptTextContainerRef.current;
-    if (!container) return;
-    const currentCard = container.querySelector<HTMLElement>(
-      `[data-script-segment-index="${currentSegIdx}"]`
-    );
-    if (!currentCard) return;
-    const containerRect = container.getBoundingClientRect();
-    const cardRect = currentCard.getBoundingClientRect();
-    const isFullyVisible = cardRect.top >= containerRect.top && cardRect.bottom <= containerRect.bottom;
-    if (isFullyVisible) return;
-    currentCard.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [currentSegIdx, rightPanelTab, showLearningPanel, scriptTextContainerRef]);
-
   const workspaceTitle = transcriptTitle ?? `Video ${videoId}`;
 
   const isCheckingWorkspace = uxState === "checking_answer" && checkResult === null;
@@ -642,7 +623,7 @@ export default function DictationPage({ params }: PageProps) {
             isZenMode && "z-50"
           )}
         >
-          <div className={clsx("flex flex-col gap-2 pt-2 lg:pt-0", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0")}>
+          <div className={clsx("flex flex-col gap-2 pt-2 lg:pt-3", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0")}>
           <AnimatePresence initial={false}>
             {!isZenMode && (
               <motion.div
@@ -1140,7 +1121,7 @@ export default function DictationPage({ params }: PageProps) {
                 "shrink-0 overflow-hidden",
                 isZenMode
                   ? "w-full sm:fixed sm:top-4 sm:right-4 sm:bottom-4 sm:z-[60] sm:w-[360px] sm:max-w-[calc(100vw-2rem)]"
-                  : "w-full lg:h-full lg:w-[clamp(340px,24vw,400px)]"
+                  : "w-full lg:h-full lg:pt-3 lg:w-[clamp(340px,24vw,400px)]"
               )}
             >
                 <div className="w-full h-full flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
