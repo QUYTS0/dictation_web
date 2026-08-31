@@ -285,8 +285,13 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     }));
 
     return (
-      <div className="w-full h-full overflow-hidden">
+      <div className="relative w-full h-full overflow-hidden">
         <div ref={containerRef} className="w-full h-full" />
+        {/* Glass pane: intercepts all pointer events before they reach the cross-origin
+            YouTube iframe, so hovering the video never triggers YouTube's own hover UI
+            (title/branding overlay). Sits above the iframe with no visual styling of its
+            own, so layout/appearance is unaffected. */}
+        <div className="absolute inset-0" style={{ pointerEvents: "auto" }} aria-hidden="true" />
       </div>
     );
   }

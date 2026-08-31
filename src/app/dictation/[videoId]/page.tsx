@@ -216,11 +216,24 @@ export default function DictationPage({ params }: PageProps) {
     void handleAnswerSubmit(trimmed);
   }, [handleAnswerSubmit, workspaceInputValue]);
 
+  // Listening Mode's Play/Pause control — toggles the actual player state
+  // directly (no seeking), so pausing always preserves the current timestamp.
+  const isVideoPlaying = playerStore.status === "playing";
+  const handleTogglePlayback = useCallback(() => {
+    if (usePlayerStore.getState().status === "playing") {
+      ytPlayerRef.current?.pauseVideo();
+    } else {
+      ytPlayerRef.current?.playVideo();
+    }
+  }, [ytPlayerRef]);
+
   // ---- Keyboard shortcuts ----
   const { inputFocusSignal } = useKeyboardShortcuts({
     onReplay: handleReplay,
     onPrevious: handlePrevious,
     onSkip: handleSkip,
+    onTogglePlayback: handleTogglePlayback,
+    isListeningMode: inputMode === "listening",
     isZenMode,
     onZenModeChange: setIsZenMode,
   });
@@ -316,17 +329,6 @@ export default function DictationPage({ params }: PageProps) {
     },
     [jumpToSegment]
   );
-
-  // Listening Mode's Play/Pause control — toggles the actual player state
-  // directly (no seeking), so pausing always preserves the current timestamp.
-  const isVideoPlaying = playerStore.status === "playing";
-  const handleTogglePlayback = useCallback(() => {
-    if (usePlayerStore.getState().status === "playing") {
-      ytPlayerRef.current?.pauseVideo();
-    } else {
-      ytPlayerRef.current?.playVideo();
-    }
-  }, [ytPlayerRef]);
 
   const handleDownloadTranscript = useCallback(() => {
     if (segments.length === 0) return;

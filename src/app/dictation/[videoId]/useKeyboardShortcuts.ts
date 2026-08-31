@@ -4,20 +4,26 @@ interface UseKeyboardShortcutsOptions {
   onReplay: () => void;
   onPrevious: () => void;
   onSkip: () => void;
+  onTogglePlayback: () => void;
+  /** Space play/pause only applies in Listening Mode, where it's the only
+   *  Play/Pause control (the ControlBar button is Listening-only too). */
+  isListeningMode: boolean;
   isZenMode: boolean;
   onZenModeChange: (value: boolean | ((prev: boolean) => boolean)) => void;
 }
 
 /**
- * Wires the dictation page's global keyboard shortcuts (Shift+Space replay,
- * Shift+Arrow prev/next, "/" to focus the answer input, "Z" to toggle Zen
- * mode, Escape to exit it). Returns a signal that increments each time "/"
- * is pressed, so the page can focus its input.
+ * Wires the dictation page's global keyboard shortcuts (Space play/pause in
+ * Listening Mode, Shift+Space replay, Shift+Arrow prev/next, "/" to focus the
+ * answer input, "Z" to toggle Zen mode, Escape to exit it). Returns a signal
+ * that increments each time "/" is pressed, so the page can focus its input.
  */
 export function useKeyboardShortcuts({
   onReplay,
   onPrevious,
   onSkip,
+  onTogglePlayback,
+  isListeningMode,
   isZenMode,
   onZenModeChange,
 }: UseKeyboardShortcutsOptions) {
@@ -44,6 +50,25 @@ export function useKeyboardShortcuts({
         e.preventDefault();
         e.stopPropagation();
         onReplay();
+        return;
+      }
+
+      // Plain Space toggles Play/Pause, but only in Listening Mode (the only mode
+      // with a Play/Pause control), outside typing targets (so it doesn't fight
+      // the answer input's own Space handling), and never on a key-repeat (so
+      // holding Space doesn't rapidly toggle playback).
+      if (
+        isListeningMode &&
+        !isTypingTarget &&
+        !e.repeat &&
+        e.code === "Space" &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        onTogglePlayback();
         return;
       }
 
@@ -82,7 +107,7 @@ export function useKeyboardShortcuts({
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [onReplay, onSkip, onPrevious, isZenMode, onZenModeChange]);
+  }, [onReplay, onSkip, onPrevious, onTogglePlayback, isListeningMode, isZenMode, onZenModeChange]);
 
   return { inputFocusSignal };
 }
