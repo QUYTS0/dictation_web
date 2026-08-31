@@ -50,6 +50,17 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     const activeSegmentIdxRef = useRef<number>(0);
     const isPausedRef = useRef<boolean>(false);
     const playbackRateRef = useRef<number>(1);
+    // Continuous mode only: set by playSegmentFn to the segment a manual
+    // Replay/Next/Previous navigated to. playSegmentFn seeks to a small
+    // pre-roll point *before* that segment's start (see
+    // SEGMENT_START_PRE_ROLL_SEC), which falls inside the *previous*
+    // segment's [start, end) range for back-to-back segments. Until playback
+    // actually reaches the target's real start, the time-derived lookup
+    // below would otherwise report the previous segment and briefly bounce
+    // the active sentence backward before snapping forward again. This ref
+    // tells the tick to hold the manually-set index instead of trusting that
+    // stale/pre-roll time-derived reading.
+    const pendingManualTargetRef = useRef<number | null>(null);
 
     const setStatus = usePlayerStore((s) => s.setStatus);
     const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
@@ -97,6 +108,19 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         // playhead is currently inside so the active sentence stays in sync,
         // never auto-pause.
         if (continuousRef.current) {
+          const pendingTarget = pendingManualTargetRef.current;
+          if (pendingTarget !== null) {
+            const targetSeg = segs[pendingTarget];
+            if (targetSeg && time < targetSeg.start) {
+              // Still inside the pre-roll before the manually navigated
+              // segment's real start — hold, don't let the time-derived
+              // lookup below bounce the active sentence back to the
+              // previous one.
+              return;
+            }
+            pendingManualTargetRef.current = null;
+          }
+
           const idx = findSegmentIndexAtTime(segs, time);
           if (idx !== -1 && idx !== activeSegmentIdxRef.current) {
             activeSegmentIdxRef.current = idx;
@@ -229,6 +253,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         const seg = segmentsRef.current[segIdx];
         if (!seg || !playerRef.current || !playerReadyRef.current) return;
         activeSegmentIdxRef.current = segIdx;
+        pendingManualTargetRef.current = segIdx;
         isPausedRef.current = false;
         // YouTube's seekTo() snaps to the nearest keyframe with run-to-run jitter, so
         // seeking exactly to seg.start sometimes lands a beat past it and clips the
