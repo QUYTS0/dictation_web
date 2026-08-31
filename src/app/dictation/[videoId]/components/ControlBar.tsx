@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Eye, Lightbulb, RotateCcw, SkipBack, SkipForward, Repeat, Volume2, VolumeX, LayoutGrid } from "lucide-react";
+import { Eye, Lightbulb, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, Volume2, VolumeX, LayoutGrid } from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
 import { ModeSwitcher } from "./ModeSwitcher";
+import { formatClockTime } from "../helpers";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
 
 export function ControlBar({
@@ -28,6 +29,10 @@ export function ControlBar({
   setTranslationVisibility,
   inputMode,
   onSelectInputMode,
+  isVideoPlaying,
+  onTogglePlayback,
+  currentTimeSec,
+  durationSec,
 }: {
   currentSegIdx: number;
   totalSegments: number;
@@ -48,7 +53,12 @@ export function ControlBar({
   setTranslationVisibility: (value: SubtitleVisibility) => void;
   inputMode: InputMode;
   onSelectInputMode: (mode: InputMode) => void;
+  isVideoPlaying: boolean;
+  onTogglePlayback: () => void;
+  currentTimeSec: number;
+  durationSec: number;
 }) {
+  const isListeningMode = inputMode === "listening";
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
@@ -90,14 +100,20 @@ export function ControlBar({
         </button>
         <span className="min-w-0 truncate text-[11px] sm:text-xs font-medium text-[var(--text-muted)] tabular-nums">
           {totalSegments > 0 ? (
-            <>
-              <span className="sm:hidden">
-                {currentSegIdx + 1}/{totalSegments} · {accuracy}%
+            isListeningMode ? (
+              <span>
+                {currentSegIdx + 1} / {totalSegments} · {formatClockTime(currentTimeSec)} / {formatClockTime(durationSec)}
               </span>
-              <span className="hidden sm:inline">
-                {currentSegIdx + 1} / {totalSegments} · Accuracy {accuracy}%
-              </span>
-            </>
+            ) : (
+              <>
+                <span className="sm:hidden">
+                  {currentSegIdx + 1}/{totalSegments} · {accuracy}%
+                </span>
+                <span className="hidden sm:inline">
+                  {currentSegIdx + 1} / {totalSegments} · Accuracy {accuracy}%
+                </span>
+              </>
+            )
           ) : (
             "—"
           )}
@@ -119,13 +135,22 @@ export function ControlBar({
           primary
           onClick={onReplay}
         />
-        <ControlButton
-          icon={<Lightbulb size={18} />}
-          shortcut="Hint"
-          label="Hint"
-          active={showHintPanel}
-          onClick={onToggleHint}
-        />
+        {isListeningMode ? (
+          <ControlButton
+            icon={isVideoPlaying ? <Pause size={18} /> : <Play size={18} />}
+            shortcut="Play/Pause video"
+            label={isVideoPlaying ? "Pause" : "Play"}
+            onClick={onTogglePlayback}
+          />
+        ) : (
+          <ControlButton
+            icon={<Lightbulb size={18} />}
+            shortcut="Hint"
+            label="Hint"
+            active={showHintPanel}
+            onClick={onToggleHint}
+          />
+        )}
         <ControlButton
           icon={<SkipForward size={18} />}
           shortcut="Next sentence — Shift + →"

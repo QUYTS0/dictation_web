@@ -3,15 +3,15 @@ import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/ty
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
 import { SentencesTab } from "./SentencesTab";
-import type { LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
+import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
 
 export function RightPanelTabs({
   rightPanelTab,
   setRightPanelTab,
-  scriptContextSegments,
+  scriptSegments,
   currentSegIdx,
-  showPreviousScriptContext,
-  setShowPreviousScriptContext,
+  inputMode,
+  onSeekToSegment,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
@@ -42,10 +42,10 @@ export function RightPanelTabs({
 }: {
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
-  scriptContextSegments: TranscriptSegment[];
+  scriptSegments: TranscriptSegment[];
   currentSegIdx: number;
-  showPreviousScriptContext: boolean;
-  setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
+  inputMode: InputMode;
+  onSeekToSegment: (segmentIndex: number) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
@@ -135,10 +135,10 @@ export function RightPanelTabs({
       <div className="flex flex-col gap-3 p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {rightPanelTab === "script" ? (
           <ScriptTab
-            scriptContextSegments={scriptContextSegments}
+            scriptSegments={scriptSegments}
             currentSegIdx={currentSegIdx}
-            showPreviousScriptContext={showPreviousScriptContext}
-            setShowPreviousScriptContext={setShowPreviousScriptContext}
+            inputMode={inputMode}
+            onSeekToSegment={onSeekToSegment}
             translationBySegmentIndex={translationBySegmentIndex}
             scriptTranslationLoading={scriptTranslationLoading}
             scriptTranslationError={scriptTranslationError}

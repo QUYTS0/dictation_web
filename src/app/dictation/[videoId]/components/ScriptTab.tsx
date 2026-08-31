@@ -5,12 +5,13 @@ import { clsx } from "clsx";
 import { Eye } from "lucide-react";
 import type { TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import { buildScriptRenderItems, formatSegmentTimestamp } from "../helpers";
+import type { InputMode } from "../types";
 
 export function ScriptTab({
-  scriptContextSegments,
+  scriptSegments,
   currentSegIdx,
-  showPreviousScriptContext,
-  setShowPreviousScriptContext,
+  inputMode,
+  onSeekToSegment,
   translationBySegmentIndex,
   scriptTranslationLoading,
   scriptTranslationError,
@@ -25,10 +26,10 @@ export function ScriptTab({
   handlePhraseMouseLeave,
   handlePhraseTap,
 }: {
-  scriptContextSegments: TranscriptSegment[];
+  scriptSegments: TranscriptSegment[];
   currentSegIdx: number;
-  showPreviousScriptContext: boolean;
-  setShowPreviousScriptContext: (updater: (prev: boolean) => boolean) => void;
+  inputMode: InputMode;
+  onSeekToSegment: (segmentIndex: number) => void;
   translationBySegmentIndex: Map<number, string>;
   scriptTranslationLoading: boolean;
   scriptTranslationError: boolean;
@@ -43,25 +44,17 @@ export function ScriptTab({
   handlePhraseMouseLeave: () => void;
   handlePhraseTap: (event: React.MouseEvent<HTMLButtonElement>, segmentIndex: number, text: string) => void;
 }) {
-  // The currently-active sentence is blurred until tapped, so the answer
-  // isn't readable here while it's still meant to be typed from listening.
-  // Revealed once, it stays revealed for the rest of the session.
+  const isDictationMode = inputMode === "dictation";
+  // Dictation Mode only: the currently-active sentence is blurred until
+  // tapped, so the answer isn't readable here while it's still meant to be
+  // typed from listening. Revealed once, it stays revealed for the session.
+  // Listening Mode never blurs — the transcript is meant to be read.
   const [revealedSegmentIndexes, setRevealedSegmentIndexes] = useState<Set<number>>(new Set());
   const revealSegment = (segmentIndex: number) =>
     setRevealedSegmentIndexes((prev) => new Set(prev).add(segmentIndex));
 
   return (
     <>
-      {currentSegIdx > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setShowPreviousScriptContext((prev) => !prev)}
-            className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/10"
-          >
-            {showPreviousScriptContext ? "Hide previous" : "Show previous"}
-          </button>
-        </div>
-      )}
       {scriptTranslationLoading && (
         <p className="text-xs text-[var(--text-muted)]">Translating…</p>
       )}
@@ -71,7 +64,7 @@ export function ScriptTab({
       {vocabHighlightsError && (
         <p className="text-xs text-[var(--text-faint)]">Vocab highlighting is unavailable right now.</p>
       )}
-      {scriptContextSegments.length === 0 ? (
+      {scriptSegments.length === 0 ? (
         <p className="text-xs text-[var(--text-muted)]">Script is not available yet.</p>
       ) : (
         <div
@@ -79,10 +72,11 @@ export function ScriptTab({
           onMouseUp={handleScriptMouseUp}
           className="relative flex flex-col gap-2 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
         >
-          {scriptContextSegments.map((segment) => {
+          {scriptSegments.map((segment) => {
             const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;
             const isPreviousScriptSentence = segment.segmentIndex < currentSegIdx;
-            const isBlurred = isCurrentScriptSentence && !revealedSegmentIndexes.has(segment.segmentIndex);
+            const isBlurred =
+              isDictationMode && isCurrentScriptSentence && !revealedSegmentIndexes.has(segment.segmentIndex);
             const scriptRenderItems = buildScriptRenderItems(
               segment.text,
               phrasesBySegmentIndex.get(segment.segmentIndex) ?? []
@@ -92,7 +86,9 @@ export function ScriptTab({
                 key={segment.segmentIndex}
                 data-script-segment-index={segment.segmentIndex}
                 data-selection-sentence-text={segment.text}
-                className={`relative p-2.5 rounded-xl border transition-colors shadow-sm ${
+                onClick={() => onSeekToSegment(segment.segmentIndex)}
+                title={`Play from sentence ${segment.segmentIndex + 1}`}
+                className={`relative p-2.5 rounded-xl border transition-colors shadow-sm cursor-pointer ${
                   isCurrentScriptSentence
                     ? "bg-[var(--accent-soft)] border-[var(--accent-border)] ring-2 ring-[var(--accent)]/20"
                     : "bg-[var(--surface-glass)] border-[var(--border)] opacity-80 hover:opacity-100"
@@ -101,7 +97,10 @@ export function ScriptTab({
                 {isBlurred && (
                   <button
                     type="button"
-                    onClick={() => revealSegment(segment.segmentIndex)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      revealSegment(segment.segmentIndex);
+                    }}
                     className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-black/40 backdrop-blur-[1px]"
                     aria-label={`Reveal sentence ${segment.segmentIndex + 1}`}
                   >
@@ -141,6 +140,7 @@ export function ScriptTab({
                               onMouseUp={handleScriptWordMouseUp}
                               onMouseEnter={(event) => handlePhraseMouseEnter(event, segment.segmentIndex, item.text)}
                               onMouseLeave={handlePhraseMouseLeave}
+                              onClick={(event) => event.stopPropagation()}
                               title="Hover or tap to see the meaning"
                               className="cursor-pointer rounded px-0.5 -mx-0.5 underline decoration-[var(--accent)] decoration-2 underline-offset-2 transition-colors hover:bg-[var(--accent-soft)]"
                             >
@@ -164,6 +164,7 @@ export function ScriptTab({
                         <span
                           key={item.key}
                           onMouseUp={handleScriptWordMouseUp}
+                          onClick={(event) => event.stopPropagation()}
                           title="Tap to save this word/phrase"
                           className="cursor-pointer rounded px-0.5 -mx-0.5 transition-colors hover:bg-white/10"
                         >

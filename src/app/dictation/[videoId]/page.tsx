@@ -63,8 +63,6 @@ import { RightPanelTabs } from "./components/RightPanelTabs";
 import { DefaultLayout } from "./components/layouts/DefaultLayout";
 import {
   SCRIPT_POPOVER_MAX_WIDTH_PX,
-  SCRIPT_CONTEXT_NEXT_COUNT,
-  SCRIPT_CONTEXT_PREVIOUS_COUNT,
   VIDEO_SIZE_MODE_CLASS,
   COMBO_MILESTONE_INTERVAL,
   PLAYBACK_RATE_OPTIONS,
@@ -91,7 +89,6 @@ export default function DictationPage({ params }: PageProps) {
   // Local state
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("script");
-  const [showPreviousScriptContext, setShowPreviousScriptContext] = useState(false);
   const [showVideo, setShowVideo] = useState(true);
   const [workspaceInputValue, setWorkspaceInputValue] = useState("");
   const [isZenMode, setIsZenMode] = useState(false);
@@ -153,6 +150,7 @@ export default function DictationPage({ params }: PageProps) {
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
     jumpToSegment,
+    handleActiveSegmentChange,
   } = useDictationSession({ videoId, user, autoEnterPaused: inputMode === "listening" });
 
   const {
@@ -319,6 +317,17 @@ export default function DictationPage({ params }: PageProps) {
     [jumpToSegment]
   );
 
+  // Listening Mode's Play/Pause control — toggles the actual player state
+  // directly (no seeking), so pausing always preserves the current timestamp.
+  const isVideoPlaying = playerStore.status === "playing";
+  const handleTogglePlayback = useCallback(() => {
+    if (usePlayerStore.getState().status === "playing") {
+      ytPlayerRef.current?.pauseVideo();
+    } else {
+      ytPlayerRef.current?.playVideo();
+    }
+  }, [ytPlayerRef]);
+
   const handleDownloadTranscript = useCallback(() => {
     if (segments.length === 0) return;
     const text = segments.map((segment) => segment.text).join("\n");
@@ -388,18 +397,6 @@ export default function DictationPage({ params }: PageProps) {
     !!previousReview &&
     previousReview.segmentIndex === currentSegIdx - 1 &&
     uxState !== "session_completed";
-  const scriptContextStartIndex = showPreviousScriptContext
-    ? Math.max(0, currentSegIdx - SCRIPT_CONTEXT_PREVIOUS_COUNT)
-    : currentSegIdx;
-  const scriptContextSegments = useMemo(
-    () =>
-      segments.filter(
-        (segment) =>
-          segment.segmentIndex >= scriptContextStartIndex &&
-          segment.segmentIndex <= currentSegIdx + SCRIPT_CONTEXT_NEXT_COUNT
-      ),
-    [currentSegIdx, scriptContextStartIndex, segments]
-  );
   const shouldRenderVideoPlayer =
     uxState !== "loading_transcript" &&
     uxState !== "transcript_processing";
@@ -415,6 +412,8 @@ export default function DictationPage({ params }: PageProps) {
           segments={segments}
           onSegmentEnd={handleSegmentEnd}
           onReady={handlePlayerReady}
+          continuous={inputMode === "listening"}
+          onActiveSegmentChange={handleActiveSegmentChange}
         />
       </div>
     </div>
@@ -474,10 +473,6 @@ export default function DictationPage({ params }: PageProps) {
   );
 
   useEffect(() => {
-    setShowPreviousScriptContext(false);
-  }, [videoId]);
-
-  useEffect(() => {
     const wasShowingVideo = previousShowVideoRef.current;
     if (!wasShowingVideo && showVideo) {
       ytPlayerRef.current?.seekTo(playerStore.currentTimeSec, uxState === "playing");
@@ -489,6 +484,10 @@ export default function DictationPage({ params }: PageProps) {
     ytPlayerRef.current?.setPlaybackRate(playbackRate);
   }, [playbackRate, ytPlayerRef]);
 
+  // Auto-scroll the active sentence into view as playback advances — but only
+  // when it isn't already visible, so continuous playback (Listening Mode)
+  // doesn't yank the list on every sentence and a manual scroll stays put
+  // until the active sentence actually scrolls out of view.
   useEffect(() => {
     if (!showLearningPanel || rightPanelTab !== "script") return;
     const container = scriptTextContainerRef.current;
@@ -496,7 +495,12 @@ export default function DictationPage({ params }: PageProps) {
     const currentCard = container.querySelector<HTMLElement>(
       `[data-script-segment-index="${currentSegIdx}"]`
     );
-    currentCard?.scrollIntoView({ block: "nearest" });
+    if (!currentCard) return;
+    const containerRect = container.getBoundingClientRect();
+    const cardRect = currentCard.getBoundingClientRect();
+    const isFullyVisible = cardRect.top >= containerRect.top && cardRect.bottom <= containerRect.bottom;
+    if (isFullyVisible) return;
+    currentCard.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [currentSegIdx, rightPanelTab, showLearningPanel, scriptTextContainerRef]);
 
   const workspaceTitle = transcriptTitle ?? `Video ${videoId}`;
@@ -878,6 +882,10 @@ export default function DictationPage({ params }: PageProps) {
             onInputStateChange={reportInputState}
             inputMode={inputMode}
             onSelectInputMode={setInputMode}
+            isVideoPlaying={isVideoPlaying}
+            onTogglePlayback={handleTogglePlayback}
+            currentTimeSec={playerStore.currentTimeSec}
+            durationSec={playerStore.durationSec}
           />
           </div>
 
@@ -1139,10 +1147,10 @@ export default function DictationPage({ params }: PageProps) {
                 <RightPanelTabs
                   rightPanelTab={rightPanelTab}
                   setRightPanelTab={setRightPanelTab}
-                  scriptContextSegments={scriptContextSegments}
+                  scriptSegments={segments}
                   currentSegIdx={currentSegIdx}
-                  showPreviousScriptContext={showPreviousScriptContext}
-                  setShowPreviousScriptContext={setShowPreviousScriptContext}
+                  inputMode={inputMode}
+                  onSeekToSegment={jumpToSegment}
                   translationBySegmentIndex={translationBySegmentIndex}
                   scriptTranslationLoading={scriptTranslationLoading}
                   scriptTranslationError={scriptTranslationError}

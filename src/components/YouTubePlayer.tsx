@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { usePlayerStore } from "@/store/playerStore";
+import { findSegmentIndexAtTime } from "@/lib/utils/segment";
 import type { TranscriptSegment } from "@/lib/types";
 
 export interface YouTubePlayerHandle {
   playSegment: (segIdx: number) => void;
+  playVideo: () => void;
   pauseVideo: () => void;
   seekTo: (timeSec: number, autoPlay?: boolean) => void;
   setPlaybackRate: (rate: number) => void;
@@ -18,6 +20,12 @@ interface YouTubePlayerProps {
   onSegmentEnd: (segmentIndex: number) => void;
   /** Called once the underlying YouTube player is ready to accept commands */
   onReady?: () => void;
+  /** Listening Mode: play straight through sentence boundaries instead of
+   *  auto-pausing at the end of each segment. */
+  continuous?: boolean;
+  /** Continuous mode only — fires whenever playback crosses into a different
+   *  segment's time range, so the page can keep the active sentence in sync. */
+  onActiveSegmentChange?: (segmentIndex: number) => void;
 }
 
 // Small safety margin subtracted from a segment's start time before seeking, so that
@@ -33,7 +41,7 @@ declare global {
 }
 
 const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
-  function YouTubePlayer({ videoId, segments, onSegmentEnd, onReady }, ref) {
+  function YouTubePlayer({ videoId, segments, onSegmentEnd, onReady, continuous = false, onActiveSegmentChange }, ref) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const playerRef = useRef<any>(null);
     const playerReadyRef = useRef<boolean>(false);
@@ -64,6 +72,16 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       onReadyRef.current = onReady;
     }, [onReady]);
 
+    const continuousRef = useRef(continuous);
+    useEffect(() => {
+      continuousRef.current = continuous;
+    }, [continuous]);
+
+    const onActiveSegmentChangeRef = useRef(onActiveSegmentChange);
+    useEffect(() => {
+      onActiveSegmentChangeRef.current = onActiveSegmentChange;
+    }, [onActiveSegmentChange]);
+
     const startTick = useCallback(() => {
       if (tickRef.current) clearInterval(tickRef.current);
       tickRef.current = setInterval(() => {
@@ -74,6 +92,19 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
         const segs = segmentsRef.current;
         if (!segs.length) return;
+
+        // Listening Mode: play straight through — just track which segment the
+        // playhead is currently inside so the active sentence stays in sync,
+        // never auto-pause.
+        if (continuousRef.current) {
+          const idx = findSegmentIndexAtTime(segs, time);
+          if (idx !== -1 && idx !== activeSegmentIdxRef.current) {
+            activeSegmentIdxRef.current = idx;
+            setCurrentSegmentIndex(idx);
+            onActiveSegmentChangeRef.current?.(idx);
+          }
+          return;
+        }
 
         const idx = activeSegmentIdxRef.current;
         const seg = segs[idx];
@@ -184,6 +215,15 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       playerRef.current.pauseVideo();
     }, []);
 
+    // Resumes playback from wherever the player currently sits — unlike
+    // playSegment/seekTo, this never seeks. Used by the Listening Mode
+    // Play/Pause control, where pausing must preserve the current timestamp.
+    const playVideoFn = useCallback(() => {
+      if (!playerRef.current || !playerReadyRef.current) return;
+      isPausedRef.current = false;
+      playerRef.current.playVideo();
+    }, []);
+
     const playSegmentFn = useCallback(
       (segIdx: number) => {
         const seg = segmentsRef.current[segIdx];
@@ -213,6 +253,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
     useImperativeHandle(ref, () => ({
       playSegment: playSegmentFn,
+      playVideo: playVideoFn,
       pauseVideo: pauseVideoFn,
       seekTo: seekToFn,
       setPlaybackRate: setPlaybackRateFn,

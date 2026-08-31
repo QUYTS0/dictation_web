@@ -9,6 +9,14 @@ export function formatSegmentTimestamp(seconds: number): string {
   return `${minutes}:${remainderSeconds.toString().padStart(2, "0")}`;
 }
 
+/** Formats seconds as a zero-padded "mm:ss" clock, e.g. 25 -> "00:25", 272 -> "04:32". */
+export function formatClockTime(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  const remainderSeconds = total % 60;
+  return `${minutes.toString().padStart(2, "0")}:${remainderSeconds.toString().padStart(2, "0")}`;
+}
+
 export function getSelectedType(wordCount: number): LessonItemType | null {
   if (wordCount <= 0) return null;
   if (wordCount === 1) return "word";

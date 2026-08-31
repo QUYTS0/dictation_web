@@ -730,6 +730,17 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     [segments.length, triggerAutoSave]
   );
 
+  // ---- Listening Mode continuous playback: silently keep currentSegIdx in
+  // sync with whatever sentence the playhead is inside, as reported by
+  // YouTubePlayer's continuous-mode tick. Unlike jumpToSegment/handleSegmentEnd,
+  // this never touches checkResult/hint/uxState — it's just an index sync, not
+  // a navigation action, and fires many times per playback as sentences pass. ----
+  const handleActiveSegmentChange = useCallback((segIdx: number) => {
+    if (segIdx === currentSegIdxRef.current) return;
+    currentSegIdxRef.current = segIdx;
+    setCurrentSegIdx(segIdx);
+  }, []);
+
   const handleRestart = useCallback(() => {
     if (!user) return;
     void restartSession(videoId, resumeState?.sessionId)
@@ -787,6 +798,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     handleResume,
     handleRestart,
     jumpToSegment,
+    handleActiveSegmentChange,
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
   };

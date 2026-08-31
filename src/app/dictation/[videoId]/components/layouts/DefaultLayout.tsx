@@ -61,6 +61,10 @@ export function DefaultLayout({
   onInputStateChange,
   inputMode,
   onSelectInputMode,
+  isVideoPlaying,
+  onTogglePlayback,
+  currentTimeSec,
+  durationSec,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -104,6 +108,10 @@ export function DefaultLayout({
   onInputStateChange?: (state: PersistedInputState) => void;
   inputMode: InputMode;
   onSelectInputMode: (mode: InputMode) => void;
+  isVideoPlaying: boolean;
+  onTogglePlayback: () => void;
+  currentTimeSec: number;
+  durationSec: number;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -296,6 +304,10 @@ export function DefaultLayout({
               setTranslationVisibility={setTranslationVisibility}
               inputMode={inputMode}
               onSelectInputMode={onSelectInputMode}
+              isVideoPlaying={isVideoPlaying}
+              onTogglePlayback={onTogglePlayback}
+              currentTimeSec={currentTimeSec}
+              durationSec={durationSec}
             />
           </div>
         </>
