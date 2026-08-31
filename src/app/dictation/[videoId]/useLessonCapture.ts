@@ -8,7 +8,7 @@ import {
   SCRIPT_POPOVER_VERTICAL_OFFSET_PX,
   SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR,
 } from "./constants";
-import { getSelectedType, splitSentenceIntoWords, inferSavedItemType } from "./helpers";
+import { getSelectedType, splitSentenceIntoWords, inferSavedItemType, stripEdgePunctuation } from "./helpers";
 import type { LessonItemType, LessonSavedItem, ScriptSelectionPopoverState } from "./types";
 
 interface UseLessonCaptureOptions {
@@ -516,7 +516,7 @@ export function useLessonCapture({
         return;
       }
 
-      const selectedText = selection.toString().replace(/\s+/g, " ").trim();
+      const selectedText = stripEdgePunctuation(selection.toString().replace(/\s+/g, " ").trim());
       if (!selectedText) {
         setScriptPopover(null);
         clearLearningNoteInputs();

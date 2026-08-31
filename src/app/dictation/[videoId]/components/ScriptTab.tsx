@@ -164,7 +164,7 @@ export function ScriptTab({
                     }`}
                   >
                     {scriptRenderItems.map((item) => {
-                      if (item.kind === "space") return item.text;
+                      if (item.kind === "space" || item.kind === "punct") return item.text;
                       if (item.kind === "phrase") {
                         return (
                           <span key={item.key} className="whitespace-nowrap">

@@ -93,8 +93,29 @@ function getHighlightedPhraseRuns(text: string, phrases: VocabHighlightPhrase[])
 
 export type ScriptRenderItem =
   | { kind: "space"; key: string; text: string }
+  | { kind: "punct"; key: string; text: string }
   | { kind: "word"; key: string; text: string }
   | { kind: "phrase"; key: string; text: string };
+
+const LEADING_PUNCTUATION = /^[^\p{L}\p{N}]+/u;
+const TRAILING_PUNCTUATION = /[^\p{L}\p{N}]+$/u;
+
+/**
+ * Trims leading/trailing punctuation (quotes, commas, periods, parens, a
+ * lone dash, etc.) while preserving apostrophes/hyphens that sit *inside*
+ * a word (e.g. "don't", "self-talk") — those never reach the string edges.
+ */
+export function stripEdgePunctuation(text: string): string {
+  return text.replace(LEADING_PUNCTUATION, "").replace(TRAILING_PUNCTUATION, "");
+}
+
+function splitEdgePunctuation(text: string): { leading: string; core: string; trailing: string } {
+  const leading = text.match(LEADING_PUNCTUATION)?.[0] ?? "";
+  const rest = leading ? text.slice(leading.length) : text;
+  const trailing = rest.match(TRAILING_PUNCTUATION)?.[0] ?? "";
+  const core = trailing ? rest.slice(0, rest.length - trailing.length) : rest;
+  return { leading, core, trailing };
+}
 
 /**
  * Turns a sentence + its AI-picked difficult phrases into a flat render
@@ -102,6 +123,9 @@ export type ScriptRenderItem =
  * tap-to-save), except tokens inside a highlighted phrase are collapsed
  * into one "phrase" item spanning the whole phrase — so it highlights,
  * selects, and previews as one seamless unit instead of word-by-word.
+ * Punctuation at the very edges of a phrase (e.g. the comma in "if not
+ * all,") is split back out into a plain "punct" item so it stays visible
+ * but outside the underline/click area.
  */
 export function buildScriptRenderItems(text: string, phrases: VocabHighlightPhrase[]): ScriptRenderItem[] {
   const tokens = splitSentenceIntoTokens(text);
@@ -117,7 +141,10 @@ export function buildScriptRenderItems(text: string, phrases: VocabHighlightPhra
     if (consumed.has(idx)) return;
     const run = runByStart.get(idx);
     if (run) {
-      items.push({ kind: "phrase", key: `phrase-${idx}`, text: run.text });
+      const { leading, core, trailing } = splitEdgePunctuation(run.text);
+      if (leading) items.push({ kind: "punct", key: `phrase-lead-${idx}`, text: leading });
+      if (core) items.push({ kind: "phrase", key: `phrase-${idx}`, text: core });
+      if (trailing) items.push({ kind: "punct", key: `phrase-trail-${idx}`, text: trailing });
       return;
     }
     items.push(token.trim() ? { kind: "word", key: `word-${idx}`, text: token } : { kind: "space", key: `space-${idx}`, text: token });
