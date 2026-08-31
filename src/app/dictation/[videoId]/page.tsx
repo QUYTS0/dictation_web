@@ -616,12 +616,13 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full flex-1 flex-col overflow-y-auto px-4 gap-4 lg:flex-row lg:overflow-hidden">
+      <main className="mx-auto flex w-full flex-1 min-h-0 flex-col overflow-hidden px-4 gap-4 lg:flex-row">
         <motion.div
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
-            "flex flex-col lg:h-full lg:min-h-0 lg:min-w-0 lg:flex-1 lg:overflow-hidden",
+            "flex flex-col min-h-0 overflow-y-auto overflow-x-hidden lg:h-full lg:min-w-0 lg:flex-1 lg:overflow-hidden",
+            !isPracticing && "flex-1",
             isZenMode && "z-50"
           )}
         >
@@ -1120,13 +1121,13 @@ export default function DictationPage({ params }: PageProps) {
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
-                "shrink-0 overflow-hidden",
+                "flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-none",
                 isZenMode
                   ? "w-full sm:fixed sm:top-4 sm:right-4 sm:bottom-4 sm:z-[60] sm:w-[360px] sm:max-w-[calc(100vw-2rem)]"
                   : "w-full lg:h-full lg:pt-3 lg:w-[clamp(340px,24vw,400px)]"
               )}
             >
-                <div className="w-full h-full flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
+                <div className="w-full h-full min-h-0 flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
                 <RightPanelTabs
                   rightPanelTab={rightPanelTab}
                   setRightPanelTab={setRightPanelTab}

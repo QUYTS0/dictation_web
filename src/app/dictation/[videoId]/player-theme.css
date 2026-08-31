@@ -62,6 +62,23 @@
   background-color: rgba(255, 255, 255, 0.32) !important;
 }
 
+/* Reserves a consistent height for the mobile transcript + translation area
+   (below the `lg` breakpoint, where the two-column desktop layout collapses
+   to one stacked column) so switching sentences never changes this block's
+   height and shifts the control bar / bottom panel below it. Neutralized at
+   `lg` by pairing this class with `lg:contents` on the element itself, which
+   drops it out of the box model entirely regardless of this rule. */
+.mobile-transcript-area {
+  min-height: 180px;
+}
+
+/* iOS momentum scrolling for internally-scrollable mobile panels (e.g. the
+   bottom Script/Words/Sentences panel) — overflow-y-auto alone scrolls but
+   feels sluggish/stepped on iOS Safari without this. */
+.momentum-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
 @keyframes dictation-caret-blink {
   0%, 45% { opacity: 1; }
   50%, 95% { opacity: 0; }

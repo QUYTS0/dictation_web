@@ -49,7 +49,7 @@ export function SentencesTab({
   onJumpBookmark: (segmentIndex: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+    <div className="momentum-scroll flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overflow-x-hidden overscroll-contain">
       <div className="flex flex-col gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">Saved sentences</p>
         {sentenceItems.length === 0 ? (

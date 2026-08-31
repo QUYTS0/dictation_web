@@ -102,7 +102,7 @@ export function ScriptTab({
         <div
           ref={scriptTextContainerRef}
           onMouseUp={handleScriptMouseUp}
-          className="script-scrollbar relative flex flex-col gap-2 pr-1 text-sm lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
+          className="script-scrollbar momentum-scroll relative flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden overscroll-contain pr-1 text-sm"
         >
           {scriptSegments.map((segment) => {
             const isCurrentScriptSentence = segment.segmentIndex === currentSegIdx;

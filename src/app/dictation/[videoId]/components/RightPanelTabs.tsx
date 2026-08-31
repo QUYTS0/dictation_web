@@ -87,7 +87,7 @@ export function RightPanelTabs({
 }) {
   return (
     <>
-      <div className="flex items-center gap-2 mx-3 mt-2">
+      <div className="flex shrink-0 items-center gap-2 mx-3 mt-2">
         <div className="flex flex-1 bg-[var(--surface-2)] border border-[var(--border)] p-1 rounded-xl shadow-inner text-[var(--text)]">
           <button
             onClick={() => setRightPanelTab("script")}
@@ -132,7 +132,7 @@ export function RightPanelTabs({
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+      <div className="momentum-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden overscroll-contain p-3">
         {rightPanelTab === "script" ? (
           <ScriptTab
             scriptSegments={scriptSegments}

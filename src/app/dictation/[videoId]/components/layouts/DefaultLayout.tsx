@@ -148,6 +148,13 @@ export function DefaultLayout({
 
       {isPracticing && (
         <>
+          {/* Reserves a stable height for the sentence + translation area on
+              mobile (below `lg`) so switching sentences never resizes this
+              block and shifts the control bar below it — content is
+              vertically centered within that reserved space instead. At
+              `lg` and up, `contents` drops this wrapper out of the box model
+              entirely, leaving the existing desktop layout untouched. */}
+          <div className="mobile-transcript-area flex flex-col justify-center lg:contents">
           <div className="mt-3">
             <div className="relative min-w-0">
               <div
@@ -239,6 +246,7 @@ export function DefaultLayout({
               {translationText}
             </p>
           )}
+          </div>
 
           {checkAnswerError && (
             <p role="alert" className="mt-2 flex items-center gap-2 text-xs text-[var(--red)]">

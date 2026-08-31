@@ -65,7 +65,7 @@ export function LessonSavedItemsList({
   return (
     <div
       className={clsx(
-        "flex flex-col gap-2 overflow-y-auto pr-1",
+        "momentum-scroll flex flex-col gap-2 overflow-y-auto overscroll-contain pr-1",
         compact && "pr-0",
         scrollClassName ?? "max-h-52"
       )}
