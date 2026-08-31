@@ -71,7 +71,7 @@
    by pairing this class with `md:contents` on the element itself (and its
    inner wrappers), which drops them out of the box model entirely. */
 .mobile-transcript-stage {
-  height: clamp(170px, 22svh, 210px);
+  height: clamp(200px, 22svh, 240px);
 }
 
 /* Internal fallback scroll for a transcript that still doesn't fit at the

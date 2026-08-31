@@ -312,10 +312,8 @@ export function SentenceWordInput({
       />
 
       <div
-        data-transcript-english
-        style={fontSizePx ? { fontSize: `${fontSizePx}px` } : undefined}
         className={clsx(
-          "w-full px-4 py-4 text-center text-xl leading-loose md:px-14",
+          "w-full px-2 py-4 text-center text-xl leading-loose md:px-14",
           showMask ? "font-mono tracking-wide" : "font-medium",
           maskBlurred && "blur-sm"
         )}
