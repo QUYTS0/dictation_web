@@ -11,6 +11,7 @@ export type LessonItemType = "word" | "phrase" | "sentence";
 export type RightPanelTab = "script" | "words" | "sentences";
 export type VideoSizeMode = "standard" | "large";
 export type PracticeMode = "easy" | "hard";
+export type InputMode = "dictation" | "listening";
 
 export interface ShortcutEntry {
   keys: string;

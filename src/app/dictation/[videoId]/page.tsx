@@ -45,6 +45,7 @@ import { usePlaybackRatePreference } from "./usePlaybackRatePreference";
 import { useAutoAdvancePreference } from "./useAutoAdvancePreference";
 import { usePracticeModePreference } from "./usePracticeModePreference";
 import { useSubtitleVisibilityPreference } from "./useSubtitleVisibilityPreference";
+import { useInputModePreference } from "./useInputModePreference";
 import { useStreak } from "./useStreak";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
@@ -101,6 +102,7 @@ export default function DictationPage({ params }: PageProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
   const [showReplayHint, setShowReplayHint] = useState(false);
+  const { inputMode, setInputMode } = useInputModePreference(videoId);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -151,7 +153,7 @@ export default function DictationPage({ params }: PageProps) {
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
     jumpToSegment,
-  } = useDictationSession({ videoId, user });
+  } = useDictationSession({ videoId, user, autoEnterPaused: inputMode === "listening" });
 
   const {
     bookmarkedSegmentIndexes,
@@ -377,10 +379,10 @@ export default function DictationPage({ params }: PageProps) {
   }, [currentSegIdx]);
 
   useEffect(() => {
-    if (!shouldShowInput) return;
+    if (!shouldShowInput || inputMode !== "dictation") return;
     const t = window.setTimeout(() => workspaceInputRef.current?.focus(), 30);
     return () => window.clearTimeout(t);
-  }, [inputFocusSignal, shouldShowInput]);
+  }, [inputFocusSignal, shouldShowInput, inputMode]);
 
   const shouldShowPreviousReview =
     !!previousReview &&
@@ -829,7 +831,6 @@ export default function DictationPage({ params }: PageProps) {
           </MobileBottomSheet>
 
           <DefaultLayout
-            videoId={videoId}
             isZenMode={isZenMode}
             showVideo={showVideo}
             videoBlock={videoBlock}
@@ -875,6 +876,8 @@ export default function DictationPage({ params }: PageProps) {
             initialInputState={restoredInputState}
             onRestoreConsumed={consumeRestoredInputState}
             onInputStateChange={reportInputState}
+            inputMode={inputMode}
+            onSelectInputMode={setInputMode}
           />
           </div>
 

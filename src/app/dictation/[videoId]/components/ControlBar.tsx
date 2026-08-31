@@ -6,10 +6,9 @@ import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
 import { ModeSwitcher } from "./ModeSwitcher";
-import type { SubtitleVisibility, SubtitleVisibilityState } from "../types";
+import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
 
 export function ControlBar({
-  videoId,
   currentSegIdx,
   totalSegments,
   accuracy,
@@ -27,8 +26,9 @@ export function ControlBar({
   subtitleVisibility,
   setOriginalVisibility,
   setTranslationVisibility,
+  inputMode,
+  onSelectInputMode,
 }: {
-  videoId: string;
   currentSegIdx: number;
   totalSegments: number;
   accuracy: number;
@@ -46,6 +46,8 @@ export function ControlBar({
   subtitleVisibility: SubtitleVisibilityState;
   setOriginalVisibility: (value: SubtitleVisibility) => void;
   setTranslationVisibility: (value: SubtitleVisibility) => void;
+  inputMode: InputMode;
+  onSelectInputMode: (mode: InputMode) => void;
 }) {
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
@@ -164,13 +166,19 @@ export function ControlBar({
           <ControlButton
             icon={<LayoutGrid size={18} />}
             shortcut="Switch mode"
-            label="Mode"
+            label={inputMode === "listening" ? "Listening" : "Dictation"}
             active
             onClick={() => setShowModePopover((v) => !v)}
           />
           {showModePopover && (
             <div ref={modePopoverRef} className="absolute bottom-full right-0 z-50 mb-2">
-              <ModeSwitcher videoId={videoId} />
+              <ModeSwitcher
+                inputMode={inputMode}
+                onSelectMode={(mode) => {
+                  onSelectInputMode(mode);
+                  setShowModePopover(false);
+                }}
+              />
             </div>
           )}
         </div>

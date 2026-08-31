@@ -168,7 +168,7 @@ export default function DashboardPage() {
         return;
       }
 
-      router.push(`/${studyMode}/${data.videoId}`);
+      router.push(studyMode === "listening" ? `/dictation/${data.videoId}?mode=listening` : `/dictation/${data.videoId}`);
     } catch {
       setStartError("Network error. Please check your connection and try again.");
     } finally {

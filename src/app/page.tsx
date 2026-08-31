@@ -106,7 +106,7 @@ export default function HomePage() {
         return;
       }
 
-      router.push(`/${mode}/${data.videoId}`);
+      router.push(mode === "listening" ? `/dictation/${data.videoId}?mode=listening` : `/dictation/${data.videoId}`);
     } catch {
       setError("Network error. Please check your connection and try again.");
     } finally {

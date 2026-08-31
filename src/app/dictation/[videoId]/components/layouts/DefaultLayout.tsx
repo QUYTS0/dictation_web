@@ -10,7 +10,8 @@ import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
-import type { PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
+import { ListeningTranscript } from "../ListeningTranscript";
+import type { InputMode, PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 import type { PersistedInputState } from "../../sessionPersistence";
 
 interface CurrentSegment {
@@ -18,7 +19,6 @@ interface CurrentSegment {
 }
 
 export function DefaultLayout({
-  videoId,
   isZenMode,
   showVideo,
   videoBlock,
@@ -59,8 +59,9 @@ export function DefaultLayout({
   initialInputState,
   onRestoreConsumed,
   onInputStateChange,
+  inputMode,
+  onSelectInputMode,
 }: {
-  videoId: string;
   isZenMode: boolean;
   showVideo: boolean;
   videoBlock: ReactNode;
@@ -101,8 +102,11 @@ export function DefaultLayout({
   initialInputState?: PersistedInputState | null;
   onRestoreConsumed?: () => void;
   onInputStateChange?: (state: PersistedInputState) => void;
+  inputMode: InputMode;
+  onSelectInputMode: (mode: InputMode) => void;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
+  const isDictationMode = inputMode === "dictation";
   const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
   const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
@@ -139,6 +143,7 @@ export function DefaultLayout({
           <div className="mt-3">
             <div className="relative min-w-0">
               <div
+                hidden={!isDictationMode}
                 onClick={() => workspaceInputRef.current?.focus()}
                 className={`relative h-full rounded-2xl overflow-hidden border transition-all ${
                   workspaceStatus === "success"
@@ -194,8 +199,14 @@ export function DefaultLayout({
                 </div>
               </div>
 
+              {!isDictationMode && (
+                <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
+                  <ListeningTranscript text={currentSegment?.text ?? ""} />
+                </div>
+              )}
+
               <AnimatePresence>
-                {workspaceStatus === "success" && isLastResultClean && (
+                {isDictationMode && workspaceStatus === "success" && isLastResultClean && (
                   <motion.span
                     key="first-try-badge"
                     initial={{ opacity: 0, y: 4, scale: 0.8 }}
@@ -266,7 +277,6 @@ export function DefaultLayout({
             </AnimatePresence>
 
             <ControlBar
-              videoId={videoId}
               currentSegIdx={currentSegIdx}
               totalSegments={totalSegments}
               accuracy={accuracy}
@@ -284,6 +294,8 @@ export function DefaultLayout({
               subtitleVisibility={subtitleVisibility}
               setOriginalVisibility={setOriginalVisibility}
               setTranslationVisibility={setTranslationVisibility}
+              inputMode={inputMode}
+              onSelectInputMode={onSelectInputMode}
             />
           </div>
         </>

@@ -38,6 +38,11 @@ const ACTIVE_SESSION_UX_STATES: UXState[] = [
 interface UseDictationSessionOptions {
   videoId: string;
   user: User | null;
+  /** When true, skip the "Start Dictation"/"Resume at sentence N" click-through
+   *  screen entirely and land directly in a paused, ready-to-continue state as
+   *  soon as the transcript is ready — used for Listening Mode entries, which
+   *  must never show an intermediate start screen or autoplay the video. */
+  autoEnterPaused?: boolean;
 }
 
 /**
@@ -48,7 +53,7 @@ interface UseDictationSessionOptions {
  * since its pieces (segment index, playback, answer checking, autosave) are
  * all facets of the same session, not separable concerns.
  */
-export function useDictationSession({ videoId, user }: UseDictationSessionOptions) {
+export function useDictationSession({ videoId, user, autoEnterPaused = false }: UseDictationSessionOptions) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
 
@@ -62,6 +67,11 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
+  // Flips true once the server resume check has settled one way or another
+  // (found a session, found none, or was skipped for a guest) — distinct from
+  // resumeLoading, which starts false and is indistinguishable from "not
+  // started yet". autoEnterPaused waits on this to avoid racing the fetch.
+  const [resumeChecked, setResumeChecked] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
@@ -517,7 +527,12 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
 
   // ---- Load resumable session for authenticated users ----
   useEffect(() => {
-    if (!user || transcriptStatus !== "ready" || resumeLoadedRef.current) return;
+    if (transcriptStatus !== "ready" || resumeLoadedRef.current) return;
+    if (!user) {
+      resumeLoadedRef.current = true;
+      setResumeChecked(true);
+      return;
+    }
     setResumeLoading(true);
     fetchResumeSession(videoId)
       .then((data) => {
@@ -544,6 +559,7 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       .finally(() => {
         resumeLoadedRef.current = true;
         setResumeLoading(false);
+        setResumeChecked(true);
       });
   }, [transcriptStatus, user, videoId]);
 
@@ -656,6 +672,47 @@ export function useDictationSession({ videoId, user }: UseDictationSessionOption
       }, RESUME_SEEK_DELAY_MS);
     }
   }, [resumeState, segments.length, sessionStore]);
+
+  // ---- Auto-enter a paused, ready-to-continue state for Listening Mode
+  // entries (see autoEnterPaused) — the equivalent of clicking "Start
+  // Dictation"/"Resume at sentence N", minus the click and minus autoplay.
+  // Waits for the resume check to settle first so it doesn't race the fetch
+  // and mistake "no saved progress" for "still loading". Reuses the same
+  // pending-seek/player-ready plumbing as the sessionStorage snapshot restore
+  // above, since the player may not be ready yet this early in the mount.
+  const autoEnterAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (!autoEnterPaused || autoEnterAttemptedRef.current) return;
+    if (uxState !== "transcript_ready" || segments.length === 0 || !resumeChecked) return;
+    autoEnterAttemptedRef.current = true;
+
+    if (resumeState) {
+      const segIdx = Math.min(Math.max(resumeState.currentSegmentIndex, 0), segments.length - 1);
+      sessionStore.setSessionId(resumeState.sessionId);
+      sessionStore.hydrateAccuracy(
+        resumeState.totalAttempts,
+        Math.round((resumeState.accuracy / 100) * resumeState.totalAttempts)
+      );
+      currentSegIdxRef.current = segIdx;
+      setCurrentSegIdx(segIdx);
+      setResumeState(null);
+      setUxState("paused_waiting_input");
+      const resumeTimeSec = resumeState.videoCurrentTimeSec;
+      if (resumeTimeSec > 0) {
+        if (playerReadyForRestoreRef.current) {
+          ytPlayerRef.current?.seekTo(resumeTimeSec, false);
+        } else {
+          pendingRestoreSeekSecRef.current = resumeTimeSec;
+        }
+      }
+    } else {
+      // No saved progress: sentence 1, timestamp 0 — which is already where a
+      // freshly loaded player sits, so no seek is needed, just leave the
+      // "Start Dictation" screen for the paused practicing view.
+      triggerAutoSave(0, "active");
+      setUxState("paused_waiting_input");
+    }
+  }, [autoEnterPaused, uxState, segments.length, resumeChecked, resumeState, sessionStore, triggerAutoSave]);
 
   // ---- Jump directly to an arbitrary segment (e.g. from a bookmark deep link) ----
   const jumpToSegment = useCallback(
