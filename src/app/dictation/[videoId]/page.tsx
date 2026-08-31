@@ -961,7 +961,7 @@ export default function DictationPage({ params }: PageProps) {
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               transition={{ duration: 0.3, ease: "easeInOut" }}
               className={clsx(
-                "flex h-[min(70svh,640px)] min-h-[420px] w-full flex-col overflow-hidden pb-[env(safe-area-inset-bottom)]",
+                "flex h-[min(60svh,750px)] min-h-[360px] w-full flex-col overflow-hidden pb-[env(safe-area-inset-bottom)]",
                 "md:h-auto md:min-h-0 md:flex-1 md:pb-0 lg:flex-none",
                 isZenMode
                   ? "md:fixed md:top-4 md:right-4 md:bottom-4 md:z-[60] md:w-[360px] md:max-w-[calc(100vw-2rem)]"
