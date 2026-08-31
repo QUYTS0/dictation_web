@@ -11,6 +11,7 @@ import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
 import { ListeningTranscript } from "../ListeningTranscript";
+import { useTranscriptAutoFit } from "../../useTranscriptAutoFit";
 import type { InputMode, PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 import type { PersistedInputState } from "../../sessionPersistence";
 import type { PLAYBACK_RATE_OPTIONS } from "../../constants";
@@ -123,6 +124,19 @@ export function DefaultLayout({
   const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
   const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
+  const showTranslation = !!translationText && subtitleVisibility.translation !== "hide";
+
+  // Fits the English + Vietnamese pair inside the mobile transcript stage's
+  // fixed height (shrinking font/gap, then falling back to internal scroll)
+  // instead of letting the stage grow/shrink with each sentence — see
+  // useTranscriptAutoFit for why that's what causes the page to jump.
+  const { contentRef, measureRef, englishFontPx, gapPx, needsScroll } = useTranscriptAutoFit([
+    currentSegIdx,
+    currentSegment?.text,
+    translationText,
+    isDictationMode,
+    showTranslation,
+  ]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -159,19 +173,29 @@ export function DefaultLayout({
 
       {isPracticing && (
         <>
-          {/* Reserves a stable height for the sentence + translation area on
-              mobile (below `lg`) so switching sentences never resizes this
-              block and shifts the control bar below it — content is
-              vertically centered within that reserved space instead. At
-              `lg` and up, `contents` drops this wrapper out of the box model
-              entirely, leaving the existing desktop layout untouched. */}
-          <div className="mobile-transcript-area flex flex-col justify-center lg:contents">
-          <div className="mt-3">
+          {/* Fixed-height stage on mobile (below `md`) so switching sentences
+              never resizes this block and shifts the control bar below it —
+              useTranscriptAutoFit shrinks font/gap or scrolls internally
+              instead of letting the box grow. `md:contents` (chained through
+              every wrapper level here) drops the whole stage out of the box
+              model at `md` and up, leaving the desktop layout untouched. */}
+          <div className="mobile-transcript-stage md:contents">
+          <div
+            ref={contentRef}
+            className="transcript-content h-full md:contents"
+            style={{ overflowY: needsScroll ? "auto" : "hidden" }}
+          >
+          <div
+            ref={measureRef}
+            className="flex h-full flex-col justify-center md:contents"
+            style={{ gap: `${gapPx}px` }}
+          >
+          <div className="mt-3 md:contents">
             <div className="relative min-w-0">
               <div
                 hidden={!isDictationMode}
                 onClick={() => workspaceInputRef.current?.focus()}
-                className={`relative h-full rounded-2xl overflow-hidden border transition-all ${
+                className={`relative h-full rounded-2xl overflow-hidden border transition-colors ${
                   workspaceStatus === "success"
                     ? "border-[var(--green)] bg-[var(--green)]/10"
                     : workspaceStatus === "error"
@@ -191,6 +215,7 @@ export function DefaultLayout({
                   initialInputState={initialInputState}
                   onRestoreConsumed={onRestoreConsumed}
                   onInputStateChange={onInputStateChange}
+                  fontSizePx={isDictationMode ? englishFontPx : undefined}
                 />
 
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
@@ -227,7 +252,7 @@ export function DefaultLayout({
 
               {!isDictationMode && (
                 <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
-                  <ListeningTranscript text={currentSegment?.text ?? ""} />
+                  <ListeningTranscript text={currentSegment?.text ?? ""} fontSizePx={englishFontPx} />
                 </div>
               )}
 
@@ -247,16 +272,18 @@ export function DefaultLayout({
             </div>
           </div>
 
-          {translationText && subtitleVisibility.translation !== "hide" && (
+          {showTranslation && (
             <p
               className={clsx(
-                "mt-2 text-center text-base text-[var(--text-muted)]",
+                "mt-0 text-center text-base text-[var(--text-muted)] md:mt-2",
                 subtitleVisibility.translation === "blur" && "blur-sm select-none"
               )}
             >
               {translationText}
             </p>
           )}
+          </div>
+          </div>
           </div>
 
           {checkAnswerError && (

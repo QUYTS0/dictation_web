@@ -115,6 +115,7 @@ export function SentenceWordInput({
   initialInputState,
   onRestoreConsumed,
   onInputStateChange,
+  fontSizePx,
 }: {
   targetText: string;
   resetToken: string;
@@ -131,6 +132,10 @@ export function SentenceWordInput({
   onRestoreConsumed?: () => void;
   /** Mirrors the live word/caret position up so it can be included in the session snapshot. */
   onInputStateChange?: (state: PersistedInputState) => void;
+  /** Overrides the default text-xl size — set by the mobile transcript stage's
+   *  auto-fit hook when a long sentence needs a smaller size to fit without
+   *  resizing the stage itself. Omitted (desktop) keeps the default size. */
+  fontSizePx?: number;
 }) {
   const words = useMemo(() => buildWordCharSlots(targetText), [targetText]);
   const [typedByWord, setTypedByWord] = useState<string[]>([]);
@@ -307,6 +312,8 @@ export function SentenceWordInput({
       />
 
       <div
+        data-transcript-english
+        style={fontSizePx ? { fontSize: `${fontSizePx}px` } : undefined}
         className={clsx(
           "w-full px-4 py-4 text-center text-xl leading-loose md:px-14",
           showMask ? "font-mono tracking-wide" : "font-medium",

@@ -62,14 +62,28 @@
   background-color: rgba(255, 255, 255, 0.32) !important;
 }
 
-/* Reserves a consistent height for the mobile transcript + translation area
-   (below the `lg` breakpoint, where the two-column desktop layout collapses
-   to one stacked column) so switching sentences never changes this block's
-   height and shifts the control bar / bottom panel below it. Neutralized at
-   `lg` by pairing this class with `lg:contents` on the element itself, which
-   drops it out of the box model entirely regardless of this rule. */
-.mobile-transcript-area {
-  min-height: 180px;
+/* Fixed (not min-) height for the mobile transcript + translation stage
+   (below the `md` breakpoint, where the two-column desktop layout collapses
+   to one stacked column) so switching sentences NEVER changes this block's
+   footprint — content is fit or scrolled inside it instead, see
+   useTranscriptAutoFit. `svh` (not `dvh`) so the box doesn't resize as a
+   mobile browser's toolbar shows/hides while scrolling. Neutralized at `md`
+   by pairing this class with `md:contents` on the element itself (and its
+   inner wrappers), which drops them out of the box model entirely. */
+.mobile-transcript-stage {
+  height: clamp(170px, 22svh, 210px);
+}
+
+/* Internal fallback scroll for a transcript that still doesn't fit at the
+   smallest safe font size — scrollbar hidden since the fixed-height stage
+   itself is the visual boundary, not a typical scroll panel. */
+.transcript-content {
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.transcript-content::-webkit-scrollbar {
+  display: none;
 }
 
 /* iOS momentum scrolling for internally-scrollable mobile panels (e.g. the
