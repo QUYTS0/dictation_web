@@ -1,10 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
-import { YoutubeTranscript } from "youtube-transcript";
+import {
+  YoutubeTranscript,
+  YoutubeTranscriptDisabledError,
+  YoutubeTranscriptNotAvailableError,
+  YoutubeTranscriptNotAvailableLanguageError,
+  YoutubeTranscriptVideoUnavailableError,
+} from "youtube-transcript";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { normalizeText } from "@/lib/utils/text";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
+
+const TRANSIENT_RETRY_DELAY_MS = 1000;
+
+/**
+ * Retries once on errors that don't definitively mean "this video has no
+ * captions" (e.g. YouTube's rate-limit/captcha response, or a network blip) —
+ * without this, a single transient hiccup permanently stamps the transcript
+ * "failed" and nothing ever retries it (GET only re-triggers generation for
+ * "processing", not "failed").
+ */
+async function fetchTranscriptWithRetry(videoId: string, language: string) {
+  try {
+    return await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+  } catch (err) {
+    const isPermanent =
+      err instanceof YoutubeTranscriptDisabledError ||
+      err instanceof YoutubeTranscriptNotAvailableError ||
+      err instanceof YoutubeTranscriptNotAvailableLanguageError ||
+      err instanceof YoutubeTranscriptVideoUnavailableError;
+    if (isPermanent) throw err;
+
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[transcript generate] transient caption fetch error for ${videoId}, retrying once: ${errMsg}`
+    );
+    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
+    return await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+  }
+}
 
 interface GenerateRequest {
   videoId: string;
@@ -150,7 +185,7 @@ export async function POST(request: NextRequest) {
     } else {
       let ytItems;
       try {
-        ytItems = await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+        ytItems = await fetchTranscriptWithRetry(videoId, language);
       } catch (captionErr) {
         // Expected/handled condition (no captions, or disabled) — the caller
         // falls back to the manual-paste UI, so this isn't a server error.
