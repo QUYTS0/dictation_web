@@ -764,25 +764,30 @@ export function useLessonCapture({
       return;
     }
 
-    // A multi-word selection that exactly matches an AI-highlighted phrase
-    // already has its translation from the same Gemini call that picked it.
-    // For phrases that's all the preview endpoint would return anyway
-    // (dictionary/image lookups only apply to single words), so this skips
-    // the request entirely instead of re-translating what Gemini just gave us.
-    if (scriptPopover.selectedWordCount > 1) {
-      const aiTranslation = findPhraseTranslation(scriptPopover.segmentIndex, scriptPopover.selectedText);
-      if (aiTranslation) {
-        setScriptPopoverPreview({ translation: { text: aiTranslation, source: "gemini" }, wordDetails: null, image: null });
-        setScriptPopoverPreviewLoading(false);
-        setScriptPopoverPreviewError(false);
-        return;
-      }
+    // A highlighted word/phrase already has a translation from the same
+    // Gemini call that picked it as difficult — that's free, instant, and
+    // takes priority over the free Google-Translate scraper below (which
+    // can rate-limit/fail under load). Show it right away. A phrase (2+
+    // words) has nothing else the preview endpoint would add (dictionary/
+    // image lookups only apply to single words), so it skips the request
+    // entirely; a single word still fetches in the background for
+    // phonetic/definition/audio/image, without letting Google's translation
+    // override Gemini's once we already have it.
+    const aiTranslation = findPhraseTranslation(scriptPopover.segmentIndex, scriptPopover.selectedText);
+    const needsDictionaryLookup = scriptPopover.selectedWordCount === 1;
+
+    if (aiTranslation) {
+      setScriptPopoverPreview({ translation: { text: aiTranslation, source: "gemini" }, wordDetails: null, image: null });
+      setScriptPopoverPreviewError(false);
+      setScriptPopoverPreviewLoading(needsDictionaryLookup);
+      if (!needsDictionaryLookup) return;
+    } else {
+      setScriptPopoverPreview(null);
+      setScriptPopoverPreviewLoading(true);
+      setScriptPopoverPreviewError(false);
     }
 
     const controller = new AbortController();
-    setScriptPopoverPreview(null);
-    setScriptPopoverPreviewLoading(true);
-    setScriptPopoverPreviewError(false);
 
     const timer = window.setTimeout(() => {
       void fetch("/api/vocabulary/preview", {
@@ -796,11 +801,24 @@ export function useLessonCapture({
       })
         .then((res) => (res.ok ? (res.json() as Promise<VocabularyPreviewResponse>) : Promise.reject(res)))
         .then((data: VocabularyPreviewResponse) => {
+          if (aiTranslation) {
+            // Gemini's translation stays on screen; only the dictionary
+            // details/image this call adds are new information.
+            setScriptPopoverPreview({ ...data, translation: { text: aiTranslation, source: "gemini" }, translationFailed: false });
+            setScriptPopoverPreviewError(false);
+            return;
+          }
           setScriptPopoverPreview(data);
           setScriptPopoverPreviewError(Boolean(data.translationFailed));
         })
         .catch((err: unknown) => {
           if (err instanceof DOMException && err.name === "AbortError") return;
+          if (aiTranslation) {
+            // Dictionary/image lookup failed, but Gemini's translation is
+            // already showing — nothing here is worth surfacing as an error.
+            setScriptPopoverPreviewError(false);
+            return;
+          }
           setScriptPopoverPreview(null);
           setScriptPopoverPreviewError(true);
         })
