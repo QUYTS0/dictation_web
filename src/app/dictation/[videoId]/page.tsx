@@ -613,7 +613,7 @@ export default function DictationPage({ params }: PageProps) {
         )}
       </AnimatePresence>
 
-      <main className="mx-auto flex w-full flex-col gap-4 px-4 md:flex-1 md:min-h-0 md:overflow-hidden lg:flex-row">
+      <main className="mx-auto flex w-full flex-col gap-4 px-4 pb-[calc(16px+env(safe-area-inset-bottom))] md:flex-1 md:min-h-0 md:overflow-hidden lg:flex-row">
         <motion.div
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}

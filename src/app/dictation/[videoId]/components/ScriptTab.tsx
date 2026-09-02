@@ -11,6 +11,10 @@ import type { InputMode } from "../types";
 // letting it drift to wherever scrollIntoView last landed it.
 const SCRIPT_ANCHOR_TOP_PADDING = 8;
 
+// Beyond this many pixels of movement between pointerdown and pointerup, the
+// gesture is treated as a text-selection drag rather than a tap-to-seek.
+const CARD_DRAG_THRESHOLD_PX = 6;
+
 function computeAnchoredScrollTop(container: HTMLElement, activeCard: HTMLElement): number {
   const anchorCard = (activeCard.previousElementSibling as HTMLElement | null) ?? activeCard;
   const target = anchorCard.offsetTop - SCRIPT_ANCHOR_TOP_PADDING;
@@ -63,6 +67,46 @@ export function ScriptTab({
   const [revealedSegmentIndexes, setRevealedSegmentIndexes] = useState<Set<number>>(new Set());
   const revealSegment = (segmentIndex: number) =>
     setRevealedSegmentIndexes((prev) => new Set(prev).add(segmentIndex));
+
+  // Distinguishes a tap-to-seek from a drag-to-select gesture on a card.
+  // Intentionally not preventDefault()'d on pointerdown — that would break
+  // native text selection (including mobile long-press).
+  const cardPointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cardPointerMovedRef = useRef(false);
+
+  const handleCardPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    cardPointerStartRef.current = { x: event.clientX, y: event.clientY };
+    cardPointerMovedRef.current = false;
+  };
+
+  const handleCardPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = cardPointerStartRef.current;
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.hypot(dx, dy) > CARD_DRAG_THRESHOLD_PX) {
+      cardPointerMovedRef.current = true;
+    }
+  };
+
+  const hasActiveTextSelection = () => {
+    const selection = window.getSelection();
+    return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+  };
+
+  const handleCardClick = (segmentIndex: number) => {
+    const wasDrag = cardPointerMovedRef.current;
+    cardPointerStartRef.current = null;
+    cardPointerMovedRef.current = false;
+    if (wasDrag || hasActiveTextSelection()) return;
+    // Mobile browsers can settle a long-press selection (or fire a synthetic
+    // click after one) slightly after this click event — re-check on the
+    // next tick so a lingering selection still wins over the seek.
+    window.setTimeout(() => {
+      if (hasActiveTextSelection()) return;
+      onSeekToSegment(segmentIndex);
+    }, 0);
+  };
 
   // First layout after this component (re)mounts — e.g. switching tabs back to
   // Script, or reopening the right panel — snaps to the anchored position with
@@ -118,9 +162,11 @@ export function ScriptTab({
                 key={segment.segmentIndex}
                 data-script-segment-index={segment.segmentIndex}
                 data-selection-sentence-text={segment.text}
-                onClick={() => onSeekToSegment(segment.segmentIndex)}
+                onPointerDown={handleCardPointerDown}
+                onPointerMove={handleCardPointerMove}
+                onClick={() => handleCardClick(segment.segmentIndex)}
                 title={`Play from sentence ${segment.segmentIndex + 1}`}
-                className={`relative p-2.5 rounded-xl border transition-colors cursor-pointer ${
+                className={`relative p-2.5 rounded-xl border transition-colors cursor-pointer select-text ${
                   isCurrentScriptSentence
                     ? "bg-[var(--accent-soft)] border-[var(--accent-border)] ring-2 ring-[var(--accent)]/20 shadow-sm"
                     : "bg-transparent border-transparent hover:bg-white/[0.04] hover:border-[var(--border)]"
@@ -159,8 +205,10 @@ export function ScriptTab({
                     {isCurrentScriptSentence && <div className="w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse shrink-0" />}
                   </div>
                   <p
-                    className={`text-sm leading-relaxed select-text ${
-                      isCurrentScriptSentence ? "text-[var(--text)] font-medium" : "text-[var(--text-muted)]"
+                    className={`text-[clamp(14px,0.9vw,15px)] leading-[1.55] select-text ${
+                      isCurrentScriptSentence
+                        ? "text-[var(--text)] font-semibold"
+                        : "text-[var(--text-muted)] font-medium"
                     }`}
                   >
                     {scriptRenderItems.map((item) => {
@@ -205,7 +253,7 @@ export function ScriptTab({
                       );
                     })}
                   </p>
-                  <p className="mt-0.5 text-sm leading-relaxed text-[var(--accent-muted)]">
+                  <p className="mt-1.5 text-[clamp(13px,0.82vw,14px)] font-normal leading-[1.55] text-[var(--accent-muted)] select-text">
                     {translationBySegmentIndex.get(segment.segmentIndex) ?? "…"}
                   </p>
                 </div>
