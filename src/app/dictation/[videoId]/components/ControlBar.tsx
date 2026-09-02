@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
-import { Eye, Lightbulb, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, Volume2, VolumeX, LayoutGrid } from "lucide-react";
+import { Eye, Lightbulb, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, LayoutGrid } from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
@@ -25,8 +25,6 @@ export function ControlBar({
   showHintPanel,
   onToggleHint,
   combo,
-  soundEnabled,
-  onToggleSound,
   subtitleVisibility,
   setOriginalVisibility,
   setTranslationVisibility,
@@ -51,8 +49,6 @@ export function ControlBar({
   showHintPanel: boolean;
   onToggleHint: () => void;
   combo: number;
-  soundEnabled: boolean;
-  onToggleSound: () => void;
   subtitleVisibility: SubtitleVisibilityState;
   setOriginalVisibility: (value: SubtitleVisibility) => void;
   setTranslationVisibility: (value: SubtitleVisibility) => void;
@@ -72,10 +68,15 @@ export function ControlBar({
   const modePopoverRef = useRef<HTMLDivElement>(null);
   const [showSpeedPopover, setShowSpeedPopover] = useState(false);
   const speedPopoverRef = useRef<HTMLDivElement>(null);
+  // Desktop's speed control is a separate trigger/popover from mobile's (only
+  // one row is ever visible at a given viewport width, but both stay mounted
+  // in the DOM, so they need independent state/refs rather than sharing one).
+  const [showSpeedPopoverDesktop, setShowSpeedPopoverDesktop] = useState(false);
+  const speedPopoverDesktopRef = useRef<HTMLDivElement>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   useEffect(() => {
-    if (!showVisibilityPopover && !showModePopover && !showSpeedPopover) return;
+    if (!showVisibilityPopover && !showModePopover && !showSpeedPopover && !showSpeedPopoverDesktop) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (visibilityPopoverRef.current && !visibilityPopoverRef.current.contains(event.target as Node)) {
         setShowVisibilityPopover(false);
@@ -86,12 +87,16 @@ export function ControlBar({
       if (speedPopoverRef.current && !speedPopoverRef.current.contains(event.target as Node)) {
         setShowSpeedPopover(false);
       }
+      if (speedPopoverDesktopRef.current && !speedPopoverDesktopRef.current.contains(event.target as Node)) {
+        setShowSpeedPopoverDesktop(false);
+      }
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setShowVisibilityPopover(false);
       setShowModePopover(false);
       setShowSpeedPopover(false);
+      setShowSpeedPopoverDesktop(false);
     };
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleEscape);
@@ -99,7 +104,7 @@ export function ControlBar({
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [showVisibilityPopover, showModePopover, showSpeedPopover]);
+  }, [showVisibilityPopover, showModePopover, showSpeedPopover, showSpeedPopoverDesktop]);
 
   const playPauseOrHintButton = isListeningMode ? (
     <ControlButton
@@ -192,9 +197,11 @@ export function ControlBar({
             )}
           </div>
         </div>
-        <div className="shrink-0">
-          <ComboStreak combo={combo} />
-        </div>
+        {!isListeningMode && (
+          <div className="shrink-0">
+            <ComboStreak combo={combo} />
+          </div>
+        )}
         <ControlButton
           icon={<MoreHorizontal size={16} />}
           shortcut="More controls"
@@ -204,7 +211,7 @@ export function ControlBar({
         />
       </div>
 
-      {/* md and up (tablet/desktop): original single-row layout, unchanged. */}
+      {/* md and up (tablet/desktop): single-row layout. */}
       <div className="hidden md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-3 md:px-4 md:py-1.5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3 justify-self-start">
           <button
@@ -258,7 +265,7 @@ export function ControlBar({
         </div>
 
         <div className="flex min-w-0 items-center gap-1 sm:gap-2 justify-self-end">
-          <ComboStreak combo={combo} />
+          {!isListeningMode && <ComboStreak combo={combo} />}
           <div className="relative">
             <ControlButton
               icon={<Eye size={18} />}
@@ -277,13 +284,39 @@ export function ControlBar({
               </div>
             )}
           </div>
-          <ControlButton
-            icon={soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-            shortcut="Sound"
-            label={soundEnabled ? "Sound on" : "Sound off"}
-            active={soundEnabled}
-            onClick={onToggleSound}
-          />
+          <div className="relative">
+            <ControlButton
+              icon={<span className="text-[11px] font-bold leading-none">{playbackRate}×</span>}
+              shortcut="Playback speed"
+              label={`${playbackRate}×`}
+              active={showSpeedPopoverDesktop}
+              onClick={() => setShowSpeedPopoverDesktop((v) => !v)}
+            />
+            {showSpeedPopoverDesktop && (
+              <div
+                ref={speedPopoverDesktopRef}
+                className="absolute bottom-full right-0 z-50 mb-2 flex gap-1 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] p-1.5 shadow-2xl"
+              >
+                {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                  <button
+                    key={rate}
+                    onClick={() => {
+                      setPlaybackRate(rate);
+                      setShowSpeedPopoverDesktop(false);
+                    }}
+                    className={clsx(
+                      "rounded-lg px-2.5 py-2 text-xs font-semibold transition-colors",
+                      playbackRate === rate
+                        ? "bg-[var(--accent)] text-[#1a1206]"
+                        : "text-[var(--text-muted)] hover:bg-white/10"
+                    )}
+                  >
+                    {rate}×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="relative">
             <ControlButton
               icon={<LayoutGrid size={18} />}

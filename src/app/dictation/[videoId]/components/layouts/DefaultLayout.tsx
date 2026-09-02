@@ -32,8 +32,6 @@ export function DefaultLayout({
   onReplay,
   onNext,
   currentSegment,
-  soundEnabled,
-  onToggleSound,
   combo,
   subtitleVisibility,
   setOriginalVisibility,
@@ -81,8 +79,6 @@ export function DefaultLayout({
   onReplay: () => void;
   onNext: () => void;
   currentSegment: CurrentSegment | undefined;
-  soundEnabled: boolean;
-  onToggleSound: () => void;
   combo: number;
   subtitleVisibility: SubtitleVisibilityState;
   setOriginalVisibility: (value: SubtitleVisibility) => void;
@@ -190,7 +186,10 @@ export function DefaultLayout({
             className="flex h-full flex-col justify-center md:contents"
             style={{ gap: `${gapPx}px` }}
           >
-          <div className="mt-3 md:contents">
+          {/* Not `md:contents` like its siblings above — it needs to keep
+              contributing its own top margin (video-to-transcript spacing)
+              at desktop too, which `display:contents` would otherwise strip. */}
+          <div className="mt-3.5">
             <div className="relative min-w-0">
               <div
                 hidden={!isDictationMode}
@@ -343,8 +342,6 @@ export function DefaultLayout({
               showHintPanel={showHintPanel}
               onToggleHint={onToggleHintPanel}
               combo={combo}
-              soundEnabled={soundEnabled}
-              onToggleSound={onToggleSound}
               subtitleVisibility={subtitleVisibility}
               setOriginalVisibility={setOriginalVisibility}
               setTranslationVisibility={setTranslationVisibility}

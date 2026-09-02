@@ -635,8 +635,6 @@ export default function DictationPage({ params }: PageProps) {
             }}
             videoSizeMode={videoSizeMode}
             setVideoSizeMode={setVideoSizeMode}
-            playbackRate={playbackRate}
-            setPlaybackRate={setPlaybackRate}
             autoAdvance={autoAdvance}
             setAutoAdvance={setAutoAdvance}
             practiceMode={practiceMode}
@@ -673,8 +671,6 @@ export default function DictationPage({ params }: PageProps) {
             onReplay={handleReplay}
             onNext={handleSkip}
             currentSegment={currentSegment}
-            soundEnabled={soundEnabled}
-            onToggleSound={() => setSoundEnabled(!soundEnabled)}
             combo={combo}
             subtitleVisibility={subtitleVisibility}
             setOriginalVisibility={setOriginalVisibility}

@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import { Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS, PLAYBACK_RATE_OPTIONS } from "../constants";
+import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS } from "../constants";
 import { ModeSwitcher } from "./ModeSwitcher";
 import type { InputMode, ShortcutEntry } from "../types";
 
@@ -32,8 +32,9 @@ const FOCUSABLE_SELECTOR =
 
 /**
  * Settings drawer consolidating controls that don't need to be one tap away:
- * Audio mode, Zen mode, video size, playback rate, auto-advance, practice
- * mode, input mode (Dictation/Listening), and the sound-effect toggle.
+ * Audio mode, Zen mode, video size, auto-advance, practice mode, input mode
+ * (Dictation/Listening), and the sound-effect toggle. Playback speed lives
+ * on the control bar itself instead — it's used often enough to want in one tap.
  * Renders as a floating right-side panel on desktop/tablet and (via the
  * same positioning classes, which collapse to a near-full-width card below
  * `md`) a full-width panel on mobile, where it's reached from the top nav's
@@ -47,8 +48,6 @@ export function SettingsDrawer({
   onActivateZenMode,
   videoSizeMode,
   setVideoSizeMode,
-  playbackRate,
-  setPlaybackRate,
   autoAdvance,
   setAutoAdvance,
   practiceMode,
@@ -74,8 +73,6 @@ export function SettingsDrawer({
   onActivateZenMode: () => void;
   videoSizeMode: VideoSizeMode;
   setVideoSizeMode: (mode: VideoSizeMode) => void;
-  playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
-  setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
   autoAdvance: boolean;
   setAutoAdvance: (updater: (prev: boolean) => boolean) => void;
   practiceMode: PracticeMode;
@@ -208,24 +205,6 @@ export function SettingsDrawer({
                 >
                   Large
                 </button>
-              </div>
-            </div>
-
-            <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Playback speed</p>
-              <div className="flex items-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] p-1 shadow-sm">
-                {PLAYBACK_RATE_OPTIONS.map((rate) => (
-                  <button
-                    key={rate}
-                    onClick={() => setPlaybackRate(rate)}
-                    className={clsx(
-                      "flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                      playbackRate === rate ? "bg-[var(--accent)] text-[#1a1206]" : "text-[var(--text-muted)] hover:bg-white/10"
-                    )}
-                  >
-                    {rate}x
-                  </button>
-                ))}
               </div>
             </div>
 
