@@ -132,7 +132,7 @@ export function RightPanelTabs({
         </div>
       </div>
 
-      <div className="momentum-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden overscroll-contain p-3">
+      <div className="momentum-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pb-2 pt-0.5">
         {rightPanelTab === "script" ? (
           <ScriptTab
             scriptSegments={scriptSegments}

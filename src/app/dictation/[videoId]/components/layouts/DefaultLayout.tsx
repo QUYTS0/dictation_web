@@ -275,7 +275,7 @@ export function DefaultLayout({
           {showTranslation && (
             <p
               className={clsx(
-                "mt-0 text-center text-base text-[var(--text-muted)] md:mt-2",
+                "mt-0 text-center text-base text-[var(--text-muted)] md:mt-1",
                 subtitleVisibility.translation === "blur" && "blur-sm select-none"
               )}
             >

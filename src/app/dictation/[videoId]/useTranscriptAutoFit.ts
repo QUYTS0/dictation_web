@@ -7,7 +7,10 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 // sentence that already fits at full size — never visibly changes.
 const ENGLISH_FONT_STEPS_PX = [20, 18, 16] as const;
 // English-to-translation gap, shrunk only once the font floor still overflows.
-const GAP_STEPS_PX = [8, 6, 4] as const;
+// Kept small since the English block's own bottom padding already adds ~16px
+// of visual space before this gap — together they land the total English-to-
+// Vietnamese whitespace around 16-20px.
+const GAP_STEPS_PX = [4, 3, 2] as const;
 
 const ENGLISH_TARGET_SELECTOR = "[data-transcript-english]";
 
