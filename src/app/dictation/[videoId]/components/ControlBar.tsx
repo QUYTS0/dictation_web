@@ -9,7 +9,7 @@ import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { MobileBottomSheet } from "./MobileBottomSheet";
 import { formatClockTime } from "../helpers";
-import { PLAYBACK_RATE_OPTIONS } from "../constants";
+import { INPUT_MODE_LABELS, PLAYBACK_RATE_OPTIONS } from "../constants";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
 
 export function ControlBar({
@@ -61,7 +61,11 @@ export function ControlBar({
   playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
   setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
 }) {
-  const isListeningMode = inputMode === "listening";
+  // Dictation is the only mode with a typed-answer flow (Hint, combo streak,
+  // accuracy). Listening, Shadowing, and Pronunciation Practice all instead
+  // share a generic Play/Pause + elapsed-time control surface here — each
+  // mode's own recorder/transcript UI lives in the transcript stage, not here.
+  const isDictationMode = inputMode === "dictation";
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
@@ -106,7 +110,7 @@ export function ControlBar({
     };
   }, [showVisibilityPopover, showModePopover, showSpeedPopover, showSpeedPopoverDesktop]);
 
-  const playPauseOrHintButton = isListeningMode ? (
+  const playPauseOrHintButton = !isDictationMode ? (
     <ControlButton
       icon={isVideoPlaying ? <Pause size={18} /> : <Play size={18} />}
       shortcut="Play/Pause video"
@@ -125,7 +129,7 @@ export function ControlBar({
 
   const timeStatusText =
     totalSegments > 0
-      ? isListeningMode
+      ? !isDictationMode
         ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
         : `${accuracy}% accuracy`
       : "";
@@ -197,7 +201,7 @@ export function ControlBar({
             )}
           </div>
         </div>
-        {!isListeningMode && (
+        {isDictationMode && (
           <div className="shrink-0">
             <ComboStreak combo={combo} />
           </div>
@@ -224,7 +228,7 @@ export function ControlBar({
           </button>
           <span className="min-w-0 truncate text-[11px] sm:text-xs font-medium text-[var(--text-muted)] tabular-nums">
             {totalSegments > 0 ? (
-              isListeningMode ? (
+              !isDictationMode ? (
                 <span>
                   {currentSegIdx + 1} / {totalSegments} · {formatClockTime(currentTimeSec)} / {formatClockTime(durationSec)}
                 </span>
@@ -265,7 +269,7 @@ export function ControlBar({
         </div>
 
         <div className="flex min-w-0 items-center gap-1 sm:gap-2 justify-self-end">
-          {!isListeningMode && <ComboStreak combo={combo} />}
+          {isDictationMode && <ComboStreak combo={combo} />}
           <div className="relative">
             <ControlButton
               icon={<Eye size={18} />}
@@ -321,7 +325,7 @@ export function ControlBar({
             <ControlButton
               icon={<LayoutGrid size={18} />}
               shortcut="Switch mode"
-              label={inputMode === "listening" ? "Listening" : "Dictation"}
+              label={INPUT_MODE_LABELS[inputMode]}
               active
               onClick={() => setShowModePopover((v) => !v)}
             />

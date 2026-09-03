@@ -146,7 +146,7 @@ export default function DictationPage({ params }: PageProps) {
     handleRegenerateTranscript,
     jumpToSegment,
     handleActiveSegmentChange,
-  } = useDictationSession({ videoId, user, autoEnterPaused: inputMode === "listening" });
+  } = useDictationSession({ videoId, user, autoEnterPaused: inputMode !== "dictation" });
 
   const {
     bookmarkedSegmentIndexes,
@@ -228,7 +228,7 @@ export default function DictationPage({ params }: PageProps) {
     onPrevious: handlePrevious,
     onSkip: handleSkip,
     onTogglePlayback: handleTogglePlayback,
-    isListeningMode: inputMode === "listening",
+    isListeningMode: inputMode !== "dictation",
     isZenMode,
     onZenModeChange: setIsZenMode,
   });

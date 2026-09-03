@@ -5,8 +5,9 @@ interface UseKeyboardShortcutsOptions {
   onPrevious: () => void;
   onSkip: () => void;
   onTogglePlayback: () => void;
-  /** Space play/pause only applies in Listening Mode, where it's the only
-   *  Play/Pause control (the ControlBar button is Listening-only too). */
+  /** Space play/pause applies to every non-dictation mode (Listening,
+   *  Shadowing, Pronunciation Practice) — the modes where ControlBar's center
+   *  button is Play/Pause rather than Hint. */
   isListeningMode: boolean;
   isZenMode: boolean;
   onZenModeChange: (value: boolean | ((prev: boolean) => boolean)) => void;
@@ -53,10 +54,10 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      // Plain Space toggles Play/Pause, but only in Listening Mode (the only mode
-      // with a Play/Pause control), outside typing targets (so it doesn't fight
-      // the answer input's own Space handling), and never on a key-repeat (so
-      // holding Space doesn't rapidly toggle playback).
+      // Plain Space toggles Play/Pause, but only outside Dictation (the only
+      // mode without a Play/Pause control), outside typing targets (so it
+      // doesn't fight the answer input's own Space handling), and never on a
+      // key-repeat (so holding Space doesn't rapidly toggle playback).
       if (
         isListeningMode &&
         !isTypingTarget &&

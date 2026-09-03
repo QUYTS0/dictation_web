@@ -1,4 +1,4 @@
-import type { ShortcutEntry, VideoSizeMode } from "./types";
+import type { InputMode, ShortcutEntry, VideoSizeMode } from "./types";
 
 // Let the embedded player seek after the segment playback command settles.
 export const RESUME_SEEK_DELAY_MS = 150;
@@ -22,6 +22,14 @@ export const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
   large: "max-w-none",
 };
 export const PLAYBACK_RATE_OPTIONS = [0.75, 1, 1.25, 1.5] as const;
+
+// Short label shown on the mode-switch trigger button in ControlBar.
+export const INPUT_MODE_LABELS: Record<InputMode, string> = {
+  dictation: "Dictation",
+  listening: "Listening",
+  shadowing: "Shadowing",
+  pronunciation: "Pronunciation",
+};
 
 // Shortcuts for typing/answering the current sentence — shown both in the full
 // Settings list and in the lightweight quick-access popover on the page itself.

@@ -11,6 +11,8 @@ import { ControlBar } from "../ControlBar";
 import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
 import { ListeningTranscript } from "../ListeningTranscript";
+import { ShadowingPanel } from "../ShadowingPanel";
+import { PronunciationPanel } from "../PronunciationPanel";
 import { useTranscriptAutoFit } from "../../useTranscriptAutoFit";
 import type { InputMode, PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 import type { PersistedInputState } from "../../sessionPersistence";
@@ -249,9 +251,21 @@ export function DefaultLayout({
                 </div>
               </div>
 
-              {!isDictationMode && (
+              {inputMode === "listening" && (
                 <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
                   <ListeningTranscript text={currentSegment?.text ?? ""} fontSizePx={englishFontPx} />
+                </div>
+              )}
+
+              {inputMode === "shadowing" && (
+                <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
+                  <ShadowingPanel currentSegment={currentSegment} onPlayOriginal={onReplay} />
+                </div>
+              )}
+
+              {inputMode === "pronunciation" && (
+                <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
+                  <PronunciationPanel currentSegment={currentSegment} onPlayOriginal={onReplay} />
                 </div>
               )}
 
