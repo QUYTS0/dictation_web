@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
-import { Eye, Lightbulb, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, LayoutGrid } from "lucide-react";
+import { Eye, Lightbulb, Mic, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, Square, LayoutGrid } from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
@@ -11,6 +11,7 @@ import { MobileBottomSheet } from "./MobileBottomSheet";
 import { formatClockTime } from "../helpers";
 import { INPUT_MODE_LABELS, PLAYBACK_RATE_OPTIONS } from "../constants";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
+import type { AudioRecorderStatus } from "@/hooks/useAudioRecorder";
 
 export function ControlBar({
   currentSegIdx,
@@ -36,6 +37,9 @@ export function ControlBar({
   durationSec,
   playbackRate,
   setPlaybackRate,
+  recorderStatus = "idle",
+  onStartRecording = () => {},
+  onStopRecording = () => {},
 }: {
   currentSegIdx: number;
   totalSegments: number;
@@ -60,12 +64,21 @@ export function ControlBar({
   durationSec: number;
   playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
   setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
+  /** Only meaningful in Shadowing/Pronunciation Practice — drives the center
+   *  button's Record/Stop state in place of Hint/Play-Pause. Optional (with
+   *  safe no-op defaults) so the Dictation/Listening call site, which never
+   *  uses them, doesn't need to pass anything. */
+  recorderStatus?: AudioRecorderStatus;
+  onStartRecording?: () => void;
+  onStopRecording?: () => void;
 }) {
   // Dictation is the only mode with a typed-answer flow (Hint, combo streak,
   // accuracy). Listening, Shadowing, and Pronunciation Practice all instead
-  // share a generic Play/Pause + elapsed-time control surface here — each
-  // mode's own recorder/transcript UI lives in the transcript stage, not here.
+  // share a generic elapsed-time control surface here — each mode's own
+  // recorder/transcript UI lives in the transcript stage, not here.
   const isDictationMode = inputMode === "dictation";
+  const isSpeakingMode = inputMode === "shadowing" || inputMode === "pronunciation";
+  const isRecording = recorderStatus === "recording";
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
@@ -110,7 +123,15 @@ export function ControlBar({
     };
   }, [showVisibilityPopover, showModePopover, showSpeedPopover, showSpeedPopoverDesktop]);
 
-  const playPauseOrHintButton = !isDictationMode ? (
+  const centerButton = isSpeakingMode ? (
+    <ControlButton
+      icon={isRecording ? <Square size={16} className="fill-current" /> : <Mic size={18} />}
+      shortcut={isRecording ? "Stop recording" : "Record"}
+      label={isRecording ? "Stop" : "Record"}
+      active={isRecording}
+      onClick={isRecording ? onStopRecording : onStartRecording}
+    />
+  ) : !isDictationMode ? (
     <ControlButton
       icon={isVideoPlaying ? <Pause size={18} /> : <Play size={18} />}
       shortcut="Play/Pause video"
@@ -159,7 +180,7 @@ export function ControlBar({
             primary
             onClick={onReplay}
           />
-          {playPauseOrHintButton}
+          {centerButton}
           <ControlButton
             icon={<SkipForward size={16} />}
             shortcut="Next sentence — Shift + →"
@@ -258,7 +279,7 @@ export function ControlBar({
             primary
             onClick={onReplay}
           />
-          {playPauseOrHintButton}
+          {centerButton}
           <ControlButton
             icon={<SkipForward size={18} />}
             shortcut="Next sentence — Shift + →"

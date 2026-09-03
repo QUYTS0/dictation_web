@@ -1,10 +1,12 @@
 "use client";
 
 import { clsx } from "clsx";
+import { useEffect } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import HintDisplay from "@/components/HintDisplay";
+import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import type { UXState, CheckAnswerResponse, HintLevel } from "@/lib/types";
 import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
@@ -119,10 +121,27 @@ export function DefaultLayout({
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
+  const isSpeakingMode = inputMode === "shadowing" || inputMode === "pronunciation";
   const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
   const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
   const showTranslation = !!translationText && subtitleVisibility.translation !== "hide";
+
+  // Owned here (not inside ShadowingPanel/PronunciationPanel) so ControlBar's
+  // center Record/Stop button and the practice stage's display both act on
+  // the exact same recorder instance — see the desktop-layout-refactor notes
+  // in "Shadowing and Pronunciation Practice Plan.md". Instantiated
+  // unconditionally (hooks can't be conditional); it stays inert until
+  // start() is called, so this is harmless in Dictation/Listening.
+  const recorder = useAudioRecorder({ maxDurationSec: 20 });
+
+  // A recorded take only ever refers to the sentence it was made for —
+  // moving to a different sentence must not leave a stale recording around.
+  useEffect(() => {
+    if (!isSpeakingMode) return;
+    recorder.discard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSegIdx, isSpeakingMode]);
 
   // Fits the English + Vietnamese pair inside the mobile transcript stage's
   // fixed height (shrinking font/gap, then falling back to internal scroll)
@@ -135,6 +154,128 @@ export function DefaultLayout({
     isDictationMode,
     showTranslation,
   ]);
+
+  // ---- Shadowing / Pronunciation Practice: dedicated compact desktop
+  // layout ----
+  // Kept as a fully separate render path from Dictation/Listening below (not
+  // threaded through the mobile-transcript-stage/useTranscriptAutoFit
+  // machinery, which is purpose-built for shrink-to-fit sentence text) so
+  // that existing mode's layout is byte-for-byte unaffected. At `lg` and up,
+  // the column becomes a 3-row grid — responsive video row, a capped-height
+  // speaking-practice row, and a fixed 64px control-bar row — so a taller
+  // recording result can never push the shared ControlBar out of view. Below
+  // `lg` it stays the same flex column Dictation/Listening also use.
+  if (isSpeakingMode) {
+    return (
+      <div
+        className={clsx(
+          "flex min-h-0 flex-1 flex-col",
+          // Row 3 is fixed at 80px (not the suggested 64px) — ControlBar's
+          // real rendered height is ~75px at these breakpoints regardless of
+          // viewport width (its own padding/buttons are fixed-size, not
+          // responsive), and `minmax(64px,auto)` was measured to resolve back
+          // to 64px rather than growing to fit — Chromium's grid track-sizing
+          // doesn't take the item's max-content contribution into account
+          // here the way the spec's algorithm implies it should.
+          isPracticing &&
+            "lg:grid lg:grid-rows-[minmax(280px,1fr)_minmax(180px,220px)_84px] lg:gap-3 lg:min-h-0 lg:overflow-hidden"
+        )}
+      >
+        <div
+          className={clsx(
+            "relative aspect-video shrink-0 overflow-hidden bg-black transition-all duration-300 ease-out",
+            "-mx-4 w-[calc(100%+2rem)] rounded-none border-0 shadow-none",
+            "md:mx-0 md:w-full md:rounded-3xl md:border md:border-[var(--border-strong)] md:shadow-xl",
+            isZenMode ? "md:max-h-[72vh]" : "md:max-h-[52vh]",
+            isPracticing && "lg:min-h-0 lg:self-center"
+          )}
+        >
+          <div
+            className={clsx("absolute inset-0 transition-opacity duration-300 ease-out", !showVideo && "opacity-0 pointer-events-none")}
+            aria-hidden={!showVideo}
+          >
+            {videoBlock}
+          </div>
+          <div
+            className={clsx(
+              "absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm transition-opacity duration-300 ease-out",
+              showVideo ? "opacity-0 pointer-events-none" : "opacity-100"
+            )}
+            aria-hidden={showVideo}
+          >
+            <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-center text-xs text-white/85">
+              Audio focus mode is enabled. Video is hidden.
+            </div>
+          </div>
+        </div>
+
+        {isPracticing && (
+          <>
+            <div className="mt-3.5 lg:mt-0 lg:min-h-0 lg:max-h-[220px] lg:overflow-hidden">
+              {inputMode === "shadowing" ? (
+                <ShadowingPanel
+                  currentSegment={currentSegment}
+                  onPlayOriginal={onReplay}
+                  translationText={translationText}
+                  showTranslation={showTranslation}
+                  status={recorder.status}
+                  error={recorder.error}
+                  elapsedSec={recorder.elapsedSec}
+                  level={recorder.level}
+                  clip={recorder.clip}
+                  onStartRecording={recorder.start}
+                />
+              ) : (
+                <PronunciationPanel
+                  currentSegment={currentSegment}
+                  onPlayOriginal={onReplay}
+                  translationText={translationText}
+                  showTranslation={showTranslation}
+                  status={recorder.status}
+                  error={recorder.error}
+                  elapsedSec={recorder.elapsedSec}
+                  level={recorder.level}
+                  clip={recorder.clip}
+                  onStartRecording={recorder.start}
+                />
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-3 lg:min-h-0 lg:flex-shrink-0 lg:justify-center lg:pt-0">
+              <ControlBar
+                currentSegIdx={currentSegIdx}
+                totalSegments={totalSegments}
+                accuracy={accuracy}
+                onReset={onReset}
+                onPrevious={onPrevious}
+                onReplay={onReplay}
+                onNext={onNext}
+                prevDisabled={currentSegIdx === 0}
+                nextDisabled={currentSegIdx >= totalSegments - 1}
+                showHintPanel={showHintPanel}
+                onToggleHint={onToggleHintPanel}
+                combo={combo}
+                subtitleVisibility={subtitleVisibility}
+                setOriginalVisibility={setOriginalVisibility}
+                setTranslationVisibility={setTranslationVisibility}
+                inputMode={inputMode}
+                onSelectInputMode={onSelectInputMode}
+                isVideoPlaying={isVideoPlaying}
+                onTogglePlayback={onTogglePlayback}
+                currentTimeSec={currentTimeSec}
+                durationSec={durationSec}
+                playbackRate={playbackRate}
+                setPlaybackRate={setPlaybackRate}
+                recorderStatus={recorder.status}
+                onStartRecording={recorder.start}
+                onStopRecording={recorder.stop}
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -256,18 +397,8 @@ export function DefaultLayout({
                   <ListeningTranscript text={currentSegment?.text ?? ""} fontSizePx={englishFontPx} />
                 </div>
               )}
-
-              {inputMode === "shadowing" && (
-                <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
-                  <ShadowingPanel currentSegment={currentSegment} onPlayOriginal={onReplay} />
-                </div>
-              )}
-
-              {inputMode === "pronunciation" && (
-                <div className="relative h-full rounded-2xl overflow-hidden border border-transparent">
-                  <PronunciationPanel currentSegment={currentSegment} onPlayOriginal={onReplay} />
-                </div>
-              )}
+              {/* Shadowing / Pronunciation Practice never reach this branch —
+                  isSpeakingMode returns its own dedicated layout above. */}
 
               <AnimatePresence>
                 {isDictationMode && workspaceStatus === "success" && isLastResultClean && (

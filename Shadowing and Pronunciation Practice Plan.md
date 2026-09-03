@@ -1,336 +1,392 @@
-# Shadowing Mode & Pronunciation Practice Mode — Implementation Plan
+# Shadowing Mode — Implementation Plan (Revised)
 
-## 1. Repository findings
+> **Revision note.** The original plan (this file's earlier version) designed two separate practice modes — Shadowing and Pronunciation Practice — each with its own panel, three-column recording UI, and eventual Supabase-backed saved-attempt library. Product direction has changed: **Pronunciation Practice is merged into Shadowing** as an optional in-mode action, the three-column recording stage is being removed in favor of reusing Listening Mode's layout, and **permanent audio storage is out of scope entirely**. This revision supersedes the earlier version section-by-section; the file keeps its original name for continuity with existing links/discussion.
 
-**Practice page architecture** (`src/app/dictation/[videoId]/`):
-- [page.tsx](src/app/dictation/[videoId]/page.tsx) is the orchestrator — owns all top-level state, wires ~15 hooks (`useDictationSession`, `useInputModePreference`, `usePracticeModePreference`, `useBookmarks`, `useLessonCapture`, etc.), and renders `<DefaultLayout>` + `<RightPanelTabs>` inside one shared shell (header, video card, control bar, right panel). There is **no per-mode page** — this is the single layout every mode must plug into.
-- [DefaultLayout.tsx](src/app/dictation/[videoId]/components/layouts/DefaultLayout.tsx) renders: a fixed-aspect video block → a "transcript stage" (`mobile-transcript-stage`, height-locked on mobile via `useTranscriptAutoFit` so switching sentences never resizes the box) → `<ControlBar>`. Today the stage branches on `isDictationMode`: `<SentenceWordInput>` for dictation, `<ListeningTranscript>` for listening. **This is the exact swap point for Shadowing/Pronunciation Practice** — a third/fourth branch replacing that stage's content with a record/playback UI, without touching the video block or `ControlBar` wiring.
-- [RightPanelTabs.tsx](src/app/dictation/[videoId]/components/RightPanelTabs.tsx) is mode-agnostic (Script/Words/Sentences) and needs no structural change; an "Attempts" or "History" tab could be added later without disrupting it.
-- [types.ts](src/app/dictation/[videoId]/types.ts): `InputMode = "dictation" | "listening"`. Must become `"dictation" | "listening" | "shadowing" | "pronunciation"`.
-- [ModeSwitcher.tsx](src/app/dictation/[videoId]/components/ModeSwitcher.tsx) **already has a disabled "Shadowing — Coming soon" row** hard-coded between Listening and Dictation — a clear signal this was pre-planned as the fourth `InputMode`. Pronunciation Practice has no placeholder yet and needs one added.
-- [useInputModePreference.ts](src/app/dictation/[videoId]/useInputModePreference.ts): `?mode=` URL param is the source of truth (dashboard links, resumable sessions, shared links all agree on mode); per-video `localStorage["dictation.input-mode.<videoId>"]` is the fallback for links without the param. Currently a binary `=== "listening"` check — must become a proper 4-way switch.
-- [ControlBar.tsx](src/app/dictation/[videoId]/components/ControlBar.tsx) hosts the mode-switch popover trigger, playback-speed control, subtitle-visibility popover, and (on mobile) a "More" bottom sheet. It already conditionally swaps its center button (Hint vs Play/Pause) by mode — the same pattern extends to a Record button.
-- YouTube player control surface ([YouTubePlayer.tsx](src/components/YouTubePlayer.tsx)) exposes `playSegment(segIdx)`, `playVideo()`, `pauseVideo()`, `seekTo()`, `setPlaybackRate()` — `playSegment` already plays exactly one sentence and stops, which is precisely "play the original sentence" for both new modes. **No player changes needed.**
-- [sessionPersistence.ts](src/app/dictation/[videoId]/sessionPersistence.ts) establishes the house pattern for surviving remounts: snapshot transient UI state into `sessionStorage`, scoped by video ID. The new modes should follow this pattern for in-progress (unsaved) recording state.
+## 1. Current implementation status
 
-**Reusable evaluation primitives already in the codebase:**
-- [lib/utils/text.ts](src/lib/utils/text.ts): `normalizeText`, `wordDiff` (LCS-based), `checkAnswer`, `classifyError` — this **is** a working Word Match engine already (text normalization, punctuation/contraction handling via `removePunctuation`, word-level diff with correct/missing/wrong/extra statuses). Pronunciation Practice's Word Match layer should call this directly rather than reimplementing alignment.
-- [useAutoTranscribeSpeech.ts](src/app/dictation/[videoId]/useAutoTranscribeSpeech.ts): an existing, already-shipped `SpeechRecognition` integration (continuous mode, auto-restart on `onend`, permission-denied handling). It's used for a different purpose (transcribing the video itself) but is a ready template for "record the user, get interim/final text back" — confirms Web Speech API is already an accepted approach in this codebase, with its Chrome-only/privacy caveat already implicitly acknowledged in its own comment.
+Phase 1 (mode architecture) and Phase 2 (local recording prototype) from the original plan are built. An additional, unplanned pass then reworked the Shadowing/Pronunciation transcript-stage into a three-column desktop layout — this is exactly the layout being replaced by this revision, not a foundation to build further on.
 
-**Backend/hosting reality that constrains the evaluation architecture:**
-- [package.json](package.json): Next.js 16 App Router, Supabase (`@supabase/ssr`, `@supabase/supabase-js`), `@google/generative-ai`, `@upstash/redis`. No audio/ML libraries yet.
-- [lib/rateLimit.ts](src/lib/rateLimit.ts): Gemini calls are gated by a **global, shared** quota — `GEMINI_RPM_LIMIT=5`, `GEMINI_RPD_LIMIT=20` by default, tracked in Upstash Redis and shared across every caller of the app, not per-user. This is decisive: **Gemini cannot be the default per-attempt evaluator for either new mode** — 20 calls/day total would be exhausted by a single practice session. It remains usable only as a rare, explicitly user-triggered, opt-in action (mirroring [api/ai/explain/route.ts](src/app/api/ai/explain/route.ts)'s pattern), sharing the same tiny budget as the app's existing AI-explanation feature.
-- [lib/supabase/server.ts](src/lib/supabase/server.ts): cookie-based RLS client for user-scoped reads/writes, a separate `createServiceClient()` for privileged service-role operations (never exposed client-side) — the pattern the new evaluation route must follow.
-- [lib/supabase/ownership.ts](src/lib/supabase/ownership.ts): `ownsSession`/`ownsAttempt` helpers pair an RLS policy with an explicit server-side ownership check — a new `ownsPracticeAttempt` helper should follow the same shape.
-- No Supabase Storage bucket exists anywhere in the codebase today (vocabulary images are external Openverse URLs, not stored). **This is greenfield** — bucket, policies, and upload plumbing all need to be built from scratch.
-- Migrations are sequential, one concern per file, through [012_listening_sessions.sql](supabase/migrations/012_listening_sessions.sql) — the next migration is `013_practice_attempts.sql`.
-- No dedicated backend/VPS exists; hosting is Vercel (Next.js serverless/Node functions) + Supabase + Upstash. This rules out anything requiring a persistent process or GPU as a default dependency (see §4).
+**What exists in the repo today, and what this revision does with each piece:**
 
-## 2. Product recommendation
-
-Build **Shadowing Mode** and **Pronunciation Practice Mode** as two new values of the existing `InputMode` enum, sharing 100% of the existing shell (header, video card, `RightPanelTabs`, `ControlBar` chrome) and swapping only the transcript-stage content — exactly the way Listening Mode already swaps in `<ListeningTranscript>` instead of `<SentenceWordInput>`. Do not build a new route or page.
-
-Ship them in two clearly separated tracks because they solve different problems:
-- **Shadowing** is self-comparison, no scoring required, MVP-able entirely client-side with zero backend cost.
-- **Pronunciation Practice** genuinely needs *some* recognition/scoring engine, so it must be designed around the hard constraint above: no free engine of real quality runs on this app's current hosting. Its MVP is therefore **Word Match only** (transcription + alignment, honestly labeled as not a pronunciation score), with true pronunciation scoring (Azure F0) as an explicit, later, optional upgrade — not blocking the MVP.
-
-Be honest with the user about this tradeoff up front rather than over-promising a phoneme-level score the free stack can't deliver on day one.
-
-## 3. Shadowing vs. Pronunciation Practice — the distinction
-
-| | Shadowing | Pronunciation Practice |
+| File | Current state | Disposition |
 |---|---|---|
-| Goal | Rhythm, timing, stress, intonation — mimic the speaker | Correctness of individual words/sounds against reference text |
-| Reference | The speaker's audio (heard, then imitated in near-overlap or immediately after) | The sentence's text (read aloud once, alone) |
-| Scoring requirement | None required for MVP — self-comparison only | Needs at least Word Match; true phoneme scoring is a stretch upgrade |
-| Primary feedback | "How close was your timing/rhythm to the original?" (duration, pace, waveform overlay) | "Which words did you mispronounce or skip?" |
-| Recording use | Play original → record while/just after → compare both recordings side by side | Play original → **stop it** → record alone → evaluate against text |
-| Repetition model | Same sentence many times, or a whole section continuously | One sentence at a time, retry until satisfied |
-| Failure mode to avoid | Treating a rough pitch/duration heuristic as an authoritative score | Treating successful transcription as proof of correct pronunciation |
+| [types.ts](src/app/dictation/[videoId]/types.ts) | `InputMode = "dictation" \| "listening" \| "shadowing" \| "pronunciation"` | **Change**: drop `"pronunciation"` → `"dictation" \| "listening" \| "shadowing"` |
+| [useInputModePreference.ts](src/app/dictation/[videoId]/useInputModePreference.ts) | Parses `?mode=` and a per-video localStorage key into 4 modes | **Change**: 3-way parse + migrate stored/URL `"pronunciation"` → `"shadowing"` (see §3.3) |
+| [ModeSwitcher.tsx](src/app/dictation/[videoId]/components/ModeSwitcher.tsx) | 4 options (Listening, Shadowing, Pronunciation Practice, Dictation), each with its own SVG icon; Shadowing's current icon is mic-shaped | **Change**: remove the Pronunciation Practice option; give Shadowing a new non-mic icon (§4); update its description to cover both listening-and-imitating and recording |
+| [ControlBar.tsx](src/app/dictation/[videoId]/components/ControlBar.tsx) | `isSpeakingMode = inputMode === "shadowing" \|\| inputMode === "pronunciation"` drives one center Record/Stop button; mode-switch trigger always shows a static `LayoutGrid` icon | **Change**: `isSpeakingMode` collapses to `inputMode === "shadowing"`; center button becomes two adjacent buttons (Record/Stop, Play/Pause My Recording — §5); mode-switch trigger icon becomes per-mode (§4) |
+| [DefaultLayout.tsx](src/app/dictation/[videoId]/components/layouts/DefaultLayout.tsx) | Has a fully separate early-return render branch for `isSpeakingMode` (shadowing/pronunciation) using a 3-row desktop CSS Grid (`minmax(280px,1fr)_minmax(180px,220px)_84px`) that swaps the transcript stage for `<ShadowingPanel>`/`<PronunciationPanel>` | **Remove entirely.** Shadowing falls through the *same* return path Dictation/Listening already use — see §6 |
+| [SpeakingPracticeStage.tsx](src/app/dictation/[videoId]/components/SpeakingPracticeStage.tsx) | Shared 3-column workspace (reference audio / recording status / your recording) + reserved translation strip, with disabled placeholder "Save"/"Evaluate" buttons | **Delete.** Superseded by control-bar actions (§5) + a right-panel Evaluation tab (§10) |
+| [ShadowingPanel.tsx](src/app/dictation/[videoId]/components/ShadowingPanel.tsx) | Thin wrapper around `SpeakingPracticeStage` | **Delete** (with `SpeakingPracticeStage`) |
+| [PronunciationPanel.tsx](src/app/dictation/[videoId]/components/PronunciationPanel.tsx) | Thin wrapper around `SpeakingPracticeStage` | **Delete** — Pronunciation Practice no longer exists as a mode |
+| [useAudioRecorder.ts](src/hooks/useAudioRecorder.ts) | `MediaRecorder` lifecycle hook — permission request, MIME fallback, level meter, wall-clock duration, Blob-only result, never touches the network | **Keep as-is.** Already exactly the "in-memory Blob only" model §6/§7 require; no upload path was ever built against it |
+| [AudioLevelMeter.tsx](src/components/AudioLevelMeter.tsx) | Bar-style level meter component | **Keep**, but repurpose for an in-button miniature meter (§5) instead of a stage-level display |
+| [CompactAudioPlayer.tsx](src/components/CompactAudioPlayer.tsx) | Full compact player (play/pause, seek, time, mute) built for the 3-column stage | **Replace its call site.** Extract just its Play/Pause + `ended`-handling logic into a small headless hook (§5.3); the visible seek bar/time UI it currently provides is no longer needed since there is no dedicated playback surface in the new design |
+| Supabase (migrations, storage) | No `practice_attempts` table and no Storage bucket were ever created — Phase 5 of the original plan was never implemented | **Nothing to remove in the database.** The removal in §6 below is a *plan* correction (delete the design), not a rollback of shipped schema |
+| `useKeyboardShortcuts.ts`, `constants.ts`, `page.tsx` | Reference `"pronunciation"` only via the generic `inputMode !== "dictation"` checks already generalized in Phase 1 | **No change needed** — these already treat every non-dictation mode uniformly and don't hardcode `"pronunciation"` anywhere |
 
-## 4. Engine comparison table
+This table *is* the migration map: every row with "Change"/"Remove"/"Delete" is a concrete Phase 3 task (§12).
 
-*Checked 2026-09-03 against official docs; see inline links. Google Cloud's free-tier figure below could not be verified against a clean fetch of the official pricing page (secondary sources converge on it) — verify at [cloud.google.com/speech-to-text/pricing](https://cloud.google.com/speech-to-text/pricing) before depending on it.*
+## 2. Product decision: one mode, Shadowing
 
-| Engine | Purpose | True scoring or transcription-only | Word-level | Phoneme-level | Fluency/prosody | English locales | Runs where | Mobile OK | Free allowance | Recurring cost | Compute | Privacy | License | Advantages | Disadvantages | Recommendation |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **MediaRecorder + Web Audio + Meyda + Pitchy/VAD** | Recording, waveform, energy/pitch/VAD | Neither (no recognition) | No | No | No (rough pitch/energy contour only) | N/A | Browser | Yes (all) | Unlimited, free | $0 | Negligible | 100% local, nothing leaves device | MIT/BSD-style | Zero cost, zero infra, instant, private | Zero word-correctness signal | **Use — foundation for both modes** |
-| **Web Speech API (`SpeechRecognition`)** | Live ASR | Transcription-only | Yes (via diff) | No | No | en-* (browser-dependent) | Browser (Chrome/Edge/Android Chrome only, real-use) | No (iOS Safari unreliable) | Unlimited | $0 | None (Google's servers do the work) | **Audio sent to Google's servers**, not local, no offline | N/A (browser API) | Already used elsewhere in this codebase, zero setup | Chrome-only in practice, privacy tradeoff, no scoring | **Use for Word Match on Chromium browsers only** |
-| **Transformers.js (Whisper tiny/base, in-browser)** | Offline ASR | Transcription-only | Yes (via diff) | No | No | Multilingual/en | Browser (WASM, WebGPU accel on Chrome/Edge) | Slow/heavy on phones, iOS WebGPU partial | Unlimited | $0 | ~75–150MB one-time download; multi-sec CPU on phone | Fully local/private | MIT (Xenova) | Private, works offline once cached, no per-call cost | Large download, slow on mobile, Safari WebGPU gaps | Optional fallback for Safari/offline, not MVP default |
-| **whisper.cpp / faster-whisper** | Server ASR | Transcription-only | Yes | No | No | Multilingual/en | **Not** Vercel functions, **not** Supabase Edge Fn — needs a small VPS | Backend-only | Free (self-hosted) | ~$0–7/mo VPS (Fly.io/Railway/Render) | CPU-only OK for short clips | Private if self-hosted | MIT | Accurate, no per-call fee once running | Real ops burden for a solo dev; no platform fit on current stack | Not for MVP; only if a VPS is later justified |
-| **Vosk** | Server ASR | Transcription-only | Yes | No | No | en (small model 40MB) | Same as above — VPS only | Backend-only | Free | Same VPS cost | Low (small model) | Private if self-hosted | Apache 2.0 | Small model, decent accuracy | Same deployment gap as whisper.cpp | Not for MVP |
-| **wav2vec2 (HF)** | ASR / phoneme CTC | Transcription or phoneme-recognition | Yes | Partial (via CTC phones) | No | en | VPS only (PyTorch) | Backend-only | Free | VPS cost | CPU OK, GPU nicer | Private if self-hosted | Apache 2.0 | Basis for open pronunciation tools (below) | Needs PyTorch runtime, no platform fit | Building block, not standalone MVP choice |
-| **OpenPronounce** (wav2vec2 + DTW, [GitHub](https://github.com/Halleck45/OpenPronounce)) | Self-hosted pronunciation scoring | **True scoring** | Yes | Yes (IPA) | Partial (pitch/energy curves, no formal fluency score) | en | VPS only | Backend-only | Free (self-hosted) | VPS cost (~$2–7/mo) | CPU OK for short clips, ~2.4GB RAM for two wav2vec2 checkpoints | Private if self-hosted | MIT | Closest free/open Azure-Assessment clone that exists today | Small project (47★), ~10% phone-error-rate caveat acknowledged by its own author, real VPS ops burden | **Best-quality self-hosted option if a VPS is acceptable** |
-| **Montreal Forced Aligner + Kaldi GOP** | Forced alignment + pronunciation scoring | True scoring (GOP) | Yes | Yes | No | en | VPS only (conda/Kaldi) | Backend-only | Free | VPS cost | CPU OK | Private if self-hosted | MIT/Apache | Well-validated in research literature | Steep Kaldi/conda ops burden, no scoring UI, must be hand-built | Too much build effort for a solo personal app |
-| **Azure AI Speech — Pronunciation Assessment** | Cloud pronunciation scoring | **True scoring**: accuracy, fluency, completeness, prosody (en-US) | Yes | Yes (IPA/SAPI + syllable, en-US) | Yes (`ProsodyScore`, opt-in, en-US only) | Broad (best on en-US) | Server (call from a Next.js API route) | Yes | **F0 tier: 5 audio hours/month, recurring, not a trial** ([pricing](https://azure.microsoft.com/en-us/pricing/details/speech/)) | $0 within F0; beyond it, standard STT rate + $0.30/hr only for real-time streaming (batch mode free of that surcharge) | None (Microsoft's servers) | Audio leaves the device to Microsoft | Proprietary/commercial API | Only option here with genuine word+phoneme+prosody scoring and a real recurring free quota | Third-party dependency, needs a server-side proxy to hide the key, en-US-centric prosody | **Recommended low-cost/best-quality cloud fallback** |
-| **Google Cloud Speech-to-Text** | Cloud ASR | Transcription-only | Yes (confidence) | No | No | Broad | Server | Yes | ~60 min/month recurring *(unverified — check official page)* | ~$0.016/min beyond free tier | None | Leaves device to Google | Proprietary | Simple, broad locale support | No pronunciation feature at all | Not needed given Azure covers this better |
-| **AWS Transcribe** | Cloud ASR | Transcription-only | Yes | No | No | Broad | Server | Yes | **60 min/month for 12 months only — a trial, not permanent** ([pricing](https://aws.amazon.com/transcribe/pricing/)) | $0.006–0.01/min | None | Leaves device to AWS | Proprietary | — | No pronunciation feature; free tier expires | **Do not use** — trial, not a real free tier, and no scoring capability anyway |
-| **OpenAI Whisper/gpt-4o-transcribe API** | Cloud ASR | Transcription-only | Yes | No | No | Broad | Server | Yes | **None** | $0.003–0.017/min ([pricing](https://developers.openai.com/api/docs/pricing)) | None | Leaves device to OpenAI | Proprietary | High transcription accuracy | No free tier, no pronunciation feature | Only as a paid last-resort fallback, not MVP |
-| **Gemini (already integrated)** | General LLM, audio-capable | Transcription/qualitative feedback only, not calibrated scoring | Rough (prompt-dependent) | No | No (unreliable if prompted for it) | Broad | Server (already wired) | Yes | **~20 calls/day, shared across the whole app** | $0 within quota | None | Leaves device to Google | Proprietary | Zero new integration cost, already rate-limited/cached pattern exists | Quota far too small for per-attempt use; not a calibrated pronunciation scorer | Optional, rare, user-triggered "ask AI" button only — never the default evaluator |
-| **SpeechAce / ELSA / Soapbox Labs** | Commercial pronunciation APIs | True scoring | Yes | Yes | Yes | en | Server | Yes | None meaningful (SpeechAce ~$125/mo for 10k calls; ELSA Business ~$18/user/mo) | Real, ongoing subscription cost | None | Leaves device to vendor | Proprietary | Purpose-built, mature | Expensive for a personal project | **Do not use** — no free tier fits a personal app's budget |
-
-### Recommended completely free MVP stack
-Browser recording (MediaRecorder + Web Audio/Meyda/Pitchy) for both modes' local metrics and playback, plus Web Speech API for Word Match on Chrome/Edge/Android Chrome (with an honest "recognition unavailable here" state on Safari/iOS). **$0 recurring, zero new infrastructure.**
-
-### Recommended low-cost upgrade stack
-Add Azure AI Speech Pronunciation Assessment on the F0 free tier (5 hrs/month, recurring) behind a Next.js API route, used only when the learner explicitly presses "Evaluate pronunciation" on a saved recording (not automatically, not per-attempt). **Still $0/month at personal-scale usage**, with a hard ceiling that degrades gracefully to Word Match if exceeded.
-
-### Recommended best-quality stack
-Same Azure integration, moved to pay-as-you-go once F0's 5 hrs/month is a real constraint (unlikely for one learner) — batch-mode pronunciation assessment costs the same as plain STT, no extra surcharge. Self-hosting OpenPronounce on a ~$2–7/month VPS is the alternative "best-quality, zero external API dependency" path, but only worth it if the user actively wants to avoid any cloud vendor and is willing to own ongoing ops (patching, uptime, model updates) — **not recommended as the default** for a one-developer personal app.
-
-### Engines that should not be used, and why
-- **AWS Transcribe** as a "free" engine — its free tier is a 12-month trial, not permanent, and it has no pronunciation-scoring capability regardless.
-- **OpenAI transcription** as a default/free path — no free tier at all, transcription-only.
-- **Gemini** as the default per-attempt evaluator for either mode — the app's shared quota is 20 calls/day total; a single practice session would exhaust it and starve the existing AI-explanation feature.
-- **whisper.cpp / faster-whisper / Vosk / wav2v2 / MFA / Kaldi-GOP directly inside Vercel serverless or Supabase Edge Functions** — technically impossible: no persistent disk for model caching, no GPU, and Supabase Edge Functions cap at 2s CPU-time/150MB memory on the free tier. Any of these require a dedicated VPS, which is a real (if small) recurring cost and maintenance burden, not "free" in practice.
-- **Commercial pronunciation APIs (SpeechAce/ELSA/Soapbox)** — no tier realistically fits a personal project's budget.
-- **Web Speech API as a claimed "pronunciation" scorer** — it is ASR only; never present its output as anything but Word Match, and never as evidence of correct pronunciation.
-
-## 5–6. Recommended stacks
-Already stated above (end of §4) per the required structure — free MVP stack and low-cost upgrade stack.
-
-## 7. UX flows
-
-### Shadowing Mode
-1. **Select Shadowing** from the mode switcher (same popover as today, `ModeSwitcher.tsx`'s stub becomes live).
-2. **Headphone reminder** — a dismissible one-time banner (localStorage-flagged, same pattern as `REPLAY_HINT_SEEN_KEY`) explaining that speaker playback will bleed into the recording; no way to technically prevent it, so this is purely instructional.
-3. **Play original** — reuses `playSegment(currentSegIdx)`. Button label "▶ Hear it" replaces the dictation input area's role.
-4. **Countdown** (3-2-1, ~configurable, default 3s) — visual only, no audio cue that would itself get picked up by the mic.
-5. **Record** — big record button, live level meter (Web Audio analyser), running timer, auto-stop at a max duration (original sentence duration × 2.5, capped at e.g. 20s) or manual stop.
-6. **Compare** — two playback buttons side by side: "▶ Original" / "▶ You," plus a stacked/overlaid waveform view (two `<canvas>` traces) and the local metrics (see §9).
-7. **Retry** — discards the Blob, returns to step 3, no network call. Retries are unlimited and free.
-8. **Optionally save** — "💾 Save this attempt" uploads only the currently-selected Blob.
-9. **Continue** — "Next sentence" (single-sentence loop) or "Practice this section" (auto-advance through N sentences, same play→record→compare loop repeated, pausing between each).
-
-### Pronunciation Practice Mode
-1. **Select Pronunciation Practice** from the mode switcher (new stub, same visual slot as Listening/Shadowing/Dictation).
-2. **Play original** — `playSegment`; **video/audio is force-paused** before recording starts (unlike Shadowing, which may still be mid-playback when recording begins).
-3. **Countdown**, then **record** (same primitives as Shadowing).
-4. **Stop** — auto (silence-based VAD, optional Phase 8 enhancement) or manual.
-5. **Playback before evaluation** — learner can listen to their own take and re-record before spending any evaluation budget.
-6. **Evaluate** — button explicitly separate from "record," so evaluation (whether local Word Match or, later, an Azure call) is opt-in per attempt, never automatic.
-7. **Loading state** — skeleton/spinner on the results card; Word Match resolves near-instantly (client-side), Azure calls show a distinguishable "calling pronunciation engine…" state with a timeout.
-8. **Results** — Word Match card always; Pronunciation/Fluency/Prosody cards only when that engine actually ran (see §14 for labeling rules).
-9. **Retry or Save** — same local-first, explicit-save pattern as Shadowing.
-
-### Mode-switch behavior (applies to both)
-- Switching *into* Shadowing/Pronunciation Practice from Dictation/Listening: video player is **not remounted** (same `YouTubePlayer` instance persists — only `DefaultLayout`'s stage content swaps); current timestamp and `currentSegIdx` are preserved exactly as they are today when toggling Dictation↔Listening.
-- Switching *away* mid-recording: if a recording is in progress, prompt "Discard this recording?" (unsaved Blobs are cheap to lose, but silent loss is bad UX) — same idea as the existing `window.confirm` guards used for script regeneration.
-- Refresh during an unsaved attempt: the Blob is gone (it was never persisted — by design, see §8); on remount, if `sessionStorage` shows a recording was in progress, show a small "Your last recording wasn't saved" toast rather than silently doing nothing.
-
-### Desktop vs. mobile
-- Desktop: record controls sit in the transcript stage's fixed-height area (same slot `SentenceWordInput`/`ListeningTranscript` occupy today); level meter and waveform render inline.
-- Mobile: identical stage swap, but secondary actions (waveform detail, saved-attempts history) move into the existing `MobileBottomSheet` "More" pattern rather than crowding the fixed-height stage, keeping the one-row `ControlBar` mobile layout untouched. Record/Stop stays the one always-visible primary action, replacing the Hint/Play-Pause slot in `ControlBar`'s center for these two modes.
-
-## 8. Recording architecture
-
-- **Local-first, explicit-save.** `MediaRecorder` writes to an in-memory Blob per attempt; nothing touches the network or Supabase until "Save attempt" is pressed. Failed/discarded takes never leave the browser.
-- **MIME selection at record time**, runtime-detected via `MediaRecorder.isTypeSupported()`, preferring `audio/webm;codecs=opus` (Chrome/Edge/Android Chrome/Firefox) and falling back to `audio/mp4` (Safari — default there since MediaRecorder support landed, WebM added only in Safari 18.4+ and not default even then).
-- **No client-side transcoding to WAV.** Store the compressed Blob as recorded; only convert to 16kHz mono PCM/WAV server-side, on-demand, immediately before a pipeline that requires it (Azure Speech SDK), via `ffmpeg-static`/`fluent-ffmpeg` inside a Node.js-runtime API route (not Edge runtime — Edge can't run native binaries).
-- **Duration cap**: recording auto-stops at `max(originalDuration × 2.5, 8s)`, capped at 20s absolute, to bound both UX (no one shadows a 3-word sentence for a minute) and later Storage/Azure-minute costs.
-- **Temporary local storage**: keep the Blob in a `useRef`/component state only for the current attempt (per requirements, an explicit "current vs. previous attempt" comparison needs at most the last one or two Blobs in memory — IndexedDB is not required for the MVP, since nothing needs to survive a refresh unsaved by design). Reserve IndexedDB for a later "offline queue of not-yet-uploaded saves" enhancement, not the MVP.
-- **Mic permission**: request via `getUserMedia({ audio: true })` lazily, only when the learner first presses Record in one of these two modes — never on page load. Denials produce a persistent inline state ("Microphone access denied — check your browser's site settings") rather than a dead button.
-- **Recording indicator**: a clearly visible red dot + timer while `MediaRecorder.state === "recording"`, consistent with platform mic-in-use indicators (which the browser/OS already shows independently).
-
-## 9. Evaluation architecture
-
-### Pipeline A — Completely free MVP (local/client-only)
-Computed entirely in the browser from the two Blobs (original sentence audio, extracted once via an offline `<audio>` decode of the segment's YouTube time range is **not** available — YouTube's iframe doesn't expose raw PCM — so "original" metrics are approximated from the *known segment duration* `end - start`, not from decoding audio) and the user's recording:
-- **Duration comparison**: recorded length vs. segment `duration` — reliable, cheap, meaningful signal for shadowing pace.
-- **Speaking-rate proxy**: syllable-ish estimate from word count ÷ duration — reliable enough as a rough words-per-minute comparison, not a real syllable count.
-- **Silence/pause detection**: energy-threshold segmentation via Web Audio `AnalyserNode`/Meyda RMS — reliable for "did you pause where the speaker paused," reasonably trustworthy.
-- **Start/end timing offset**: when did speech begin relative to recording start — reliable.
-- **Waveform overlay**: purely visual, always safe to show (it's just a picture, no claim of correctness).
-- **Pitch contour comparison**: Pitchy/autocorrelation-based F0 tracking on both clips, plotted together — **experimental**, label it as such; absolute pitch differs by speaker (voice range, gender) so raw contour overlap is a rough *rhythm-of-intonation* cue at best, not a similarity score. Do not reduce it to a single number.
-- **What this pipeline cannot evaluate**: word correctness, pronunciation accuracy, phoneme correctness, fluency in any calibrated sense. It is entirely presented as **self-comparison aids**, never as a score.
-
-### Pipeline B — Free/low-cost Word Match
-1. Client records the learner reading the sentence alone.
-2. On Chrome/Edge/Android Chrome: run `SpeechRecognition` on the recording (same `getSpeechRecognitionCtor()` pattern as `useAutoTranscribeSpeech.ts`, applied live during/just after the mic recording rather than during video playback).
-3. On Safari/iOS or when recognition is unsupported: show "Word Match isn't available on this browser — you can still listen back and self-rate" rather than a broken/empty state; optionally offer a manual opt-in "Ask AI to transcribe this" button that spends 1 of the app's shared Gemini calls (rate-limited, clearly labeled).
-4. Feed both texts into the **existing** `checkAnswer`/`wordDiff`/`normalizeText` pipeline from `lib/utils/text.ts` (relaxed mode: lowercase, punctuation stripped, contractions handled the same way dictation already does).
-5. Derive Word Error Rate from the diff (substitutions+deletions+insertions ÷ reference word count), and surface missing/inserted/substituted words individually.
-6. **Label the result "Word Match," never "Pronunciation Score."** Recognition confidence (where the browser exposes it) can gray out low-confidence words rather than asserting them as definite mismatches.
-
-### Pipeline C — True pronunciation assessment (Azure)
-1. Learner saves a recording and presses "Evaluate pronunciation" (explicit, budget-aware action, not automatic).
-2. Server route (`/api/practice/evaluate`, Node.js runtime) downloads the Blob from Supabase Storage using the service-role client, converts to 16kHz mono WAV via `ffmpeg-static`.
-3. Calls Azure Speech's Pronunciation Assessment REST endpoint with the reference text and audio, server-side only (key lives in an env var, never reaches the browser) — mirrors the existing `GEMINI_API_KEY` server-only pattern.
-4. Normalizes Azure's response into `{ accuracyScore, fluencyScore, completenessScore, prosodyScore, overall, wordScores: [{word, accuracyScore, errorType}], phonemeScores: [...] }` and writes it to `practice_attempts.pronunciation_result` (JSONB) plus `engine_name='azure-pronunciation-assessment'`, `engine_version` (API version string), `eval_status='completed'`.
-5. Errors/timeouts (network, Azure quota exhausted, malformed audio) set `eval_status='failed'` with a short reason string, and the UI falls back to showing Word Match only, with a retry button — never a silent blank state.
-6. If Azure's F0 minutes are realistically never exhausted at personal-usage scale (a handful of sentences/day), no quota gating beyond a sane request timeout (~10s) is needed; if usage grows, apply the same Upstash-backed shared-quota pattern already used for Gemini.
-
-If the user explicitly wants zero cloud dependency, the smallest practical alternative is self-hosting **OpenPronounce** on a small VPS (§4) — call out clearly that this trades "no vendor" for "you now run and patch a server," which is a real ongoing cost this personal app doesn't currently carry.
-
-## 10. Supabase Storage and database design
-
-**Bucket**: `practice-recordings` — **private** (no public read). Path convention:
-```
-{userId}/{videoId}/{segmentIndex}/{attemptId}.{ext}
-```
-`ext` derived from the stored MIME type (`webm` or `m4a`/`mp4`). Access only via short-lived signed URLs (~60s TTL, regenerated on each playback request) issued by a server route that first calls the `ownsPracticeAttempt` check.
-
-**Table** `practice_attempts` (naming note: the brief suggested `shadowing_attempts`, but since one table serves both modes with a `mode` column — the same shape-sharing tradeoff `listening_sessions` vs. `learning_sessions` already made a call on in this codebase — a mode-neutral name avoids an outgrown legacy name):
-
-```sql
-create table practice_attempts (
-  id                    uuid primary key default gen_random_uuid(),
-  user_id               uuid not null references users(id) on delete cascade,
-  youtube_video_id      text not null,
-  transcript_id         uuid references transcripts(id) on delete set null,
-  segment_index         integer not null,
-  mode                  text not null check (mode in ('shadowing', 'pronunciation')),
-  reference_text        text not null,
-  storage_path          text not null,
-  mime_type             text not null,
-  duration_sec          numeric,
-  recognized_text       text,
-  word_match            jsonb,   -- { wer, diff: DiffToken[], missing: [], inserted: [], substituted: [] }
-  pronunciation_result  jsonb,   -- { accuracyScore, fluencyScore, completenessScore, prosodyScore, wordScores: [...] }
-  engine_name           text,
-  engine_version         text,
-  eval_status           text not null default 'not_evaluated'
-                           check (eval_status in ('not_evaluated', 'pending', 'completed', 'failed')),
-  eval_error             text,
-  self_rating            smallint check (self_rating between 1 and 5),
-  created_at             timestamptz not null default now()
-);
-
-create index practice_attempts_user_idx  on practice_attempts(user_id);
-create index practice_attempts_video_idx on practice_attempts(youtube_video_id, segment_index);
-
-alter table practice_attempts enable row level security;
-create policy "practice_attempts_owner" on practice_attempts for all using (auth.uid() = user_id);
+```ts
+type InputMode =
+  | "dictation"
+  | "listening"
+  | "shadowing";
 ```
 
-A row is written **only when the learner saves** (mirrors "do not automatically store every failed attempt" — unlike `attempt_logs`, which logs every dictation submission, this table intentionally does not).
+Shadowing now covers the full spectrum of speaking practice:
+- **Listen and imitate** — play the original sentence (reusing the existing Replay control — see §5), listen, repeat it back.
+- **Record and review** — record the attempt, play it back, compare informally by ear.
+- **Optionally evaluate** — when an evaluation engine is available, send the current recording for structured feedback. Evaluation is one action inside Shadowing, never a mode of its own, never required, never automatic.
 
-**Storage RLS policies** (bucket-scoped, folder-based ownership check — same idiom as any per-user Supabase Storage setup):
-```sql
-create policy "practice_recordings_owner_select"
-  on storage.objects for select
-  using (bucket_id = 'practice-recordings' and (storage.foldername(name))[1] = auth.uid()::text);
+This removes an entire parallel UI (a second panel, a second set of control-bar buttons, a second roadmap) for a distinction — "imitate the speaker" vs. "read the sentence alone" — that in practice is just *whether the learner chooses to listen to the original again before recording*. Both are already just "press Replay, then press Record" in either case.
 
-create policy "practice_recordings_owner_insert"
-  on storage.objects for insert
-  with check (bucket_id = 'practice-recordings' and (storage.foldername(name))[1] = auth.uid()::text);
+## 3. Mode architecture
 
-create policy "practice_recordings_owner_delete"
-  on storage.objects for delete
-  using (bucket_id = 'practice-recordings' and (storage.foldername(name))[1] = auth.uid()::text);
+### 3.1 Types and control-bar branching
+- `InputMode` drops to 3 values (§2).
+- [ControlBar.tsx](src/app/dictation/[videoId]/components/ControlBar.tsx)'s `isSpeakingMode` becomes `inputMode === "shadowing"` (no more `||`). Every other mode-branch already in the file (`isDictationMode`, the `!isDictationMode` Play/Pause-vs-Hint split, `INPUT_MODE_LABELS`) needs no structural change beyond dropping the `pronunciation` entry from `INPUT_MODE_LABELS` in [constants.ts](src/app/dictation/[videoId]/constants.ts).
+- [DefaultLayout.tsx](src/app/dictation/[videoId]/components/layouts/DefaultLayout.tsx)'s `isSpeakingMode` local variable becomes unnecessary — see §6, Shadowing no longer branches away from the Dictation/Listening return path at all.
+
+### 3.2 Mode switcher
+- [ModeSwitcher.tsx](src/app/dictation/[videoId]/components/ModeSwitcher.tsx) drops its Pronunciation Practice `<ModeOption>` entirely, leaving three options: Listening Mode, Shadowing, Dictation.
+- Shadowing's description updates to something like *"Listen, repeat it back, and record yourself"* — one line covering both halves of §2.
+- Shadowing's icon changes from its current mic-shaped SVG to the waveform/echo icon chosen in §4 (a microphone icon here would be misread as "this mode is about recording only," and collides visually with the mic icon the Record button itself now uses).
+
+### 3.3 URL parameters and stored preferences — migration requirement
+[useInputModePreference.ts](src/app/dictation/[videoId]/useInputModePreference.ts) currently parses `?mode=` and the per-video localStorage key `dictation.input-mode.<videoId>` through a shared `parseInputMode()` helper backed by a `NON_DEFAULT_MODES` list. That helper is the single choke point for this migration:
+
+```ts
+// Any link or stored value from before this revision may still say
+// "pronunciation" — treat it as "shadowing" rather than silently
+// falling back to "dictation" (today's behavior for any unrecognized value).
+const LEGACY_MODE_ALIASES: Record<string, InputMode> = { pronunciation: "shadowing" };
+
+function parseInputMode(value: string | null): InputMode {
+  if (!value) return "dictation";
+  if (value in LEGACY_MODE_ALIASES) return LEGACY_MODE_ALIASES[value];
+  return (NON_DEFAULT_MODES as readonly string[]).includes(value) ? (value as InputMode) : "dictation";
+}
 ```
 
-**Upload flow**: client uploads directly to Storage using the browser (anon-key, RLS-checked) client — no server round-trip needed for the audio bytes themselves — then calls a server route to insert the `practice_attempts` row (so the DB write can validate `mode`/`segment_index` against the video/transcript and use the service-role client for consistency). If the Storage upload succeeds but the DB insert fails, the route deletes the orphaned Storage object before returning an error (explicit cleanup, not a dangling file).
+Requirements this must satisfy:
+- **`?mode=pronunciation` links** (bookmarks, shared links, anything cached before this revision) resolve to Shadowing on load. `setInputMode`'s existing `router.replace(...)` call — already invoked whenever the mode is set — naturally rewrites the URL to `?mode=shadowing` the next time the mode changes; a one-time `router.replace` on initial mount when the *raw* param was `"pronunciation"` cleans up the URL immediately rather than waiting for the next manual mode switch, so a reloaded/re-shared link doesn't keep propagating the stale value.
+- **Stored localStorage values** of `"pronunciation"` get the same alias treatment. Nothing needs to actively *rewrite* the stored string (the next `setInputMode` call overwrites it with `"shadowing"` anyway); the alias in `parseInputMode` is sufficient so old values never regress a visitor to the "dictation" fallback.
+- **No session disruption.** This migration lives entirely in `useInputModePreference` — it never touches `useDictationSession`'s `currentSegIdx`, `uxState`, or `sessionStorage` snapshot. A learner mid-video with a stale `pronunciation` link keeps their exact video, sentence, and playback position; only which mode's UI renders changes.
 
-**Retention**: no automatic deletion for the MVP — a personal app's recording volume is small (a handful of MB per saved sentence, WebM/Opus at ~16–32kbps mono ≈ well under 100KB for a typical sentence). Add a "Storage used: X MB" indicator in Settings and a manual per-recording delete button (removes both the Storage object and the DB row) rather than building automatic-cleanup logic the user didn't ask for.
+### 3.4 Dashboard entry points
+Checked directly: no dashboard, homepage, or history page in this codebase currently links to `/dictation/[videoId]?mode=pronunciation` or references a mode value at all — mode selection happens exclusively inside the practice page's own `ModeSwitcher`/`SettingsDrawer`. There is nothing to migrate here today. If a future dashboard feature (e.g., "resume where you left off" deep links) starts encoding `?mode=` values, it must route through the same `parseInputMode` alias table rather than duplicating mode logic.
 
-**File size/bitrate**: cap `MediaRecorder`'s `audioBitsPerSecond` around 24–32kbps mono (voice-adequate, keeps files tiny); reject/warn on any Blob over ~2MB (should never happen at a 20s cap and this bitrate, but guards against a runaway recording).
+### 3.5 Settings
+[SettingsDrawer.tsx](src/app/dictation/[videoId]/components/SettingsDrawer.tsx) renders `<ModeSwitcher>` directly and has no mode-specific logic of its own — the §3.2 change is sufficient; no separate settings-drawer edit is needed.
 
-## 11. Security and privacy
+## 4. Mode icon behavior
 
-- Mic access requested lazily, per-mode, with the browser's native permission prompt; no custom pre-prompt dialog needed beyond the headphone-reminder banner.
-- A visible recording indicator (red dot + timer) is shown any time `MediaRecorder` is active, independent of the OS's own mic-in-use indicator.
-- Recordings are private by default: private bucket, RLS-scoped by `auth.uid()`, signed URLs only, never a public/anon-readable path.
-- `SUPABASE_SERVICE_ROLE_KEY`, `AZURE_SPEECH_KEY` (new), and `GEMINI_API_KEY` are read only in Node.js-runtime API routes, never sent to or importable from client bundles — same discipline already enforced for the existing service-role/Gemini usage.
-- **Disclose in-product** which processing is local-only vs. sent to a third party: a small "Processed locally" vs. "Sent to Azure/Google for evaluation" tag on each results card, so the learner always knows before pressing Evaluate.
-- Deletion is real deletion: removing a saved attempt deletes the Storage object and the DB row together (not a soft-delete/orphan).
-- Failure cleanup: if a Storage upload succeeds but the subsequent DB insert fails (§10), the orphaned object is deleted server-side before the error surfaces to the client, so it's never left instead of a matching row.
-- No local-only-forever option is offered for *saved* attempts (saving inherently means uploading), but everything before "Save" — every retried, discarded take — is 100% local and never transmitted anywhere, satisfying a strong default privacy posture for the common case.
+Every mode gets one fixed, distinct icon, shown in two places that must always agree: the `ModeSwitcher` popover row, and the control bar's mode-switch trigger button (which today shows a static `LayoutGrid` regardless of mode — this is the actual defect §4 of the request is about).
 
-## 12. Phased implementation roadmap
+| Mode | Icon (lucide-react) | Rationale |
+|---|---|---|
+| Dictation | `Keyboard` | Typing is the mode's defining action |
+| Listening | `Headphones` | Matches the existing `ModeSwitcher` icon already in use |
+| Shadowing | `AudioLines` (fallback `Waves` if unavailable in the installed lucide-react version — confirm at implementation time) | A waveform/echo mark, distinct from the Record button's own mic icon |
 
-**Phase 1 — Repository & architecture prep (Small)**
-Goal: land the plumbing every later phase depends on, no user-visible change yet.
-- Extend `InputMode` to 4 values across `types.ts`, `useInputModePreference.ts` (proper switch, not binary), `ModeSwitcher.tsx` (activate the Shadowing stub, add a Pronunciation Practice entry), `ControlBar.tsx`/`SettingsDrawer.tsx` label plumbing.
-- Add empty `ShadowingPanel`/`PronunciationPanel` components wired into `DefaultLayout.tsx`'s stage branch, showing a placeholder.
-- Risk: touching the shared mode-switch plumbing without breaking Dictation/Listening — mitigate with the existing Jest suite plus manual regression pass on both modes.
-- Acceptance: switching to Shadowing/Pronunciation via the mode switcher shows a placeholder without any layout jump or video remount.
+Control-bar trigger changes:
+```tsx
+const MODE_ICONS: Record<InputMode, LucideIcon> = {
+  dictation: Keyboard,
+  listening: Headphones,
+  shadowing: AudioLines,
+};
+const ModeIcon = MODE_ICONS[inputMode];
+...
+<ControlButton
+  icon={<ModeIcon size={18} />}
+  shortcut={`Switch mode — currently ${INPUT_MODE_LABELS[inputMode]}`}
+  label={INPUT_MODE_LABELS[inputMode]}
+  active
+  onClick={...}
+/>
+```
+`ControlButton` already renders `title`/`aria-label` from `shortcut`/`label` and has a fixed `w-10 h-10 sm:w-12 sm:h-12` footprint regardless of icon content — swapping only the `icon`/`shortcut`/`label` values changes nothing about the button's size or position, satisfying "keep the button in the same position and size" and "mode changes must not resize or shift the control bar" without any layout-level change at all.
 
-**Phase 2 — Local recording prototype (Medium)**
-Goal: a standalone `useAudioRecorder` hook — permission request, `MediaRecorder` lifecycle, MIME detection/fallback, level meter via Web Audio, Blob-in-memory result.
-- New: `useAudioRecorder.ts`, `AudioLevelMeter.tsx`.
-- Risks: Safari MIME fallback correctness, permission-denied UX.
-- Testing: manual across Chrome/Edge/Android Chrome/Safari desktop+iOS.
-- Acceptance: record/stop/playback works and reports the right MIME/duration on every target browser.
+## 5. Shadowing's control-bar actions
 
-**Phase 3 — Shadowing Mode MVP (Medium–Large)**
-Goal: full flow — play original → countdown → record → compare (playback only, no metrics yet) → retry (local, unlimited).
-- Files: `ShadowingPanel.tsx`, `useShadowingSession.ts` (per-sentence state machine), countdown component.
-- Depends on: Phase 2.
-- Testing: full manual flow, mode-switch-during-recording guard, refresh-during-unsaved-attempt behavior.
-- Acceptance: learner can shadow one sentence repeatedly with zero network calls.
+Two adjacent buttons appear in `ControlBar`'s center button cluster (the same `justify-self-center` flex group that already holds Prev/Replay/[mode button]/Next) **only when `inputMode === "shadowing"`**, replacing the single Hint/Play-Pause slot other modes use:
 
-**Phase 4 — Local playback & attempt comparison (Medium)**
-Goal: add Pipeline A metrics — duration/rate/pause/waveform/pitch-contour comparison, current-vs-previous-attempt view (keep the last 1–2 Blobs in memory).
-- New: `audioMetrics.ts` (RMS/silence/duration/rate), `WaveformCompare.tsx`, Meyda/Pitchy integration.
-- Risk: presenting experimental pitch data misleadingly — mitigate with explicit "experimental" labeling (§14).
-- Acceptance: metrics visibly update per attempt and are clearly labeled by reliability tier.
+1. **Record/Stop**
+2. **Play/Pause My Recording**
 
-**Phase 5 — Optional Supabase saving (Medium)**
-Goal: "Save recording" wired end-to-end — bucket + RLS + `practice_attempts` table + upload/insert/cleanup flow.
-- DB/Storage: migration `013_practice_attempts.sql`, bucket + policies (§10).
-- New: `/api/practice/save` route, `ownsPracticeAttempt` helper, `useSavedAttempts` hook, delete action.
-- Risks: orphaned-object cleanup correctness, upload-retry UX on flaky mobile networks.
-- Testing: upload success/DB-insert-failure interleaving, delete removes both object and row, storage-usage display accuracy.
-- Acceptance: a saved attempt survives refresh, plays back via signed URL, and can be deleted cleanly.
+No separate "Hear it" button is added — **Replay already plays the original sentence** in every mode (it calls the same `playSegment(currentSegIdx)` Dictation and Listening already use) and continues to do exactly that in Shadowing.
 
-**Phase 6 — Word Match evaluation (Medium)**
-Goal: Pipeline B — Web Speech API transcription + `checkAnswer`/`wordDiff` alignment, applied to Pronunciation Practice (and optionally surfaced in Shadowing as a bonus, non-primary signal).
-- New: reuse `lib/utils/text.ts` as-is; add a thin `wordMatch.ts` wrapper mapping recognizer output → `CheckResult`-shaped data for the results UI.
-- Risk: Safari has no reliable recognizer — must degrade gracefully (§9).
-- Acceptance: on Chrome/Edge, a read-aloud sentence produces correct/missing/substituted word highlighting matching manual inspection on a handful of test sentences.
+### 5.1 Record/Stop button states
+Driven by the same `useAudioRecorder` status machine already built (`idle` / `requesting-permission` / `recording` / `stopped` / `error`):
 
-**Phase 7 — Pronunciation Practice MVP (Large)**
-Goal: full flow — play original → stop → countdown → record → playback-before-evaluate → Word Match results → retry/save.
-- Files: `PronunciationPanel.tsx`, `usePronunciationSession.ts`, results card components.
-- Depends on: Phases 2, 5, 6.
-- Testing: full flow across target browsers, evaluation-failure states, multiple rapid retries.
-- Acceptance: end-to-end flow works with Word Match as the only "evaluation," honestly labeled, no phoneme/pronunciation claims yet.
+- **Idle / stopped / error** (not currently recording): mic icon, label "Record". Clicking calls `recorder.start()` — which, per the hook's existing implementation, already discards any prior clip at the top of `start()`, so *pressing Record again always replaces the current recording* with no separate "Record again"/"Retry" control needed, satisfying that requirement for free.
+- **Recording**: the same button becomes the Stop button —
+  - Icon area replaced by a miniature 3–4 bar level meter (a scaled-down `AudioLevelMeter`, sized to fit the button's existing `w-10 h-10`/`w-12 h-12` box) driven by `recorder.level`, live.
+  - A persistent red ring/border and a small pulsing recording dot mark the state, distinct from the normal `active` (accent-colored) styling other toggled buttons use — this needs a new visual variant on `ControlButton` (e.g. an optional `variant="recording"` prop), not reuse of the existing `active` boolean, so a learner never confuses "recording" with an ordinary toggled-on control.
+  - A compact elapsed-time readout (e.g. "0:04") sits immediately below the button. `ControlButton`'s hover-only label (`sm:group-hover:block`, invisible until hover) is the wrong mechanism for this — it needs to be visible continuously while recording, so this is a small, explicit addition to `ControlButton`: an optional `caption` prop that, when present, renders instead of (or in addition to) the hover label, always visible.
+  - Clicking calls `recorder.stop()`.
+- No waveform, timer, or level meter renders anywhere in the transcript stage — it is entirely contained inside this one button, which is the mechanism that makes recording state changes never affect the stage's height (§6 makes the stage identical to Listening Mode's, which has no recording-related UI at all).
 
-**Phase 8 — True pronunciation-engine integration (Large, postponable)**
-Goal: Pipeline C — Azure Pronunciation Assessment wired behind an explicit "Evaluate pronunciation" action.
-- New: `/api/practice/evaluate` (Node runtime), ffmpeg conversion step, Azure SDK/REST call, response normalization.
-- DB: populate `pronunciation_result`, `engine_name`, `engine_version`, `eval_status`.
-- Risks: Azure key management, timeout/retry handling, F0-quota exhaustion behavior, ffmpeg binary size within Vercel's function bundle limit.
-- Testing: evaluation timeout, Azure error responses, quota-exceeded fallback to Word-Match-only.
-- Acceptance: a saved attempt can be evaluated for accuracy/fluency/completeness/prosody, clearly separated from Word Match in the UI, with graceful failure handling.
-- **Postponable**: yes — the product is fully usable and honest without this phase.
+### 5.2 Play/Pause My Recording button
+- **Disabled** (existing `ControlButton` `disabled` prop) whenever `recorder.clip` is `null` — i.e., before any recording exists for the current sentence.
+- Once a clip exists: Play icon → clicking plays the Blob back; while playing, the icon flips to Pause; playback ending (or a manual pause) flips it back to Play.
+- No visible seek bar, time readout, or waveform for *this* playback — that level of detail belongs to the results/evaluation surface (§10), not the always-on control bar. This intentionally uses less UI than `CompactAudioPlayer` currently provides.
 
-**Phase 9 — Progress history & analytics (Medium, postponable)**
-Goal: an "Attempts" view (new `RightPanelTabs` tab or a dashboard section) listing saved attempts per video/sentence, trend over time.
-- Files: new tab component, dashboard query.
-- **Postponable**: yes.
+### 5.3 Implementation shape
+Extract a small headless hook, e.g. `usePlaybackToggle(src: string | null)`, returning `{ isPlaying, toggle }`, driving a hidden `<audio>` element exactly the way `CompactAudioPlayer`'s internals already do (same `play()`/`pause()`/`ended` wiring) but *without* the seek bar, time labels, or mute control that component renders — those become dead code for this call site once `SpeakingPracticeStage` is deleted. `CompactAudioPlayer` itself can stay in `src/components/` unchanged in case a future results surface wants a full player again (e.g., inside the Evaluation tab to re-listen to context), but nothing in the Shadowing control-bar path uses it directly anymore.
 
-**Phase 10 — Mobile optimization & cross-browser hardening (Medium)**
-Goal: close out the testing plan (§13) — Safari MediaRecorder quirks, layout stability under `mobile-transcript-stage`, control-bar space for the Record button on the one-row mobile layout.
-- **Not postponable** — required before calling either mode shipped, since this app is explicitly responsive desktop/mobile.
+### 5.4 Where the recorder instance lives now
+Previously `DefaultLayout` owned the single `useAudioRecorder()` instance so both `ControlBar` and the (now-deleted) stage panel could share it. With the stage panel gone, `ControlBar` is the *only* consumer of live recorder state — but the eventual Evaluate action and its results (§8–§10) need that same clip available to a right-panel Evaluation tab, which is a sibling of `DefaultLayout` under `page.tsx`, not a descendant of it. So the recorder instance moves one level higher: **`page.tsx` instantiates `useAudioRecorder()`** (gated to only matter when `inputMode === "shadowing"`, exactly as `DefaultLayout` does today) and passes the handful of values/handlers both `DefaultLayout` (→ `ControlBar`) and `RightPanelTabs` (→ the new Evaluation tab) need. This is a small, mechanical move of an existing hook call one component up — not new logic.
 
-**Non-postponable for MVP**: Phases 1–7, 10. **Postponable**: Phases 8 (cloud pronunciation scoring) and 9 (history/analytics) — the product is coherent and honestly labeled without either.
+### 5.5 Mobile row-space risk
+Today's mobile `ControlBar` row already holds: sentence counter, Prev, Replay, one center button, Next, Speed, and a "More" trigger. Shadowing needs *two* center buttons instead of one, which is one more icon than the row has held before. Recommendation: for Shadowing specifically, move Playback Speed into the "More" bottom sheet (it already hosts secondary controls like Reset and subtitle visibility), keeping Prev / Replay / Record-Stop / Play-My-Recording / Next as the five always-visible primary-row icons. This must be verified against real touch-target spacing during Phase 4 (§12) — it is the most layout-fragile part of this design and is called out explicitly in the testing plan (§14).
 
-## 13. Testing plan
+## 6. Reuse Listening Mode's layout — remove the dedicated stage
 
-Chrome/Edge desktop; Android Chrome; iPhone Safari — each exercising: mic denied, no mic present, recording interrupted (tab backgrounded/minimized mid-record), silent audio, background noise, very short recording (<1s), recording that hits the max-duration cap, headphones vs. speaker leakage (manual/subjective check), network failure mid-upload, evaluation-API timeout, Storage-upload-succeeds-but-DB-insert-fails, deleted/missing recordings (signed URL for a deleted object), switching modes mid-recording, refreshing during an unsaved attempt, multiple rapid retries in a row, and mobile layout stability (no control overlap, no stage resize on sentence change) across the above.
+This is the core structural change. [DefaultLayout.tsx](src/app/dictation/[videoId]/components/layouts/DefaultLayout.tsx)'s entire `if (isSpeakingMode) { return (...) }` early-return branch — the 3-row CSS Grid, the video-wrapper duplication, the `<ShadowingPanel>`/`<PronunciationPanel>` swap — is **deleted**. Shadowing falls through to the exact same `return (...)` that Dictation and Listening already share:
 
-## 14. Feedback presentation
+- The stage-content condition that currently reads `inputMode === "listening"` (rendering `<ListeningTranscript text={currentSegment?.text ?? ""} fontSizePx={englishFontPx} />`) becomes `inputMode === "listening" || inputMode === "shadowing"`. Shadowing and Listening render **the identical component** — same English script, same translation line below it, same `useTranscriptAutoFit` mobile height-clamp behavior, same `mobile-transcript-stage` fixed-height wrapper.
+- `ShadowingPanel.tsx`, `PronunciationPanel.tsx`, and `SpeakingPracticeStage.tsx` are deleted outright — nothing in the new design needs a mode-specific stage component.
+- The video block, `RightPanelTabs`, and `ControlBar`'s outer wrapper are untouched — they were never mode-specific to begin with.
+- Consequence: Shadowing needs **zero** new layout code. The only remaining Shadowing-specific rendering is inside `ControlBar` (§5) and, later, one new tab inside `RightPanelTabs` (§10).
 
-Sections per attempt, in this order: **What you said** (recognized text, only if Word Match ran) → **Reference sentence** → **Word Match** (always, if any recognizer ran) → **Pronunciation / Fluency / Completeness / Rhythm-Prosody** (only if Pipeline C actually ran — never a placeholder score) → **Words to practise** (a filtered list from the diff/error-type data) → playback controls (Original / Yours) → **Try again** / **Save attempt**.
+This directly resolves the original complaint ("wastes horizontal and vertical space… can push the shared control bar below the viewport") by removing the thing that caused it, rather than continuing to tune it — the 84px/220px/1fr grid tuning done in the previous pass is discarded along with the component it was built for.
 
-Color/threshold discipline: use a 3-tier system (needs-work / getting-there / solid) rather than a precise percentage implying false precision where the engine can't support it; Word-Match-only results should visually look distinct (e.g., a neutral/blue "Word Match" badge) from true Pipeline-C scores (a green/amber/red "Pronunciation" badge), so a learner never mistakes one for the other. Every score card carries a one-line engine-attribution footer ("via your browser's speech recognizer" / "via Azure Pronunciation Assessment") so the source and its limits are always visible, and never present a single blended "overall score" when the underlying engine only supports Word Match — that's exactly the over-authoritative presentation the brief warns against. Avoid "native-accent" framing in copy; describe scores as "clarity/intelligibility" against the reference reading, not correctness against one accent.
+**Mode-switch stability**, already true for Dictation↔Listening today, now automatically extends to Shadowing: switching among all three modes never remounts `YouTubePlayer` (same instance persists across the shared return path), never resets `currentSegIdx`/playback position, and never changes the transcript stage's dimensions — because Shadowing no longer has a different stage at all.
 
-## 15. Estimated recurring costs at personal usage
+## 7. Recording architecture — Blob lifecycle, no persistence
 
-- MVP (Pipelines A + B, browser-only): **$0/month** — no new infrastructure beyond existing Vercel/Supabase/Upstash usage, which stays within free tiers at personal scale.
-- Storage: a heavy month of saved recordings (e.g., 200 sentences × ~50–100KB each) is a few MB–tens of MB — negligible against Supabase's free-tier Storage allowance.
-- Azure F0 tier (Pipeline C, optional): **$0/month** while under 5 audio-hours/month, which at "one learner, a few dozen sentences/day" is very unlikely to be hit (a few dozen 5-second clips/day ≈ a few minutes/day ≈ well under the monthly cap).
-- Self-hosted VPS alternative (OpenPronounce/whisper.cpp), if ever chosen instead of Azure: **~$2–7/month** (Fly.io/Railway/Render smallest tier) plus real ongoing maintenance time — explicitly not "free" once ops burden is counted honestly, which is why it's not the default recommendation.
+[useAudioRecorder.ts](src/hooks/useAudioRecorder.ts) needs **no functional change** — it already satisfies every constraint in §6 of the product decision: it records into an in-memory `Blob`, exposes it via `clip.url` (an `URL.createObjectURL` object URL), and never issues a network request or touches `localStorage`/IndexedDB. The only change is *where it's instantiated* (§5.4) and *when it's released*:
 
-## 16. Open decisions requiring user input
+**Release triggers** (all call the hook's existing `discard()`, which stops mic tracks, closes the `AudioContext`, revokes the object URL, and clears `clip`):
+- Recording again — already happens automatically inside `start()` before the new take begins.
+- Moving to a different sentence — the existing `currentSegIdx`-keyed `useEffect` that calls `discard()` on segment change carries over unchanged (moves along with the hook to `page.tsx`, §5.4).
+- Leaving Shadowing Mode — a new effect keyed on `inputMode`, calling `discard()` whenever `inputMode` transitions away from `"shadowing"`.
+- Leaving the lesson entirely — already covered: the hook's unmount cleanup (`useEffect` return in `useAudioRecorder`) stops tracks and revokes the URL unconditionally.
+- The temporary evaluation flow finishing (success or failure) — does **not** force a discard by itself (the learner should still be able to play back what they just evaluated), but is itself a natural point where an explicit "Discard"/re-record action becomes available if the evaluation result view offers one.
 
-1. Whether to build the Azure Pronunciation Assessment integration (Phase 8) at all for v1, or ship indefinitely with Word-Match-only Pronunciation Practice.
-2. Whether the rare "Ask AI" Gemini-based transcription fallback for Safari (§9) is worth building given it competes with the existing AI-explanation feature's already-tiny shared daily quota — or whether Safari should simply show "Word Match unavailable" with no fallback.
-3. Exact max recording duration and countdown length (defaults proposed above: 20s cap, 3s countdown) — a product-feel call, not a technical constraint.
-4. Whether "practice a whole section continuously" (Shadowing) is in-scope for the MVP or a Phase 9+ enhancement — it adds meaningful state-machine complexity (§7 flow 9) that could be deferred.
+**Why no IndexedDB:** nothing needs to survive a page refresh unsaved, by design — a refresh mid-recording losing the in-progress take is the intended behavior (matching "no permanent storage"), not a bug to work around. IndexedDB is the right tool for a *queue of not-yet-uploaded data that must survive a reload*; there is no such queue here. Component state (the hook's own `useState`) plus a couple of `useRef`s for the live `MediaRecorder`/`MediaStream`/chunk buffer (exactly what's already implemented) is sufficient and appropriate. `localStorage` is never used for audio data (Blobs aren't even serializable into it) — the only `localStorage` writes stay scoped to mode preference (§3.3) and small text flags (e.g. a "seen this hint" marker), never audio bytes.
 
-## 17. Final recommended next step
+## 8. Temporary evaluation flow
 
-Start with **Phase 1 + Phase 2**: land the `InputMode` plumbing (activating the existing Shadowing stub and adding a Pronunciation Practice one) and a standalone, well-tested `useAudioRecorder` hook. Both are small, fully reversible, unlock every later phase, and require zero new infrastructure or product decisions — a good point to pause and confirm the UX details in §16 before committing to Phase 3's full Shadowing flow.
+Evaluation is an **optional, explicit, opt-in action** available once a recording exists — never automatic, never a precondition for basic Shadowing practice, and never gated behind saving audio anywhere (because nothing is ever saved).
+
+```text
+Record → Listen back (Play/Pause My Recording) → Evaluate → send the temporary Blob
+       → receive structured JSON results → discard the uploaded/temporary audio
+```
+
+- The Evaluate action only appears once an evaluation implementation actually exists behind it (§8, "do not expose a nonfunctional Evaluate button in production"). Until Phase 5/6 (§12) ship, there is no Evaluate affordance anywhere in the UI — not a disabled button, not a "coming soon" label. This is a deliberate reversal of the deleted `SpeakingPracticeStage`'s disabled placeholder buttons.
+- If server-side processing is needed: the client sends the in-memory `Blob` directly (e.g. `multipart/form-data`, or a raw body with a `Content-Type` matching `clip.mimeType`) to `/api/practice/evaluate`. The route processes it in-memory or via a short-lived temp file (only if a conversion step like ffmpeg requires a real file path), and **deletes any temp file immediately** after the engine call resolves — success or failure, via a `try/finally`. No Supabase Storage call exists anywhere in this path. No database row is written for the audio. The route returns structured JSON only; the audio itself never persists past the request.
+- This route follows the same "server-side-only secret" discipline already established for `GEMINI_API_KEY`/`SUPABASE_SERVICE_ROLE_KEY` ([lib/gemini.ts](src/lib/gemini.ts), [lib/supabase/server.ts](src/lib/supabase/server.ts)) — any evaluation-engine API key lives only in `/api/practice/evaluate`'s server environment, never reaches the client bundle.
+
+### 8.1 Word Match vs. true evaluation — kept strictly separate
+Carried over from the original plan's engine research (§9 there), re-anchored to the single-mode design:
+
+**Word Match** (speech recognition + text comparison):
+- Uses the existing `checkAnswer`/`wordDiff`/`normalizeText` pipeline already in [lib/utils/text.ts](src/lib/utils/text.ts) — no new alignment logic needed, just a new caller.
+- Identifies missing, substituted, and inserted words against the reference sentence.
+- Labeled **"Word Match"** everywhere in the UI — never "Pronunciation Score." Never claims phoneme-, accuracy-, or prosody-level correctness.
+- Recognition source: Web Speech API (`SpeechRecognition`), realistically Chrome/Edge/Android Chrome only (see the engine table, §9) — on Safari/iOS or when unsupported, the UI states plainly that Word Match isn't available there rather than showing a broken or empty state.
+
+**True speech/pronunciation evaluation** (accuracy, fluency, completeness, phoneme, prosody):
+- Only shown when the underlying engine actually supports that specific metric — never a placeholder score for a dimension the engine can't produce.
+- Kept as an explicitly optional, postponable upgrade (Phase 6, §12), not required for Shadowing's core loop.
+- Engine selection continues to prioritize free/recurring-free-tier options (Azure AI Speech Pronunciation Assessment's F0 tier remains the standout — see §9); a paid engine is never required for ordinary Shadowing use and is, at most, an opt-in upgrade path documented alongside its real recurring cost.
+
+## 9. Engine comparison (unchanged in substance, re-scoped to one mode)
+
+*Checked 2026-09-03 against official docs. This table is unchanged from the original research — only its framing changes: every row now feeds Shadowing's optional Evaluate action rather than a separate Pronunciation Practice mode.*
+
+| Engine | Purpose | True scoring or transcription-only | Word-level | Phoneme-level | Fluency/prosody | Runs where | Free allowance | Recurring cost | Recommendation |
+|---|---|---|---|---|---|---|---|---|---|
+| **MediaRecorder + Web Audio + AudioLevelMeter** | Recording, in-button level meter | Neither | No | No | No | Browser | Unlimited, free | $0 | **Use — already built (§7)** |
+| **Web Speech API (`SpeechRecognition`)** | Live ASR | Transcription-only | Yes (via diff) | No | No | Browser (Chrome/Edge/Android Chrome only, real-use) | Unlimited | $0 | **Use for Word Match on Chromium browsers only (§8.1)** |
+| **whisper.cpp / faster-whisper / Vosk / wav2vec2** | Server ASR / phoneme CTC | Transcription or phoneme-recognition | Yes | Partial | No | **Not** Vercel functions, **not** Supabase Edge Functions — needs a dedicated VPS | Free (self-hosted) | ~$0–7/mo VPS | Not for MVP — real ops burden, no platform fit |
+| **OpenPronounce** ([GitHub](https://github.com/Halleck45/OpenPronounce)) | Self-hosted pronunciation scoring | True scoring | Yes | Yes (IPA) | Partial | VPS only | Free (self-hosted) | ~$2–7/mo VPS | Best-quality self-hosted option, only if a VPS is acceptable |
+| **Azure AI Speech — Pronunciation Assessment** | Cloud pronunciation scoring | **True scoring**: accuracy, fluency, completeness, prosody (en-US) | Yes | Yes (IPA/SAPI + syllable) | Yes (opt-in, en-US) | Server (Next.js API route) | **F0 tier: 5 audio hours/month, recurring** ([pricing](https://azure.microsoft.com/en-us/pricing/details/speech/)) | $0 within F0 | **Recommended low-cost/best-quality option (Phase 6)** |
+| **Google Cloud Speech-to-Text / AWS Transcribe / OpenAI transcription** | Cloud ASR | Transcription-only | Yes | No | No | Server | Google: ~60 min/mo *(unverified)*; AWS: 12-month trial only; OpenAI: none | $0.003–0.017/min beyond free tier | No pronunciation capability regardless — not needed |
+| **Gemini (already integrated)** | General LLM, audio-capable | Qualitative only, not calibrated scoring | Rough | No | No | Server (already wired) | **~20 calls/day, shared across the whole app** | $0 within quota | Optional, rare, user-triggered fallback only — never the default evaluator (quota far too small for per-recording use) |
+| **SpeechAce / ELSA / Soapbox Labs** | Commercial pronunciation APIs | True scoring | Yes | Yes | Yes | Server | None meaningful | Real subscription cost | **Do not use** — no tier fits a personal project |
+
+**Recommended MVP evaluation stack:** none required — Shadowing's core loop (§6, §7) needs no evaluation engine at all. **Recommended first evaluation upgrade:** Web Speech API Word Match (Phase 5) — $0, uses only what's already in the codebase. **Recommended true-evaluation upgrade:** Azure Pronunciation Assessment F0 tier (Phase 6) — $0 at personal-usage scale, real recurring quota, genuine phoneme/fluency/prosody output. **Do not use:** AWS Transcribe as a "free" tier (12-month trial, not permanent), Gemini as a default per-recording evaluator (quota), any commercial pronunciation API (no viable free tier), or any of the self-hosted engines as a *default* (all require a VPS this app doesn't otherwise need).
+
+## 10. Evaluation result presentation
+
+The English script, translation, video, and control bar must stay exactly where they are when a result appears — no remount, no height change, no new section pushing anything down.
+
+**Design: an "Evaluation" tab inside the existing `RightPanelTabs`.**
+
+[RightPanelTabs.tsx](src/app/dictation/[videoId]/components/RightPanelTabs.tsx) already renders Script/Words/Sentences as three switchable tabs inside a panel that:
+- On **desktop**, sits beside the video/transcript column at a fixed width (`lg:w-[clamp(340px,24vw,400px)]`), independently scrollable, and never affects the left column's size when its internal tab content changes (confirmed already true today — switching Script→Words→Sentences causes zero layout movement in the video/control-bar column).
+- On **mobile**, is the same component rendered as a large (`h-[min(100svh,750px)]`), full-width, internally-scrolling panel toggled via the existing `showLearningPanel` state — already functionally a bottom-sheet/full-height overlay, with its own `overflow-y-auto` tab content area.
+
+Adding a fourth tab — **Evaluation** — reuses 100% of this existing, already-responsive mechanism instead of building a new drawer or overlay component:
+- The tab is hidden until at least one sentence in the current session has an evaluation result (or the moment `Evaluate` is pressed, whichever is designed to feel more responsive — a loading state either way, per §8).
+- Pressing `Evaluate` auto-switches `rightPanelTab` to `"evaluation"` (the same state `page.tsx` already owns and passes to `RightPanelTabs` for the other three tabs), surfacing the loading/result state immediately without the learner hunting for it — while the video, script, translation, and control bar are entirely unaffected, since only content *inside* the already-independent right panel changes.
+- From the Evaluation tab, the learner can freely switch back to Script/Words/Sentences — nothing about entering or leaving the tab touches session/video state.
+- Content shown: per-sentence result (Word Match and/or true-evaluation categories, per §8.1's strict separation and the labeling rules carried over from the original plan — a 3-tier needs-work/getting-there/solid presentation rather than a single precise-looking percentage, distinct visual treatment for Word Match vs. true scores, an engine-attribution footer on every card) plus, once more than one sentence has been evaluated, the session summary (§11).
+
+This is the layout decision the plan needed to make before implementation, per the request — no new component class, no z-indexed overlay, no separate route: one new tab on an existing, already-responsive panel.
+
+## 11. Per-sentence and session evaluation
+
+Each sentence is evaluated **individually** — never by concatenating separately recorded clips into one file for a "final" score, which would introduce artificial pauses, volume jumps, and start/end gaps that make fluency/prosody numbers meaningless.
+
+```ts
+type SentenceEvaluation = {
+  segmentIndex: number;
+  referenceText: string;
+  wordCount: number;
+  audioDuration: number;
+
+  accuracy?: number;
+  completeness?: number;
+  fluency?: number;
+  prosody?: number;
+
+  problemWords?: Array<{
+    word: string;
+    score?: number;
+    errorType?: string;
+  }>;
+};
+```
+
+**Storage:** `sessionStorage`, following the exact convention [sessionPersistence.ts](src/app/dictation/[videoId]/sessionPersistence.ts) already uses for the dictation session snapshot (`dictation.active-session.<videoId>`) — a new key, e.g. `dictation.shadowing-evaluations.<videoId>`, holding `Record<number, SentenceEvaluation>` keyed by `segmentIndex`. Nothing here is written to Supabase or any server-side store. Re-evaluating a sentence simply overwrites its entry for that key.
+
+**Session summary**, computed from whatever's in that map at any point (not a separate "end of session" event — the summary can update live as more sentences are evaluated):
+- **Accuracy / completeness**: weighted by `wordCount` — `Σ(metric_i × wordCount_i) / Σ(wordCount_i)` over evaluated sentences.
+- **Fluency / prosody**: weighted by `audioDuration` — `Σ(metric_i × audioDuration_i) / Σ(audioDuration_i)`.
+- **Coverage**, always shown alongside the summary: `"{evaluated} of {total} sentences evaluated"`. Skipped and failed evaluations are excluded from every weighted average above *and* their count is shown separately (e.g. `"3 sentences not evaluated"`) — never silently dropped from the denominator without comment.
+- **Aggregated problem words**: tally `problemWords` across all evaluated sentences by word, surfaced as a ranked "words to practice" list.
+- **Weakest sentences**: the N lowest-`accuracy` (or highest-problem-word-count) evaluated sentences, surfaced as a "needs more practice" list with a jump-to-sentence action (reusing the existing `jumpToSegment` handler already wired through `useDictationSession`).
+- **No single blended Overall Score by default** — accuracy/completeness/fluency/prosody are shown as separate category numbers/bars. If an Overall Score is introduced later, its formula must be documented in this plan, and it must be visually and textually identified as an app-computed aggregate (e.g. "Overall (calculated)") — never presented as if the evaluation engine itself returned one number, since none of the engines in §9 that support multiple categories return a single authoritative blend.
+
+## 12. Optional future feature: Full Passage Assessment
+
+Not required for the MVP; documented here only so it isn't confused with per-sentence evaluation or accidentally built by concatenation:
+- Record one **continuous** take spanning roughly 3–6 consecutive sentences (a genuinely new recording flow — the learner listens through/reads several sentences in a row and records once, continuously, matching Listening Mode's continuous-playback behavior rather than per-sentence `playSegment` calls).
+- Evaluate that single recording as one unit, labeled **"Full Passage Assessment"**, kept visually and terminologically distinct from per-sentence results.
+- Delete the audio after evaluation, same as every other evaluation path in this plan.
+- Explicitly **not** built by stitching together individually recorded per-sentence clips — if this ships, it needs its own recording UI (continuous record across a sentence range) designed at that time, not reuse of the per-sentence Record button described in §5.
+
+## 13. Revised phased roadmap
+
+**Phase 1 — Mode architecture preparation.** *Status: completed, needs cleanup.*
+The `InputMode` plumbing, `ModeSwitcher` activation, and `useInputModePreference` URL/localStorage handling from the original Phase 1 remain valid and don't need to be redone — they need to be **narrowed** from 4 modes back to 3 (§3), with the legacy-alias migration (§3.3) added on top of what's already there.
+
+**Phase 2 — Local recording prototype.** *Status: completed, kept as-is.*
+`useAudioRecorder.ts` and `AudioLevelMeter.tsx` need no functional changes — they already model exactly the Blob-only, no-persistence lifecycle this revision requires (§7). Only their *call site* moves (§5.4).
+
+**Phase 3 — Shadowing UI consolidation and core flow.** *Not postponable — this is the new MVP target.*
+- Delete `SpeakingPracticeStage.tsx`, `PronunciationPanel.tsx`, `ShadowingPanel.tsx`, and `DefaultLayout.tsx`'s `isSpeakingMode` grid branch (§6).
+- Extend the existing `inputMode === "listening"` stage-content condition to also cover `"shadowing"` (§6).
+- Move `useAudioRecorder()` instantiation from `DefaultLayout` to `page.tsx` (§5.4).
+- Add the Record/Stop and Play/Pause My Recording buttons to `ControlBar`'s center cluster (§5.1–§5.3), including the new `ControlButton` `variant="recording"` and `caption` support.
+- Implement the mode-icon changes (§4) — per-mode `ModeSwitcher`/control-bar-trigger icons, Shadowing's new non-mic icon.
+- Apply the `?mode=pronunciation`/localStorage migration (§3.3).
+- No evaluation, no Word Match, no saving — record/stop/play-back/overwrite only.
+- **Acceptance**: switching into/out of Shadowing never remounts the video or changes `currentSegIdx`/timestamp; the transcript stage is visually identical to Listening Mode's; recording state changes (idle→recording→stopped) never move the control bar or resize the stage; an old `?mode=pronunciation` link lands in Shadowing with the video/session otherwise untouched.
+
+**Phase 4 — Mobile and cross-browser hardening.** *Not postponable — moved earlier than the original plan's Phase 10, per explicit instruction.*
+- Resolve the two-button mobile row-space question (§5.5) with real devices, not just reasoning.
+- Verify no icon overlap at narrow widths; verify the in-button waveform/timer stays legible at `w-10 h-10`.
+- Microphone permission denial/no-mic-present, tab backgrounding/minimizing mid-recording, app/lesson exit mid-recording.
+- Chrome, Edge, Android Chrome, desktop Safari, iPhone Safari.
+- **Acceptance**: control bar stays on one row at all tested widths; no control overlap; no transcript-stage resize; recording survives (or cleanly aborts, never silently corrupts) a background/foreground cycle.
+
+**Phase 5 — Optional free Word Match.** *Postponable.*
+- Wire Web Speech API transcription of the current recording against `checkAnswer`/`wordDiff` (§8.1).
+- Label results "Word Match" everywhere; degrade to an honest "not available on this browser" state on Safari/iOS.
+- Must not block or slow down ordinary record/playback — this is purely additive.
+
+**Phase 6 — Temporary true-evaluation integration.** *Postponable.*
+- `/api/practice/evaluate`: accepts the in-memory Blob, calls the selected engine (Azure F0 tier recommended first — §9), returns structured JSON, deletes any temp file immediately (§8).
+- No Supabase Storage, no permanent audio, no DB row for the recording.
+- Graceful degradation when the engine or its quota is unavailable — falls back to Word Match only (if Phase 5 shipped) or a plain "evaluation unavailable right now" state, never a broken UI.
+
+**Phase 7 — Session summary.** *Postponable, depends on Phase 5 and/or 6 having produced at least some `SentenceEvaluation` data.*
+- Aggregate `sessionStorage`-held per-sentence results using the weighted formulas in §11.
+- Coverage display, excluded-sentence count, aggregated problem words, weakest-sentences list.
+- Summary is session-scoped only — no cross-session history, no persistence beyond `sessionStorage`'s natural lifetime (cleared on tab close, same as the existing dictation-session snapshot).
+
+**Future — Full Passage Assessment.** *Postponable, no dependency on Phases 5–7 beyond sharing the same evaluation route shape.* See §12.
+
+**Explicitly removed from the roadmap** (were Phases 5, 7 (partially), 8's storage half, and 9 in the original plan): permanent Supabase-backed recording storage, the `practice_attempts` table, the `practice-recordings` bucket and its RLS policies, `/api/practice/save`, `useSavedAttempts`, saved-attempt deletion, storage-usage display, audio retention policy. None of this was ever built, so nothing needs to be undone in code — only the design is being dropped.
+
+## 14. Corrected roadmap dependencies
+
+The original plan's Phase 7 (Pronunciation Practice MVP) depended on Phase 5 (Supabase saving). **That dependency no longer exists anywhere in this plan.**
+
+**Core Shadowing (Phase 3) depends only on:**
+- Mode architecture (Phase 1, narrowed).
+- Local recording (Phase 2, unchanged).
+- Playback (the new `usePlaybackToggle`, §5.3).
+- Responsive control-bar integration (Phase 4, moved earlier).
+
+**Evaluation (Phases 5–6) depends only on:**
+- A temporary recording Blob already in memory (Phase 3).
+- The selected evaluation engine (§9).
+- A result UI (§10 — the Evaluation tab).
+
+**Evaluation explicitly does not depend on:**
+- Supabase Storage — removed from the plan entirely (§13).
+- A permanent Save action — removed entirely (§7).
+- Audio history — removed entirely.
+- A separate Pronunciation mode — removed entirely (§2).
+
+**The true MVP** — the only non-postponable work — is Phases 1 (cleanup), 2 (kept), 3 (consolidation), and 4 (hardening): architecture cleanup, local record/stop/playback, a stable Shadowing UI reusing Listening's layout, and cross-browser/mobile hardening. Word Match (Phase 5), true evaluation (Phase 6), session summaries (Phase 7), and Full Passage Assessment (Future) are all optional, clearly postponable upgrades — this replaces the original plan's "Phases 1–7, 10 are non-postponable" statement, which no longer holds under the simplified product scope.
+
+## 15. Testing plan
+
+Beyond the original plan's browser/device/failure-mode matrix (still valid: mic denied, no mic present, recording interrupted, silent audio, background noise, very short/over-cap recordings, network failure, evaluation timeout), this revision adds:
+
+- Migration: a stored `"pronunciation"` localStorage value loads as Shadowing; an old `?mode=pronunciation` URL loads Shadowing and the address bar updates to `?mode=shadowing`.
+- Switching among Dictation, Listening, and Shadowing (all pairwise directions) — video never remounts, `currentSegIdx`/video timestamp never resets, transcript-stage dimensions never change.
+- Record permission accepted and denied, from the control-bar Record button specifically (not the old stage button, which no longer exists).
+- Recording start, stop, and overwrite (press Record again mid-existing-clip).
+- The in-button waveform/level meter actually animates during recording, at both button sizes (`w-10`/`w-12`).
+- Play/Pause My Recording: disabled before any recording exists; toggles correctly; auto-resets to Play when playback ends.
+- Switching sentences while recording — recording is discarded (§7), no dangling `MediaRecorder`/stream.
+- Switching modes (away from Shadowing) while recording — same discard guarantee.
+- Tab backgrounding / browser minimizing mid-recording.
+- Temporary evaluation: success, failure, and timeout paths; confirm (via network inspection or a server-side log assertion) that the evaluated audio is never written to any persistent store and any temp file is deleted.
+- Re-evaluating an already-evaluated sentence replaces its `SentenceEvaluation` entry rather than duplicating it.
+- Session-summary weighting is correct against a hand-computed example (word-count-weighted accuracy/completeness, duration-weighted fluency/prosody) and excluded sentences are visibly counted, not silently dropped.
+- Desktop and mobile control-bar stability specifically: no icon overlap, no transcript-stage resize, control bar never pushed below the viewport — at minimum **1366×768, 1536×864, 1920×1080**, plus **Android Chrome** and **iPhone Safari**.
+
+## 16. Security and privacy
+
+- Microphone access requested lazily on first Record press, browser-native permission prompt only — no custom pre-prompt dialog.
+- A visible recording indicator (the Record button's own red-ring/dot state, §5.1) whenever `MediaRecorder` is active.
+- **No audio is ever stored** — private-bucket RLS, signed URLs, and retention policy are all removed from this plan along with the storage design itself (§13). The only place audio ever leaves the device is a direct, temporary POST to `/api/practice/evaluate` when the learner explicitly presses Evaluate — and only if Phase 6 (or the Web Speech API browser-native path for Phase 5, which sends audio to the browser vendor's own recognition servers, not this app's backend) is in use.
+- Any evaluation-engine API key (Azure Speech key, etc.) lives only in server-side environment variables, read only inside `/api/practice/evaluate`, matching the existing `GEMINI_API_KEY`/`SUPABASE_SERVICE_ROLE_KEY` discipline.
+- The UI discloses, per evaluation attempt, which processing happened locally (Word Match via the browser's own recognizer) vs. was sent to a third party (Azure or similar) — carried over from the original plan's labeling requirement.
+- Any server-side temp file created during evaluation (e.g. for an ffmpeg conversion step) is deleted in a `finally` block immediately after the engine call resolves, regardless of success or failure.
+
+## 17. Estimated recurring costs at personal usage
+
+- Core Shadowing (Phases 1–4): **$0/month** — no new infrastructure, no storage, nothing beyond what's already deployed.
+- Word Match (Phase 5): **$0/month** — browser-native, no server cost.
+- True evaluation (Phase 6, Azure F0 tier): **$0/month** at personal-usage scale (well under 5 audio-hours/month for one learner practicing a handful of sentences a day) — and with no Save step and no audio history, usage stays naturally bounded to "however much a learner evaluates in one sitting," not an ever-growing saved library.
+- Session summary (Phase 7): **$0** — pure client-side computation over already-fetched `SentenceEvaluation` data.
+- Removed entirely from the cost picture versus the original plan: Supabase Storage usage (was already negligible, but is now exactly zero since nothing is stored), and any self-hosted-VPS cost that would only have been relevant to a permanent saved-attempt library.
+
+## 18. Open decisions requiring user input
+
+1. Exact icon choice for Shadowing if `AudioLines` isn't available in the installed lucide-react version (`Waves` is the suggested fallback) — a two-minute check at implementation time, not a design question, but flagged since it wasn't verified against the actual installed package version while writing this plan.
+2. Whether the Evaluation tab (§10) should be hidden entirely until the first `Evaluate` press, or should always exist (showing an empty state) once Phase 5/6 ships — a product-feel call.
+3. Whether Phase 5 (Word Match) or Phase 6 (true evaluation via Azure) should be built first — they're independent and either can lead; Phase 5 is cheaper/faster to ship, Phase 6 is more valuable but has a real (if free-tier) external dependency to wire up.
+4. Whether the mobile row-space fix in §5.5 (moving Playback Speed into "More" for Shadowing) is acceptable, or whether a different control should move instead — needs a quick look at real devices during Phase 4.
+5. Whether Full Passage Assessment (§12) is wanted at all before there's user feedback on per-sentence evaluation — currently unscoped and postponable indefinitely.
+
+## Immediate next implementation step
+
+The smallest safe move from the current Phase 1–2 code to the new Phase 3 is, in order:
+1. Delete `SpeakingPracticeStage.tsx`, `ShadowingPanel.tsx`, `PronunciationPanel.tsx`, and `DefaultLayout.tsx`'s `isSpeakingMode` grid branch; extend the `inputMode === "listening"` stage condition to include `"shadowing"`. This alone should already make Shadowing visually identical to Listening Mode, with no recording UI yet — a clean, verifiable checkpoint before adding anything new.
+2. Narrow `InputMode` to three values, remove the Pronunciation option from `ModeSwitcher`, and add the `?mode=pronunciation`/localStorage alias migration in `useInputModePreference` (§3.3) — verify an old `?mode=pronunciation` link still lands correctly.
+3. Only then add the two new `ControlBar` buttons (§5) and the recorder-instance move to `page.tsx` (§5.4) — the riskiest, most novel piece of Phase 3, done last so it lands on top of an already-verified, already-simplified base rather than alongside a half-migrated mode system.

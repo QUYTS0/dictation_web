@@ -1,12 +1,9 @@
 "use client";
 
-import { PracticeRecorderPanel } from "./PracticeRecorderPanel";
+import { SpeakingPracticeStage, type SpeakingPracticeStageProps } from "./SpeakingPracticeStage";
 
-interface PronunciationPanelProps {
-  currentSegment: { text: string } | undefined;
-  onPlayOriginal: () => void;
-}
+type PronunciationPanelProps = Omit<SpeakingPracticeStageProps, "mode">;
 
-export function PronunciationPanel({ currentSegment, onPlayOriginal }: PronunciationPanelProps) {
-  return <PracticeRecorderPanel mode="pronunciation" currentSegment={currentSegment} onPlayOriginal={onPlayOriginal} />;
+export function PronunciationPanel(props: PronunciationPanelProps) {
+  return <SpeakingPracticeStage mode="pronunciation" {...props} />;
 }

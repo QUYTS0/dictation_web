@@ -1,12 +1,9 @@
 "use client";
 
-import { PracticeRecorderPanel } from "./PracticeRecorderPanel";
+import { SpeakingPracticeStage, type SpeakingPracticeStageProps } from "./SpeakingPracticeStage";
 
-interface ShadowingPanelProps {
-  currentSegment: { text: string } | undefined;
-  onPlayOriginal: () => void;
-}
+type ShadowingPanelProps = Omit<SpeakingPracticeStageProps, "mode">;
 
-export function ShadowingPanel({ currentSegment, onPlayOriginal }: ShadowingPanelProps) {
-  return <PracticeRecorderPanel mode="shadowing" currentSegment={currentSegment} onPlayOriginal={onPlayOriginal} />;
+export function ShadowingPanel(props: ShadowingPanelProps) {
+  return <SpeakingPracticeStage mode="shadowing" {...props} />;
 }
