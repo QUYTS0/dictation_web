@@ -6,8 +6,10 @@ interface UseKeyboardShortcutsOptions {
   onSkip: () => void;
   onTogglePlayback: () => void;
   /** Space play/pause applies to every non-dictation mode (Listening,
-   *  Shadowing, Pronunciation Practice) — the modes where ControlBar's center
-   *  button is Play/Pause rather than Hint. */
+   *  Shadowing) — the modes where ControlBar's center button isn't Hint. In
+   *  Shadowing that center button is Record/Stop rather than Play/Pause, but
+   *  Space still toggles the video itself, which stays independently useful
+   *  there. */
   isListeningMode: boolean;
   isZenMode: boolean;
   onZenModeChange: (value: boolean | ((prev: boolean) => boolean)) => void;

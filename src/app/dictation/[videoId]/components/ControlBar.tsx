@@ -64,20 +64,20 @@ export function ControlBar({
   durationSec: number;
   playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
   setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
-  /** Only meaningful in Shadowing/Pronunciation Practice — drives the center
-   *  button's Record/Stop state in place of Hint/Play-Pause. Optional (with
-   *  safe no-op defaults) so the Dictation/Listening call site, which never
-   *  uses them, doesn't need to pass anything. */
+  /** Only meaningful in Shadowing — drives the center button's Record/Stop
+   *  state in place of Hint/Play-Pause. Optional (with safe no-op defaults)
+   *  so the Dictation/Listening call site, which never uses them, doesn't
+   *  need to pass anything. */
   recorderStatus?: AudioRecorderStatus;
   onStartRecording?: () => void;
   onStopRecording?: () => void;
 }) {
   // Dictation is the only mode with a typed-answer flow (Hint, combo streak,
-  // accuracy). Listening, Shadowing, and Pronunciation Practice all instead
-  // share a generic elapsed-time control surface here — each mode's own
-  // recorder/transcript UI lives in the transcript stage, not here.
+  // accuracy). Listening and Shadowing both instead share a generic
+  // elapsed-time control surface here — each mode's own recorder/transcript
+  // UI lives in the transcript stage, not here.
   const isDictationMode = inputMode === "dictation";
-  const isSpeakingMode = inputMode === "shadowing" || inputMode === "pronunciation";
+  const isSpeakingMode = inputMode === "shadowing";
   const isRecording = recorderStatus === "recording";
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);

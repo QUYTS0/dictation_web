@@ -14,7 +14,6 @@ import { ReviewPreviousSentenceCard } from "../ReviewPreviousSentenceCard";
 import { SentenceWordInput } from "../SentenceWordInput";
 import { ListeningTranscript } from "../ListeningTranscript";
 import { ShadowingPanel } from "../ShadowingPanel";
-import { PronunciationPanel } from "../PronunciationPanel";
 import { useTranscriptAutoFit } from "../../useTranscriptAutoFit";
 import type { InputMode, PracticeMode, SubtitleVisibility, SubtitleVisibilityState } from "../../types";
 import type { PersistedInputState } from "../../sessionPersistence";
@@ -121,18 +120,19 @@ export function DefaultLayout({
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
-  const isSpeakingMode = inputMode === "shadowing" || inputMode === "pronunciation";
+  const isSpeakingMode = inputMode === "shadowing";
   const hasWrongSubmission = workspaceStatus === "error" && !!checkResult;
   const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
   const showTranslation = !!translationText && subtitleVisibility.translation !== "hide";
 
-  // Owned here (not inside ShadowingPanel/PronunciationPanel) so ControlBar's
-  // center Record/Stop button and the practice stage's display both act on
-  // the exact same recorder instance — see the desktop-layout-refactor notes
-  // in "Shadowing and Pronunciation Practice Plan.md". Instantiated
-  // unconditionally (hooks can't be conditional); it stays inert until
-  // start() is called, so this is harmless in Dictation/Listening.
+  // Owned here (not inside ShadowingPanel) so ControlBar's center Record/Stop
+  // button and the practice stage's display both act on the exact same
+  // recorder instance — see "Shadowing and Pronunciation Practice Plan.md"
+  // §5.4 (this will move up to page.tsx once the Evaluation tab needs the
+  // same recorder — not yet done here). Instantiated unconditionally (hooks
+  // can't be conditional); it stays inert until start() is called, so this
+  // is harmless in Dictation/Listening.
   const recorder = useAudioRecorder({ maxDurationSec: 20 });
 
   // A recorded take only ever refers to the sentence it was made for —
@@ -155,16 +155,22 @@ export function DefaultLayout({
     showTranslation,
   ]);
 
-  // ---- Shadowing / Pronunciation Practice: dedicated compact desktop
-  // layout ----
+  // ---- Shadowing: dedicated compact desktop layout ----
   // Kept as a fully separate render path from Dictation/Listening below (not
   // threaded through the mobile-transcript-stage/useTranscriptAutoFit
   // machinery, which is purpose-built for shrink-to-fit sentence text) so
   // that existing mode's layout is byte-for-byte unaffected. At `lg` and up,
   // the column becomes a 3-row grid — responsive video row, a capped-height
-  // speaking-practice row, and a fixed 64px control-bar row — so a taller
+  // speaking-practice row, and a fixed 84px control-bar row — so a taller
   // recording result can never push the shared ControlBar out of view. Below
   // `lg` it stays the same flex column Dictation/Listening also use.
+  //
+  // NOTE: per "Shadowing and Pronunciation Practice Plan.md" §6, this whole
+  // branch (and the three-column SpeakingPracticeStage it renders below) is
+  // slated for removal in favor of reusing Listening Mode's transcript stage
+  // directly. That layout change is a separate, larger piece of work and is
+  // deliberately NOT done as part of this mode-consolidation pass — this
+  // pass only removes Pronunciation Practice as a distinct mode.
   if (isSpeakingMode) {
     return (
       <div
@@ -212,33 +218,18 @@ export function DefaultLayout({
         {isPracticing && (
           <>
             <div className="mt-3.5 lg:mt-0 lg:min-h-0 lg:max-h-[220px] lg:overflow-hidden">
-              {inputMode === "shadowing" ? (
-                <ShadowingPanel
-                  currentSegment={currentSegment}
-                  onPlayOriginal={onReplay}
-                  translationText={translationText}
-                  showTranslation={showTranslation}
-                  status={recorder.status}
-                  error={recorder.error}
-                  elapsedSec={recorder.elapsedSec}
-                  level={recorder.level}
-                  clip={recorder.clip}
-                  onStartRecording={recorder.start}
-                />
-              ) : (
-                <PronunciationPanel
-                  currentSegment={currentSegment}
-                  onPlayOriginal={onReplay}
-                  translationText={translationText}
-                  showTranslation={showTranslation}
-                  status={recorder.status}
-                  error={recorder.error}
-                  elapsedSec={recorder.elapsedSec}
-                  level={recorder.level}
-                  clip={recorder.clip}
-                  onStartRecording={recorder.start}
-                />
-              )}
+              <ShadowingPanel
+                currentSegment={currentSegment}
+                onPlayOriginal={onReplay}
+                translationText={translationText}
+                showTranslation={showTranslation}
+                status={recorder.status}
+                error={recorder.error}
+                elapsedSec={recorder.elapsedSec}
+                level={recorder.level}
+                clip={recorder.clip}
+                onStartRecording={recorder.start}
+              />
             </div>
 
             <div className="flex flex-col gap-2.5 pt-3 lg:min-h-0 lg:flex-shrink-0 lg:justify-center lg:pt-0">
@@ -397,8 +388,8 @@ export function DefaultLayout({
                   <ListeningTranscript text={currentSegment?.text ?? ""} fontSizePx={englishFontPx} />
                 </div>
               )}
-              {/* Shadowing / Pronunciation Practice never reach this branch —
-                  isSpeakingMode returns its own dedicated layout above. */}
+              {/* Shadowing never reaches this branch — isSpeakingMode returns
+                  its own dedicated layout above. */}
 
               <AnimatePresence>
                 {isDictationMode && workspaceStatus === "success" && isLastResultClean && (

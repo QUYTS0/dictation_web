@@ -28,7 +28,6 @@ export const INPUT_MODE_LABELS: Record<InputMode, string> = {
   dictation: "Dictation",
   listening: "Listening",
   shadowing: "Shadowing",
-  pronunciation: "Pronunciation",
 };
 
 // Shortcuts for typing/answering the current sentence — shown both in the full

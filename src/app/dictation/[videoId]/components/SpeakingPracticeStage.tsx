@@ -10,10 +10,6 @@ const COPY = {
     title: "Shadowing",
     hint: "Play the sentence, then record yourself repeating it back — match the rhythm and timing, not the exact wording.",
   },
-  pronunciation: {
-    title: "Pronunciation Practice",
-    hint: "Play the sentence, then record yourself reading it aloud alone.",
-  },
 } as const;
 
 const ERROR_MESSAGES: Record<AudioRecorderErrorReason, string> = {
@@ -39,12 +35,19 @@ export interface SpeakingPracticeStageProps {
 
 /**
  * Compact, fixed-height desktop workspace (three columns: reference audio /
- * recording status / your recording) shared by ShadowingPanel and
- * PronunciationPanel, plus a stacked fallback below `lg`. Recording is
- * started/stopped from ControlBar's center button (see DefaultLayout) — this
- * component only ever *displays* recorder state and re-triggers a take via
- * "Record again"; it never owns the recorder itself, so ControlBar and this
- * stage always agree on what's happening.
+ * recording status / your recording) rendered by ShadowingPanel, plus a
+ * stacked fallback below `lg`. Recording is started/stopped from
+ * ControlBar's center button (see DefaultLayout) — this component only ever
+ * *displays* recorder state and re-triggers a take via "Record again"; it
+ * never owns the recorder itself, so ControlBar and this stage always agree
+ * on what's happening.
+ *
+ * Pronunciation Practice existed as a second mode reusing this same
+ * component (`mode: "pronunciation"`) before it was merged into Shadowing —
+ * see "Shadowing and Pronunciation Practice Plan.md" §2/§13. `mode` is kept
+ * as a prop (rather than hardcoding "shadowing" throughout) only because
+ * this whole component is slated for removal per §6 of that plan; a
+ * single-purpose replacement won't need it.
  *
  * Every state (idle / recording / recorded / error) renders inside the same
  * fixed-size slots so switching between them never changes this component's

@@ -10,20 +10,29 @@ function storageKey(videoId: string): string {
 
 // Modes other than the default ("dictation") carry an explicit `?mode=`
 // value; dictation stays paramless as before so existing links are unaffected.
-const NON_DEFAULT_MODES: ReadonlyArray<InputMode> = ["listening", "shadowing", "pronunciation"];
+const NON_DEFAULT_MODES: ReadonlyArray<InputMode> = ["listening", "shadowing"];
+
+// Pronunciation Practice existed as its own mode before it was merged into
+// Shadowing (see "Shadowing and Pronunciation Practice Plan.md" §2/§3.3) —
+// any link or stored value from before that merge may still say
+// "pronunciation". Treat it as "shadowing" rather than silently falling back
+// to "dictation" (today's behavior for any other unrecognized value).
+const LEGACY_MODE_ALIASES: Record<string, InputMode> = { pronunciation: "shadowing" };
 
 function parseInputMode(value: string | null): InputMode {
-  return (NON_DEFAULT_MODES as readonly string[]).includes(value ?? "") ? (value as InputMode) : "dictation";
+  if (!value) return "dictation";
+  if (value in LEGACY_MODE_ALIASES) return LEGACY_MODE_ALIASES[value];
+  return (NON_DEFAULT_MODES as readonly string[]).includes(value) ? (value as InputMode) : "dictation";
 }
 
 /**
  * Which central-input-area component the practice page shows: the dictation
- * typing box, the read-only Listening Mode transcript, or the Shadowing /
- * Pronunciation Practice recorder panels. The `?mode=` URL query param is the
- * source of truth — set by the dashboard, a resumable session link, or a
- * direct URL — so refreshes and shared links always agree on the mode. A
- * per-video localStorage fallback recalls the last mode used for links
- * (typed URLs, old bookmarks) that omit the param.
+ * typing box, the read-only Listening Mode transcript, or the Shadowing
+ * recorder UI. The `?mode=` URL query param is the source of truth — set by
+ * the dashboard, a resumable session link, or a direct URL — so refreshes
+ * and shared links always agree on the mode. A per-video localStorage
+ * fallback recalls the last mode used for links (typed URLs, old bookmarks)
+ * that omit the param.
  */
 export function useInputModePreference(videoId: string) {
   const router = useRouter();
@@ -35,6 +44,16 @@ export function useInputModePreference(videoId: string) {
   useEffect(() => {
     if (modeParam) {
       setInputModeState(parseInputMode(modeParam));
+      // A legacy `?mode=pronunciation` link resolves correctly above, but
+      // leaves the stale value sitting in the address bar/history — clean it
+      // up immediately rather than waiting for the next manual mode switch.
+      // This only touches the URL; it never resets currentSegIdx, uxState,
+      // or the sessionStorage session snapshot, all owned elsewhere.
+      if (modeParam in LEGACY_MODE_ALIASES) {
+        const params = new URLSearchParams(window.location.search);
+        params.set("mode", LEGACY_MODE_ALIASES[modeParam]);
+        router.replace(`/dictation/${videoId}?${params.toString()}`, { scroll: false });
+      }
       return;
     }
     setInputModeState("dictation");

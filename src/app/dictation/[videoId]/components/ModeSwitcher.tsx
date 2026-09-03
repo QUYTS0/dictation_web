@@ -77,23 +77,11 @@ export function ModeSwitcher({
         active={inputMode === "shadowing"}
         onClick={() => onSelectMode("shadowing")}
         title="Shadowing"
-        description="Play a sentence, then record yourself repeating it back"
+        description="Listen, repeat it back, and record yourself"
         icon={
           <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <rect x="7" y="2.5" width="6" height="9" rx="3" />
             <path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5" />
-          </svg>
-        }
-      />
-
-      <ModeOption
-        active={inputMode === "pronunciation"}
-        onClick={() => onSelectMode("pronunciation")}
-        title="Pronunciation Practice"
-        description="Read the sentence aloud and check how it matched"
-        icon={
-          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 11v-2M6.5 14v-8M10 16.5v-13M13.5 14v-8M17 11v-2" />
           </svg>
         }
       />
