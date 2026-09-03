@@ -1,8 +1,11 @@
-import { FileText, Type, AlignLeft } from "lucide-react";
+import { FileText, Type, AlignLeft, ClipboardCheck } from "lucide-react";
 import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
+import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
+import type { SpeechRecognitionStatus } from "@/hooks/useSpeechRecognition";
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
 import { SentencesTab } from "./SentencesTab";
+import { EvaluationTab } from "./EvaluationTab";
 import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
 
 export function RightPanelTabs({
@@ -39,6 +42,10 @@ export function RightPanelTabs({
   onDeleteBookmark,
   onUpdateBookmarkNote,
   onJumpBookmark,
+  recorderStatus,
+  recordingClip,
+  speechStatus,
+  transcript,
 }: {
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
@@ -84,6 +91,10 @@ export function RightPanelTabs({
   onDeleteBookmark: (id: string) => void;
   onUpdateBookmarkNote: (id: string, note: string) => void;
   onJumpBookmark: (segmentIndex: number) => void;
+  recorderStatus: AudioRecorderStatus;
+  recordingClip: RecordedClip | null;
+  speechStatus: SpeechRecognitionStatus;
+  transcript: string | null;
 }) {
   return (
     <>
@@ -129,6 +140,18 @@ export function RightPanelTabs({
               </span>
             )}
           </button>
+          {inputMode === "shadowing" && (
+            <button
+              onClick={() => setRightPanelTab("evaluation")}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-bold rounded-lg transition-all ${
+                rightPanelTab === "evaluation"
+                  ? "bg-[var(--surface)] text-[var(--accent)] shadow-sm border border-[var(--border-strong)]"
+                  : "text-[var(--text-muted)] hover:text-[var(--accent)]"
+              }`}
+            >
+              <ClipboardCheck size={15} /> Evaluation
+            </button>
+          )}
         </div>
       </div>
 
@@ -163,7 +186,7 @@ export function RightPanelTabs({
             learningError={learningError}
             learningErrorRetry={learningErrorRetry}
           />
-        ) : (
+        ) : rightPanelTab === "sentences" ? (
           <SentencesTab
             sentenceItems={sentenceItems}
             deletingId={learningDeletingId}
@@ -180,6 +203,15 @@ export function RightPanelTabs({
             onDeleteBookmark={onDeleteBookmark}
             onUpdateBookmarkNote={onUpdateBookmarkNote}
             onJumpBookmark={onJumpBookmark}
+          />
+        ) : (
+          <EvaluationTab
+            currentSegIdx={currentSegIdx}
+            currentSegment={scriptSegments[currentSegIdx]}
+            recorderStatus={recorderStatus}
+            recordingClip={recordingClip}
+            speechStatus={speechStatus}
+            transcript={transcript}
           />
         )}
       </div>

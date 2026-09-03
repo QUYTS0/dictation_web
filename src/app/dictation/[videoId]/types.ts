@@ -8,7 +8,7 @@ export interface MistakeRecord {
 }
 
 export type LessonItemType = "word" | "phrase" | "sentence";
-export type RightPanelTab = "script" | "words" | "sentences";
+export type RightPanelTab = "script" | "words" | "sentences" | "evaluation";
 export type VideoSizeMode = "standard" | "large";
 export type PracticeMode = "easy" | "hard";
 export type InputMode = "dictation" | "listening" | "shadowing";

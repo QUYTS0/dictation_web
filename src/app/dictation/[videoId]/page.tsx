@@ -52,6 +52,7 @@ import { useScriptTranslation } from "./useScriptTranslation";
 import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 
 import { ConfettiBurst } from "./components/ConfettiBurst";
@@ -156,13 +157,32 @@ export default function DictationPage({ params }: PageProps) {
   // unconditionally (hooks can't be conditional); it stays inert until
   // start() is called, so this is harmless in Dictation/Listening.
   const recorder = useAudioRecorder({ maxDurationSec: 20 });
+  // Captures a live transcript in parallel with recording, for the
+  // Evaluation tab's Word Match (§8.1/§10) — the Web Speech API can only
+  // listen to a live mic stream, not transcribe an already-recorded Blob,
+  // so this has to run alongside recording rather than after it.
+  const speech = useSpeechRecognition();
   const isShadowingMode = inputMode === "shadowing";
 
-  // A recorded take only ever refers to the sentence it was made for —
-  // moving to a different sentence must not leave a stale recording around.
+  const handleStartRecording = useCallback(() => {
+    recorder.start();
+    speech.start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleStopRecording = useCallback(() => {
+    recorder.stop();
+    speech.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A recorded take (and its transcript) only ever refers to the sentence it
+  // was made for — moving to a different sentence must not leave a stale
+  // recording or Word Match transcript around.
   useEffect(() => {
     if (!isShadowingMode) return;
     recorder.discard();
+    speech.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSegIdx, isShadowingMode]);
 
@@ -172,6 +192,8 @@ export default function DictationPage({ params }: PageProps) {
   useEffect(() => {
     if (isShadowingMode) return;
     recorder.discard();
+    speech.reset();
+    if (rightPanelTab === "evaluation") setRightPanelTab("script");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isShadowingMode]);
 
@@ -734,8 +756,8 @@ export default function DictationPage({ params }: PageProps) {
             playbackRate={playbackRate}
             setPlaybackRate={setPlaybackRate}
             recorderStatus={recorder.status}
-            onStartRecording={recorder.start}
-            onStopRecording={recorder.stop}
+            onStartRecording={handleStartRecording}
+            onStopRecording={handleStopRecording}
             recorderElapsedSec={recorder.elapsedSec}
             recorderLevel={recorder.level}
             recordingClip={recorder.clip}
@@ -1037,6 +1059,10 @@ export default function DictationPage({ params }: PageProps) {
                   }}
                   onUpdateBookmarkNote={(id, note) => void updateBookmarkNote(id, note).catch(() => {})}
                   onJumpBookmark={handleBookmarkJump}
+                  recorderStatus={recorder.status}
+                  recordingClip={recorder.clip}
+                  speechStatus={speech.status}
+                  transcript={speech.transcript}
                 />
                 </div>
               </motion.div>
