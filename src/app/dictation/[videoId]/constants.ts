@@ -1,3 +1,4 @@
+import { AudioLines, Headphones, Keyboard, type LucideIcon } from "lucide-react";
 import type { InputMode, ShortcutEntry, VideoSizeMode } from "./types";
 
 // Let the embedded player seek after the segment playback command settles.
@@ -28,6 +29,15 @@ export const INPUT_MODE_LABELS: Record<InputMode, string> = {
   dictation: "Dictation",
   listening: "Listening",
   shadowing: "Shadowing",
+};
+
+// One fixed, distinct icon per mode, shared by ModeSwitcher's option rows and
+// ControlBar's mode-switch trigger button so the two always agree. Shadowing
+// deliberately isn't a microphone — that icon is already the Record button's.
+export const MODE_ICONS: Record<InputMode, LucideIcon> = {
+  dictation: Keyboard,
+  listening: Headphones,
+  shadowing: AudioLines,
 };
 
 // Shortcuts for typing/answering the current sentence — shown both in the full

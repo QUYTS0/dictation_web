@@ -176,15 +176,19 @@ export function DefaultLayout({
       <div
         className={clsx(
           "flex min-h-0 flex-1 flex-col",
-          // Row 3 is fixed at 80px (not the suggested 64px) — ControlBar's
+          // Row 3 is fixed at 104px (not the suggested 64px) — ControlBar's
           // real rendered height is ~75px at these breakpoints regardless of
           // viewport width (its own padding/buttons are fixed-size, not
-          // responsive), and `minmax(64px,auto)` was measured to resolve back
-          // to 64px rather than growing to fit — Chromium's grid track-sizing
+          // responsive; `minmax(64px,auto)` was measured to resolve back to
+          // 64px rather than growing to fit — Chromium's grid track-sizing
           // doesn't take the item's max-content contribution into account
-          // here the way the spec's algorithm implies it should.
+          // here the way the spec's algorithm implies it should), plus room
+          // for the Record button's always-visible timer caption, which is
+          // absolutely positioned below it (like the other buttons' hover
+          // labels) and would otherwise get clipped by this grid's own
+          // overflow-hidden boundary while recording.
           isPracticing &&
-            "lg:grid lg:grid-rows-[minmax(280px,1fr)_minmax(180px,220px)_84px] lg:gap-3 lg:min-h-0 lg:overflow-hidden"
+            "lg:grid lg:grid-rows-[minmax(280px,1fr)_minmax(180px,220px)_104px] lg:gap-3 lg:min-h-0 lg:overflow-hidden"
         )}
       >
         <div
@@ -260,6 +264,9 @@ export function DefaultLayout({
                 recorderStatus={recorder.status}
                 onStartRecording={recorder.start}
                 onStopRecording={recorder.stop}
+                recorderElapsedSec={recorder.elapsedSec}
+                recorderLevel={recorder.level}
+                recordingClip={recorder.clip}
               />
             </div>
           </>

@@ -2,16 +2,34 @@
 
 import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
-import { Eye, Lightbulb, Mic, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat, Square, LayoutGrid } from "lucide-react";
+import { Eye, Lightbulb, Mic, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat } from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
 import { ModeSwitcher } from "./ModeSwitcher";
 import { MobileBottomSheet } from "./MobileBottomSheet";
 import { formatClockTime } from "../helpers";
-import { INPUT_MODE_LABELS, PLAYBACK_RATE_OPTIONS } from "../constants";
+import { INPUT_MODE_LABELS, MODE_ICONS, PLAYBACK_RATE_OPTIONS } from "../constants";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
-import type { AudioRecorderStatus } from "@/hooks/useAudioRecorder";
+import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
+import { usePlaybackToggle } from "@/hooks/usePlaybackToggle";
+
+// Tiny in-button level meter — shown in place of the mic icon while
+// recording (see "Shadowing and Pronunciation Practice Plan.md" §5.1). Three
+// bars with slightly different sensitivity so they don't move in perfect
+// lockstep; uses `currentColor` so it inherits the button's red "recording"
+// text color automatically.
+function MiniLevelMeter({ level }: { level: number }) {
+  const clamped = Math.min(1, Math.max(0, level));
+  const heights = [0.5, 1, 0.7].map((mult) => 3 + clamped * mult * 11);
+  return (
+    <div className="flex h-[18px] items-end gap-[2px]" aria-hidden="true">
+      {heights.map((h, i) => (
+        <span key={i} className="w-[3px] rounded-full bg-current transition-[height] duration-75" style={{ height: `${h}px` }} />
+      ))}
+    </div>
+  );
+}
 
 export function ControlBar({
   currentSegIdx,
@@ -40,6 +58,9 @@ export function ControlBar({
   recorderStatus = "idle",
   onStartRecording = () => {},
   onStopRecording = () => {},
+  recorderElapsedSec = 0,
+  recorderLevel = 0,
+  recordingClip = null,
 }: {
   currentSegIdx: number;
   totalSegments: number;
@@ -71,6 +92,14 @@ export function ControlBar({
   recorderStatus?: AudioRecorderStatus;
   onStartRecording?: () => void;
   onStopRecording?: () => void;
+  /** Live seconds elapsed — drives the always-visible caption under the
+   *  Record button while recording. */
+  recorderElapsedSec?: number;
+  /** 0..1 live mic level — drives the in-button mini level meter. */
+  recorderLevel?: number;
+  /** The current take, if any — drives the adjacent Play/Pause My Recording
+   *  button (disabled until a clip exists). */
+  recordingClip?: RecordedClip | null;
 }) {
   // Dictation is the only mode with a typed-answer flow (Hint, combo streak,
   // accuracy). Listening and Shadowing both instead share a generic
@@ -79,6 +108,13 @@ export function ControlBar({
   const isDictationMode = inputMode === "dictation";
   const isSpeakingMode = inputMode === "shadowing";
   const isRecording = recorderStatus === "recording";
+  const ModeIcon = MODE_ICONS[inputMode];
+  // Headless playback for "Play/Pause My Recording" — no seek bar, time, or
+  // volume control (unlike CompactAudioPlayer), since this button has no
+  // dedicated surface to show them in; see plan §5.2/§5.3.
+  const { isPlaying: isPlayingMyRecording, toggle: toggleMyRecordingPlayback } = usePlaybackToggle(
+    recordingClip?.url ?? null
+  );
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
@@ -124,13 +160,24 @@ export function ControlBar({
   }, [showVisibilityPopover, showModePopover, showSpeedPopover, showSpeedPopoverDesktop]);
 
   const centerButton = isSpeakingMode ? (
-    <ControlButton
-      icon={isRecording ? <Square size={16} className="fill-current" /> : <Mic size={18} />}
-      shortcut={isRecording ? "Stop recording" : "Record"}
-      label={isRecording ? "Stop" : "Record"}
-      active={isRecording}
-      onClick={isRecording ? onStopRecording : onStartRecording}
-    />
+    <>
+      <ControlButton
+        icon={isRecording ? <MiniLevelMeter level={recorderLevel} /> : <Mic size={18} />}
+        shortcut={isRecording ? "Stop recording" : "Record"}
+        label={isRecording ? "Stop" : "Record"}
+        recording={isRecording}
+        caption={isRecording ? formatClockTime(recorderElapsedSec) : undefined}
+        onClick={isRecording ? onStopRecording : onStartRecording}
+      />
+      <ControlButton
+        icon={isPlayingMyRecording ? <Pause size={18} /> : <Play size={18} />}
+        shortcut={isPlayingMyRecording ? "Pause my recording" : "Play my recording"}
+        label={isPlayingMyRecording ? "Pause mine" : "Play mine"}
+        active={isPlayingMyRecording}
+        disabled={!recordingClip}
+        onClick={toggleMyRecordingPlayback}
+      />
+    </>
   ) : !isDictationMode ? (
     <ControlButton
       icon={isVideoPlaying ? <Pause size={18} /> : <Play size={18} />}
@@ -344,8 +391,8 @@ export function ControlBar({
           </div>
           <div className="relative">
             <ControlButton
-              icon={<LayoutGrid size={18} />}
-              shortcut="Switch mode"
+              icon={<ModeIcon size={18} />}
+              shortcut={`Switch mode — currently ${INPUT_MODE_LABELS[inputMode]}`}
               label={INPUT_MODE_LABELS[inputMode]}
               active
               onClick={() => setShowModePopover((v) => !v)}
