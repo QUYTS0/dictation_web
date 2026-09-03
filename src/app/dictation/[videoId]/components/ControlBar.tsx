@@ -92,8 +92,8 @@ export function ControlBar({
   recorderStatus?: AudioRecorderStatus;
   onStartRecording?: () => void;
   onStopRecording?: () => void;
-  /** Live seconds elapsed — drives the always-visible caption under the
-   *  Record button while recording. */
+  /** Live seconds elapsed — shown in the Record/Stop button's hover label
+   *  and title, the same way every other button surfaces extra detail. */
   recorderElapsedSec?: number;
   /** 0..1 live mic level — drives the in-button mini level meter. */
   recorderLevel?: number;
@@ -163,10 +163,9 @@ export function ControlBar({
     <>
       <ControlButton
         icon={isRecording ? <MiniLevelMeter level={recorderLevel} /> : <Mic size={18} />}
-        shortcut={isRecording ? "Stop recording" : "Record"}
-        label={isRecording ? "Stop" : "Record"}
+        shortcut={isRecording ? `Stop recording — ${formatClockTime(recorderElapsedSec)}` : "Record"}
+        label={isRecording ? `Stop · ${formatClockTime(recorderElapsedSec)}` : "Record"}
         recording={isRecording}
-        caption={isRecording ? formatClockTime(recorderElapsedSec) : undefined}
         onClick={isRecording ? onStopRecording : onStartRecording}
       />
       <ControlButton

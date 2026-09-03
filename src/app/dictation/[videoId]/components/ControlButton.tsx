@@ -7,7 +7,6 @@ export function ControlButton({
   primary,
   active,
   recording,
-  caption,
   onClick,
   disabled,
 }: {
@@ -21,11 +20,6 @@ export function ControlButton({
    *  toggle state so a learner never mistakes "recording" for a normal
    *  toggled-on control. */
   recording?: boolean;
-  /** A short caption shown continuously below the button (e.g. a live
-   *  recording timer), replacing the normal hover-only label while present.
-   *  Absolutely positioned like that label, so it never affects this
-   *  button's own layout footprint or its row's height. */
-  caption?: string;
   onClick?: () => void;
   disabled?: boolean;
 }) {
@@ -56,18 +50,9 @@ export function ControlButton({
           />
         )}
       </button>
-      {caption ? (
-        <span
-          className="pointer-events-none absolute top-full mt-1 whitespace-nowrap text-[10px] font-semibold tabular-nums text-[var(--red)]"
-          aria-hidden="true"
-        >
-          {caption}
-        </span>
-      ) : (
-        <span className="pointer-events-none absolute top-full mt-1 hidden whitespace-nowrap text-[10px] font-semibold text-[var(--text-faint)] sm:group-hover:block">
-          {label}
-        </span>
-      )}
+      <span className="pointer-events-none absolute top-full mt-1 hidden whitespace-nowrap text-[10px] font-semibold text-[var(--text-faint)] sm:group-hover:block">
+        {label}
+      </span>
     </div>
   );
 }
