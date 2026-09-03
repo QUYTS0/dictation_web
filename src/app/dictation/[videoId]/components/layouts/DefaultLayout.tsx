@@ -1,12 +1,11 @@
 "use client";
 
 import { clsx } from "clsx";
-import { useEffect } from "react";
 import type { ReactNode, RefObject } from "react";
 import { Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import HintDisplay from "@/components/HintDisplay";
-import { useAudioRecorder } from "@/hooks/useAudioRecorder";
+import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
 import type { UXState, CheckAnswerResponse, HintLevel } from "@/lib/types";
 import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
@@ -69,6 +68,12 @@ export function DefaultLayout({
   durationSec,
   playbackRate,
   setPlaybackRate,
+  recorderStatus,
+  onStartRecording,
+  onStopRecording,
+  recorderElapsedSec,
+  recorderLevel,
+  recordingClip,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -116,6 +121,15 @@ export function DefaultLayout({
   durationSec: number;
   playbackRate: (typeof PLAYBACK_RATE_OPTIONS)[number];
   setPlaybackRate: (rate: (typeof PLAYBACK_RATE_OPTIONS)[number]) => void;
+  /** Owned by page.tsx (shared with a future Evaluation tab) — see
+   *  "Shadowing and Pronunciation Practice Plan.md" §5.4/§7. Only meaningful
+   *  in Shadowing; passed straight through to ControlBar. */
+  recorderStatus: AudioRecorderStatus;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+  recorderElapsedSec: number;
+  recorderLevel: number;
+  recordingClip: RecordedClip | null;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -124,22 +138,6 @@ export function DefaultLayout({
   const showMask = practiceMode === "easy" && subtitleVisibility.original !== "hide" && !!currentSegment;
   const maskBlurred = subtitleVisibility.original === "blur";
   const showTranslation = !!translationText && subtitleVisibility.translation !== "hide";
-
-  // ControlBar's Record/Stop and Play/Pause My Recording buttons (Shadowing
-  // only) act directly on this — see "Shadowing and Pronunciation Practice
-  // Plan.md" §5.4/§6 (this will move up to page.tsx once the Evaluation tab
-  // needs the same recorder — not yet done here). Instantiated unconditionally
-  // (hooks can't be conditional); it stays inert until start() is called, so
-  // this is harmless in Dictation/Listening.
-  const recorder = useAudioRecorder({ maxDurationSec: 20 });
-
-  // A recorded take only ever refers to the sentence it was made for —
-  // moving to a different sentence must not leave a stale recording around.
-  useEffect(() => {
-    if (!isSpeakingMode) return;
-    recorder.discard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSegIdx, isSpeakingMode]);
 
   // Fits the English + Vietnamese pair inside the mobile transcript stage's
   // fixed height (shrinking font/gap, then falling back to internal scroll)
@@ -372,12 +370,12 @@ export function DefaultLayout({
               durationSec={durationSec}
               playbackRate={playbackRate}
               setPlaybackRate={setPlaybackRate}
-              recorderStatus={recorder.status}
-              onStartRecording={recorder.start}
-              onStopRecording={recorder.stop}
-              recorderElapsedSec={recorder.elapsedSec}
-              recorderLevel={recorder.level}
-              recordingClip={recorder.clip}
+              recorderStatus={recorderStatus}
+              onStartRecording={onStartRecording}
+              onStopRecording={onStopRecording}
+              recorderElapsedSec={recorderElapsedSec}
+              recorderLevel={recorderLevel}
+              recordingClip={recordingClip}
             />
           </div>
         </>

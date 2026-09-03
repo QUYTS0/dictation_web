@@ -51,6 +51,7 @@ import { useDictationSession } from "./useDictationSession";
 import { useScriptTranslation } from "./useScriptTranslation";
 import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
+import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 
 import { ConfettiBurst } from "./components/ConfettiBurst";
@@ -147,6 +148,32 @@ export default function DictationPage({ params }: PageProps) {
     jumpToSegment,
     handleActiveSegmentChange,
   } = useDictationSession({ videoId, user, autoEnterPaused: inputMode !== "dictation" });
+
+  // Lives here (not inside DefaultLayout) so both ControlBar's Record/Stop
+  // button and a future Evaluation tab in RightPanelTabs — a sibling of
+  // DefaultLayout, not a descendant — can share the same recorder instance;
+  // see "Shadowing and Pronunciation Practice Plan.md" §5.4/§7. Instantiated
+  // unconditionally (hooks can't be conditional); it stays inert until
+  // start() is called, so this is harmless in Dictation/Listening.
+  const recorder = useAudioRecorder({ maxDurationSec: 20 });
+  const isShadowingMode = inputMode === "shadowing";
+
+  // A recorded take only ever refers to the sentence it was made for —
+  // moving to a different sentence must not leave a stale recording around.
+  useEffect(() => {
+    if (!isShadowingMode) return;
+    recorder.discard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSegIdx, isShadowingMode]);
+
+  // Leaving Shadowing (mode switch or navigating away) releases the mic
+  // stream/AudioContext and revokes the clip's object URL immediately,
+  // rather than waiting for an unrelated unmount elsewhere.
+  useEffect(() => {
+    if (isShadowingMode) return;
+    recorder.discard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isShadowingMode]);
 
   const {
     bookmarkedSegmentIndexes,
@@ -706,6 +733,12 @@ export default function DictationPage({ params }: PageProps) {
             durationSec={playerStore.durationSec}
             playbackRate={playbackRate}
             setPlaybackRate={setPlaybackRate}
+            recorderStatus={recorder.status}
+            onStartRecording={recorder.start}
+            onStopRecording={recorder.stop}
+            recorderElapsedSec={recorder.elapsedSec}
+            recorderLevel={recorder.level}
+            recordingClip={recorder.clip}
           />
           </div>
 
