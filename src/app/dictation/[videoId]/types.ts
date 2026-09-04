@@ -57,3 +57,27 @@ export interface ResumeState {
   accuracy: number;
   totalAttempts: number;
 }
+
+// ---- Shadowing evaluation — see "Shadowing and Pronunciation Practice
+// Plan.md" §11. Each sentence is evaluated individually; accuracy/
+// completeness/fluency/prosody are each optional since not every engine
+// (e.g. today's Word Match) produces every category.
+export interface EvaluationProblemWord {
+  word: string;
+  score?: number;
+  errorType?: string;
+}
+
+export interface SentenceEvaluation {
+  segmentIndex: number;
+  referenceText: string;
+  wordCount: number;
+  audioDuration: number;
+
+  accuracy?: number;
+  completeness?: number;
+  fluency?: number;
+  prosody?: number;
+
+  problemWords?: EvaluationProblemWord[];
+}

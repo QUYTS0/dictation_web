@@ -48,6 +48,7 @@ import { useStreak } from "./useStreak";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
+import { useShadowingEvaluations } from "./useShadowingEvaluations";
 import { useScriptTranslation } from "./useScriptTranslation";
 import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
@@ -163,6 +164,11 @@ export default function DictationPage({ params }: PageProps) {
   // so this has to run alongside recording rather than after it.
   const speech = useSpeechRecognition();
   const isShadowingMode = inputMode === "shadowing";
+  // Per-sentence Shadowing evaluations + the live session summary derived
+  // from them — see "Shadowing and Pronunciation Practice Plan.md" §11.
+  // Lives here (not EvaluationTab) so the sessionStorage-backed map survives
+  // switching right-panel tabs and persists across a refresh within the tab.
+  const { recordEvaluation, summary: evaluationSummary } = useShadowingEvaluations(videoId, segments.length);
 
   const handleStartRecording = useCallback(() => {
     recorder.start();
@@ -1063,6 +1069,8 @@ export default function DictationPage({ params }: PageProps) {
                   recordingClip={recorder.clip}
                   speechStatus={speech.status}
                   transcript={speech.transcript}
+                  onEvaluationRecorded={recordEvaluation}
+                  evaluationSummary={evaluationSummary}
                 />
                 </div>
               </motion.div>

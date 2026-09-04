@@ -7,7 +7,10 @@ import type { CheckResult } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
 import type { SpeechRecognitionStatus } from "@/hooks/useSpeechRecognition";
 import { ComparedSentenceText } from "./ComparedSentenceText";
-import { buildComparedTokens } from "../helpers";
+import { EvaluationSessionSummary } from "./EvaluationSessionSummary";
+import { buildComparedTokens, splitSentenceIntoWords } from "../helpers";
+import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import type { SentenceEvaluation } from "../types";
 
 type MatchTier = "needs-work" | "getting-there" | "solid";
 
@@ -48,6 +51,9 @@ export function EvaluationTab({
   speechStatus,
   transcript,
   onEvaluated,
+  onEvaluationRecorded,
+  evaluationSummary,
+  onJumpToSegment,
 }: {
   currentSegIdx: number;
   currentSegment: { text: string } | undefined;
@@ -56,6 +62,9 @@ export function EvaluationTab({
   speechStatus: SpeechRecognitionStatus;
   transcript: string | null;
   onEvaluated?: () => void;
+  onEvaluationRecorded: (evaluation: SentenceEvaluation) => void;
+  evaluationSummary: ShadowingEvaluationSummary;
+  onJumpToSegment: (segmentIndex: number) => void;
 }) {
   const [result, setResult] = useState<CheckResult | null>(null);
 
@@ -79,7 +88,30 @@ export function EvaluationTab({
 
   const handleEvaluate = () => {
     if (!currentSegment) return;
-    setResult(checkAnswer(currentSegment.text, transcript ?? "", "relaxed"));
+    const checkResult = checkAnswer(currentSegment.text, transcript ?? "", "relaxed");
+    setResult(checkResult);
+
+    // Word Match doesn't produce true accuracy/completeness scores — this
+    // derives a stand-in from the same diff the tier badge above already
+    // uses, so per-sentence evaluations can be aggregated into a session
+    // summary (§11) even before a true evaluation engine (Phase 6) exists.
+    const expectedCount = checkResult.diff.filter((t) => t.status !== "extra").length;
+    const correctCount = checkResult.diff.filter((t) => t.status === "correct").length;
+    const missingCount = checkResult.diff.filter((t) => t.status === "missing").length;
+    const problemWords = checkResult.diff
+      .filter((t) => t.status === "missing" || t.status === "wrong")
+      .map((t) => ({ word: t.word, errorType: t.status }));
+
+    onEvaluationRecorded({
+      segmentIndex: currentSegIdx,
+      referenceText: currentSegment.text,
+      wordCount: splitSentenceIntoWords(currentSegment.text).length,
+      audioDuration: recordingClip?.durationSec ?? 0,
+      accuracy: expectedCount > 0 ? (correctCount / expectedCount) * 100 : 0,
+      completeness: expectedCount > 0 ? ((expectedCount - missingCount) / expectedCount) * 100 : 0,
+      problemWords,
+    });
+
     onEvaluated?.();
   };
 
@@ -164,6 +196,10 @@ export function EvaluationTab({
             </p>
           )}
         </>
+      )}
+
+      {evaluationSummary.evaluatedCount > 1 && (
+        <EvaluationSessionSummary summary={evaluationSummary} onJumpToSegment={onJumpToSegment} />
       )}
     </div>
   );

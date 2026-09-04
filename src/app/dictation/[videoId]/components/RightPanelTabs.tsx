@@ -8,7 +8,8 @@ import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
 import { SentencesTab } from "./SentencesTab";
 import { EvaluationTab } from "./EvaluationTab";
-import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue } from "../types";
+import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue, SentenceEvaluation } from "../types";
+import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 
 const TAB_CONFIG: Array<{ id: RightPanelTabValue; label: string; icon: LucideIcon }> = [
   { id: "script", label: "Script", icon: FileText },
@@ -118,6 +119,8 @@ export function RightPanelTabs({
   recordingClip,
   speechStatus,
   transcript,
+  onEvaluationRecorded,
+  evaluationSummary,
 }: {
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
@@ -167,6 +170,8 @@ export function RightPanelTabs({
   recordingClip: RecordedClip | null;
   speechStatus: SpeechRecognitionStatus;
   transcript: string | null;
+  onEvaluationRecorded: (evaluation: SentenceEvaluation) => void;
+  evaluationSummary: ShadowingEvaluationSummary;
 }) {
   const tabRefs = useRef<Partial<Record<RightPanelTabValue, HTMLButtonElement | null>>>({});
   const visibleTabs = TAB_CONFIG.filter((tab) => tab.id !== "evaluation" || inputMode === "shadowing");
@@ -291,6 +296,9 @@ export function RightPanelTabs({
             speechStatus={speechStatus}
             transcript={transcript}
             onEvaluated={() => setRightPanelTab("evaluation")}
+            onEvaluationRecorded={onEvaluationRecorded}
+            evaluationSummary={evaluationSummary}
+            onJumpToSegment={onSeekToSegment}
           />
         )}
       </div>
