@@ -47,6 +47,7 @@ export function EvaluationTab({
   recordingClip,
   speechStatus,
   transcript,
+  onEvaluated,
 }: {
   currentSegIdx: number;
   currentSegment: { text: string } | undefined;
@@ -54,6 +55,7 @@ export function EvaluationTab({
   recordingClip: RecordedClip | null;
   speechStatus: SpeechRecognitionStatus;
   transcript: string | null;
+  onEvaluated?: () => void;
 }) {
   const [result, setResult] = useState<CheckResult | null>(null);
 
@@ -78,6 +80,7 @@ export function EvaluationTab({
   const handleEvaluate = () => {
     if (!currentSegment) return;
     setResult(checkAnswer(currentSegment.text, transcript ?? "", "relaxed"));
+    onEvaluated?.();
   };
 
   if (speechStatus === "unsupported") {
