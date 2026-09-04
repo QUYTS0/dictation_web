@@ -2,22 +2,7 @@
 
 import { ChevronRight, Sparkles } from "lucide-react";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
-
-function CategoryBar({ label, value }: { label: string; value: number | null }) {
-  if (value === null) return null;
-  const clamped = Math.max(0, Math.min(100, value));
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="font-medium text-[var(--text-muted)]">{label}</span>
-        <span className="font-semibold text-[var(--text)]">{Math.round(clamped)}%</span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface)]">
-        <div className="h-full rounded-full bg-[var(--accent)]" style={{ width: `${clamped}%` }} />
-      </div>
-    </div>
-  );
-}
+import { MetricBar } from "./MetricBar";
 
 /**
  * Session-scoped summary over every SentenceEvaluation recorded so far this
@@ -64,10 +49,10 @@ export function EvaluationSessionSummary({
       )}
 
       <div className="flex flex-col gap-2">
-        <CategoryBar label="Accuracy" value={weightedAccuracy} />
-        <CategoryBar label="Completeness" value={weightedCompleteness} />
-        <CategoryBar label="Fluency" value={weightedFluency} />
-        <CategoryBar label="Prosody" value={weightedProsody} />
+        <MetricBar label="Accuracy" value={weightedAccuracy} />
+        <MetricBar label="Completeness" value={weightedCompleteness} />
+        <MetricBar label="Fluency" value={weightedFluency} />
+        <MetricBar label="Prosody" value={weightedProsody} />
       </div>
 
       {problemWords.length > 0 && (

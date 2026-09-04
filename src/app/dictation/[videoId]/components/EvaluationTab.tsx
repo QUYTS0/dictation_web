@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ClipboardCheck, Mic, AlertCircle } from "lucide-react";
+import { ClipboardCheck, Mic, AlertCircle, Gauge } from "lucide-react";
 import { checkAnswer } from "@/lib/utils/text";
 import type { CheckResult } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
 import type { SpeechRecognitionStatus } from "@/hooks/useSpeechRecognition";
 import { ComparedSentenceText } from "./ComparedSentenceText";
 import { EvaluationSessionSummary } from "./EvaluationSessionSummary";
+import { MetricBar } from "./MetricBar";
 import { buildComparedTokens, splitSentenceIntoWords } from "../helpers";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import { usePracticeEvaluation } from "../usePracticeEvaluation";
 import type { SentenceEvaluation } from "../types";
 
 type MatchTier = "needs-work" | "getting-there" | "solid";
@@ -67,12 +69,17 @@ export function EvaluationTab({
   onJumpToSegment: (segmentIndex: number) => void;
 }) {
   const [result, setResult] = useState<CheckResult | null>(null);
+  const practiceEval = usePracticeEvaluation();
 
   // A result only ever refers to the take it was computed from — a new
   // recording (or leaving the sentence) must not leave a stale one on screen.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setResult(null);
+    practiceEval.reset();
+    // practiceEval.reset is stable (useCallback with no deps) — omitting the
+    // whole object avoids re-running this on every quota refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordingClip, currentSegIdx]);
 
   const isRecording = recorderStatus === "recording" || recorderStatus === "requesting-permission";
@@ -115,18 +122,36 @@ export function EvaluationTab({
     onEvaluated?.();
   };
 
-  if (speechStatus === "unsupported") {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center">
-        <AlertCircle size={26} className="text-[var(--text-faint)]" />
-        <p className="text-sm font-semibold text-[var(--text)]">Word Match isn&apos;t available here</p>
-        <p className="max-w-[26ch] text-xs text-[var(--text-muted)]">
-          Your browser doesn&apos;t support live speech recognition. Try Chrome, Edge, or Android Chrome to evaluate
-          your recordings.
-        </p>
-      </div>
-    );
-  }
+  const handleTrueEvaluate = async () => {
+    if (!currentSegment || !recordingClip) return;
+    const evaluated = await practiceEval.evaluate({
+      audioBlob: recordingClip.blob,
+      referenceText: currentSegment.text,
+      durationSec: recordingClip.durationSec,
+    });
+    if (!evaluated) return;
+
+    const problemWords = evaluated.words
+      .filter((w) => w.errorType && w.errorType !== "None")
+      .map((w) => ({ word: w.word, score: w.accuracyScore ?? undefined, errorType: w.errorType }));
+
+    onEvaluationRecorded({
+      segmentIndex: currentSegIdx,
+      referenceText: currentSegment.text,
+      wordCount: splitSentenceIntoWords(currentSegment.text).length,
+      audioDuration: recordingClip.durationSec,
+      accuracy: evaluated.accuracy ?? undefined,
+      completeness: evaluated.completeness ?? undefined,
+      fluency: evaluated.fluency ?? undefined,
+      prosody: evaluated.prosody ?? undefined,
+      problemWords,
+    });
+
+    onEvaluated?.();
+  };
+
+  const practiceBusy = practiceEval.status === "converting" || practiceEval.status === "uploading";
+  const canRunTrueEvaluation = hasClip && !isRecording && !practiceBusy && !practiceEval.quota.limitReached;
 
   const tier = result ? tierFor(result) : null;
   const { expectedTokens, userTokens } = result
@@ -146,54 +171,148 @@ export function EvaluationTab({
         </div>
       ) : (
         <>
-          {result && tier && (
-            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${TIER_CLASS[tier]}`}>
-                  {TIER_LABEL[tier]}
-                </span>
-              </div>
+          {speechStatus === "unsupported" ? (
+            <div className="flex items-start gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs text-[var(--text-muted)]">
+              <AlertCircle size={14} className="mt-0.5 shrink-0 text-[var(--text-faint)]" />
+              <p>
+                Word Match isn&apos;t available here — your browser doesn&apos;t support live speech recognition. Try
+                Chrome, Edge, or Android Chrome.
+              </p>
+            </div>
+          ) : (
+            <>
+              {result && tier && (
+                <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+                      Word Match
+                    </p>
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${TIER_CLASS[tier]}`}>
+                      {TIER_LABEL[tier]}
+                    </span>
+                  </div>
 
-              {noSpeechDetected ? (
-                <p className="text-xs text-[var(--text-muted)]">
-                  No speech was recognized in this recording — try again a little closer to the mic.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <div className="rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] p-2 text-xs">
-                    <p className="text-[11px] font-semibold text-[var(--green)]">Script</p>
-                    <ComparedSentenceText tokens={expectedTokens} tone="expected" />
-                  </div>
-                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
-                    <p className="text-[11px] font-semibold text-[var(--text-faint)]">What we heard</p>
-                    <ComparedSentenceText tokens={userTokens} tone="user" emptyFallback="(nothing recognized)" />
-                  </div>
+                  {noSpeechDetected ? (
+                    <p className="text-xs text-[var(--text-muted)]">
+                      No speech was recognized in this recording — try again a little closer to the mic.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      <div className="rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] p-2 text-xs">
+                        <p className="text-[11px] font-semibold text-[var(--green)]">Script</p>
+                        <ComparedSentenceText tokens={expectedTokens} tone="expected" />
+                      </div>
+                      <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
+                        <p className="text-[11px] font-semibold text-[var(--text-faint)]">What we heard</p>
+                        <ComparedSentenceText tokens={userTokens} tone="user" emptyFallback="(nothing recognized)" />
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-[var(--text-faint)]">
+                    Word Match — your browser&apos;s speech recognition, compared against the script. Not a
+                    pronunciation score.
+                  </p>
                 </div>
               )}
 
-              <p className="text-[10px] text-[var(--text-faint)]">
-                Word Match — your browser&apos;s speech recognition, compared against the script. Not a pronunciation
-                score.
-              </p>
-            </div>
+              <button
+                type="button"
+                onClick={handleEvaluate}
+                disabled={!canEvaluate}
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm font-semibold text-[var(--accent)] transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ClipboardCheck size={15} />
+                {transcriptPending ? "Finishing up transcript…" : result ? "Check again" : "Evaluate my recording"}
+              </button>
+
+              {speechStatus === "error" && !result && (
+                <p className="flex items-center gap-1.5 text-xs text-[var(--red)]">
+                  <AlertCircle size={12} className="shrink-0" /> Couldn&apos;t access speech recognition for this
+                  take — you can still try Evaluate.
+                </p>
+              )}
+            </>
           )}
 
-          <button
-            type="button"
-            onClick={handleEvaluate}
-            disabled={!canEvaluate}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm font-semibold text-[var(--accent)] transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <ClipboardCheck size={15} />
-            {transcriptPending ? "Finishing up transcript…" : result ? "Check again" : "Evaluate my recording"}
-          </button>
+          {practiceEval.quota.engineConfigured && (
+            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+                  True Evaluation
+                </p>
+                {practiceEval.quota.usedCount > 0 && (
+                  <span className="text-[10px] font-medium text-[var(--text-faint)]">
+                    {practiceEval.quota.usedCount} evaluation{practiceEval.quota.usedCount !== 1 ? "s" : ""} this month
+                  </span>
+                )}
+              </div>
 
-          {speechStatus === "error" && !result && (
-            <p className="flex items-center gap-1.5 text-xs text-[var(--red)]">
-              <AlertCircle size={12} className="shrink-0" /> Couldn&apos;t access speech recognition for this take —
-              you can still try Evaluate.
-            </p>
+              {practiceEval.quota.limitReached ? (
+                <div className="flex items-start gap-1.5 rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.08] p-2 text-xs text-[var(--red)]">
+                  <AlertCircle size={13} className="mt-0.5 shrink-0" />
+                  <p>
+                    Monthly free evaluation limit reached.
+                    <br />
+                    You can still record and listen to your voice.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {practiceEval.result && (
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
+                        <MetricBar label="Accuracy" value={practiceEval.result.accuracy} />
+                        <MetricBar label="Fluency" value={practiceEval.result.fluency} />
+                        <MetricBar label="Completeness" value={practiceEval.result.completeness} />
+                        <MetricBar label="Prosody" value={practiceEval.result.prosody} />
+                      </div>
+
+                      {practiceEval.result.words.some((w) => w.errorType !== "None") && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {practiceEval.result.words
+                            .filter((w) => w.errorType !== "None")
+                            .map((w, i) => (
+                              <span
+                                key={`${w.word}-${i}`}
+                                className="rounded-full border border-[var(--red)]/25 bg-[var(--red)]/[0.08] px-2 py-0.5 text-[11px] font-medium text-[var(--red)]"
+                              >
+                                {w.word}
+                              </span>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleTrueEvaluate}
+                    disabled={!canRunTrueEvaluation}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm font-semibold text-[var(--accent)] transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Gauge size={15} />
+                    {practiceEval.status === "converting"
+                      ? "Preparing audio…"
+                      : practiceEval.status === "uploading"
+                        ? "Scoring…"
+                        : practiceEval.result
+                          ? "Score again"
+                          : "Get pronunciation score"}
+                  </button>
+
+                  {practiceEval.errorMessage && (
+                    <p className="flex items-center gap-1.5 text-xs text-[var(--red)]">
+                      <AlertCircle size={12} className="shrink-0" /> {practiceEval.errorMessage}
+                    </p>
+                  )}
+                </>
+              )}
+
+              <p className="text-[10px] text-[var(--text-faint)]">
+                Powered by Azure AI Speech — your recording is sent for scoring only, never stored.
+              </p>
+            </div>
           )}
         </>
       )}
