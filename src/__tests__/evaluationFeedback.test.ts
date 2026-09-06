@@ -2,12 +2,18 @@ import {
   currentSentenceProblemWords,
   deriveEvaluationUiState,
   feedbackFor,
+  findWord,
   focusFor,
   FOCUS_THRESHOLD,
+  formatExpectedHeardLabel,
+  formatWeakestSoundLabel,
+  formatWeakestSyllableLabel,
   scoreTierFor,
   semanticTierFor,
   tierLabel,
   weakestMetric,
+  weakestSoundFor,
+  weakestSyllableFor,
 } from "@/app/dictation/[videoId]/evaluationFeedback";
 import type { TrueEvaluationResult, TrueEvaluationWord } from "@/app/dictation/[videoId]/types";
 
@@ -113,6 +119,93 @@ describe("feedbackFor", () => {
 function word(overrides: Partial<TrueEvaluationWord>): TrueEvaluationWord {
   return { word: "word", accuracyScore: 50, errorType: "Mispronunciation", ...overrides };
 }
+
+describe("weakestSoundFor — the Expected/Heard bug fix", () => {
+  it("real example: a low score with the SAME top NBest candidate must NOT fabricate a Heard phoneme", () => {
+    // From a real Azure response: AccuracyScore 4 does not mean Azure heard
+    // something else — its own top-ranked candidate is still /ɪ/ itself.
+    const result = weakestSoundFor([
+      {
+        phoneme: "ɪ",
+        accuracyScore: 4,
+        nBestPhonemes: [
+          { phoneme: "ɪ", score: 100 },
+          { phoneme: "z", score: 45 },
+          { phoneme: "i", score: 43 },
+          { phoneme: "n", score: 29 },
+          { phoneme: "ə", score: 16 },
+        ],
+      },
+    ]);
+    expect(result).toEqual({ phoneme: "ɪ", score: 4 });
+    expect(result?.heardAs).toBeUndefined();
+    expect(formatExpectedHeardLabel(result!)).toBeNull();
+    expect(formatWeakestSoundLabel(result!)).toBe("Weakest sound: /ɪ/ · 4/100");
+  });
+
+  it("real example: a top NBest candidate that genuinely differs IS reliable evidence", () => {
+    const result = weakestSoundFor([{ phoneme: "l", accuracyScore: 22, nBestPhonemes: [{ phoneme: "n", score: 100 }, { phoneme: "m", score: 42 }] }]);
+    expect(result).toEqual({ phoneme: "l", score: 22, heardAs: "n" });
+    expect(formatExpectedHeardLabel(result!)).toBe("Expected /l/ → Heard /n/");
+    expect(formatWeakestSoundLabel(result!)).toBe("Weakest sound: /l/ · 22/100");
+  });
+
+  it("never uses a lower-ranked candidate just because the top one equals the expected phoneme", () => {
+    // Old (buggy) behavior filtered the phoneme itself out of the candidate
+    // list and used the best REMAINING one — which would have picked /z/
+    // here (45) even though Azure's real top guess was /ɪ/ all along.
+    const result = weakestSoundFor([
+      { phoneme: "ɪ", accuracyScore: 4, nBestPhonemes: [{ phoneme: "ɪ", score: 100 }, { phoneme: "z", score: 90 }] },
+    ]);
+    expect(result?.heardAs).toBeUndefined();
+  });
+
+  it("picks the single lowest-scoring phoneme across the whole word", () => {
+    const result = weakestSoundFor([
+      { phoneme: "æg", accuracyScore: 32 },
+      { phoneme: "ɹə", accuracyScore: 33 },
+      { phoneme: "kʌl", accuracyScore: 29 },
+      { phoneme: "tʃɚ", accuracyScore: 49 },
+    ]);
+    expect(result).toEqual({ phoneme: "kʌl", score: 29 });
+  });
+
+  it("returns null when the word has no phoneme data (older stored evaluations)", () => {
+    expect(weakestSoundFor(undefined)).toBeNull();
+  });
+});
+
+describe("weakestSyllableFor", () => {
+  it("picks the lowest-scoring syllable and its grapheme", () => {
+    const result = weakestSyllableFor([
+      { syllable: "æg", grapheme: "ag", accuracyScore: 32 },
+      { syllable: "kʌl", grapheme: "cul", accuracyScore: 29 },
+    ]);
+    expect(result).toEqual({ syllable: "kʌl", grapheme: "cul", score: 29 });
+    expect(formatWeakestSyllableLabel(result!)).toBe("Weakest part: cul · /kʌl/ · 29/100");
+  });
+
+  it("formats without a grapheme when Azure didn't return one", () => {
+    const result = weakestSyllableFor([{ syllable: "kʌl", accuracyScore: 29 }]);
+    expect(formatWeakestSyllableLabel(result!)).toBe("Weakest part: /kʌl/ · 29/100");
+  });
+
+  it("returns null for older stored evaluations with no syllable data", () => {
+    expect(weakestSyllableFor(undefined)).toBeNull();
+  });
+});
+
+describe("findWord", () => {
+  it("finds a word by display text, ignoring edge punctuation and case", () => {
+    const words = [word({ word: "livestock," })];
+    expect(findWord(words, "livestock")).toBe(words[0]);
+    expect(findWord(words, "LIVESTOCK")).toBe(words[0]);
+  });
+
+  it("returns undefined when nothing matches", () => {
+    expect(findWord([word({ word: "cat" })], "dog")).toBeUndefined();
+  });
+});
 
 describe("currentSentenceProblemWords", () => {
   it("includes a score of exactly 0 as a valid, problem-worthy score", () => {
@@ -260,16 +353,119 @@ describe("focusFor", () => {
 
   it("prioritizes a weak word over a weak metric — never 'Strong result' while a word is flagged", () => {
     const scores = { accuracy: 95, fluency: 40, completeness: 100, prosody: 90 }; // fluency is also weak
-    const result = focusFor(scores, [{ word: "agriculture", score: 41 }]);
-    expect(result).toEqual({
+    const words = [word({ word: "agriculture", accuracyScore: 41, errorType: "Mispronunciation" })];
+    expect(focusFor(scores, words)).toEqual({
       kind: "word",
       word: "agriculture",
+      errorType: "Mispronunciation",
       score: 41,
-      message: 'Practice "agriculture" and match the speaker\'s rhythm.',
+      coaching: "Say it again with clearer pronunciation.",
     });
   });
 
-  it("falls back to a single weak metric when no word is flagged", () => {
+  it("shows a structured Weakest sound (no coaching prose) when phoneme data is available but no Heard evidence exists", () => {
+    const words = [
+      word({
+        word: "expands",
+        accuracyScore: 41,
+        errorType: "Mispronunciation",
+        phonemes: [
+          { phoneme: "ɪk", accuracyScore: 92 },
+          { phoneme: "spændz", accuracyScore: 37 },
+        ],
+      }),
+    ];
+    expect(focusFor(strongScores, words)).toEqual({
+      kind: "word",
+      word: "expands",
+      errorType: "Mispronunciation",
+      score: 41,
+      weakestSound: { phoneme: "spændz", score: 37 },
+    });
+  });
+
+  it("shows Expected/Heard only when Azure's own top NBest candidate genuinely differs (real /l/→/n/ example)", () => {
+    const words = [
+      word({
+        word: "agriculture",
+        accuracyScore: 36,
+        errorType: "Mispronunciation",
+        phonemes: [{ phoneme: "l", accuracyScore: 22, nBestPhonemes: [{ phoneme: "n", score: 100 }, { phoneme: "m", score: 42 }] }],
+      }),
+    ];
+    expect(focusFor(strongScores, words)).toEqual({
+      kind: "word",
+      word: "agriculture",
+      errorType: "Mispronunciation",
+      score: 36,
+      weakestSound: { phoneme: "l", score: 22, heardAs: "n" },
+    });
+  });
+
+  it("never fabricates Expected/Heard when the top NBest candidate equals the expected phoneme (real /ɪ/ example, score 4)", () => {
+    const words = [
+      word({
+        word: "it",
+        accuracyScore: 40,
+        errorType: "Mispronunciation",
+        phonemes: [
+          {
+            phoneme: "ɪ",
+            accuracyScore: 4,
+            nBestPhonemes: [
+              { phoneme: "ɪ", score: 100 },
+              { phoneme: "z", score: 45 },
+              { phoneme: "i", score: 43 },
+              { phoneme: "n", score: 29 },
+              { phoneme: "ə", score: 16 },
+            ],
+          },
+        ],
+      }),
+    ];
+    const result = focusFor(strongScores, words);
+    expect(result).toEqual({
+      kind: "word",
+      word: "it",
+      errorType: "Mispronunciation",
+      score: 40,
+      weakestSound: { phoneme: "ɪ", score: 4 },
+    });
+    expect(result?.kind === "word" && result.weakestSound?.heardAs).toBeUndefined();
+  });
+
+  it("surfaces a sentence-wide break issue only once no word is flagged on accuracy", () => {
+    const words = [
+      word({ word: "there", accuracyScore: 95, errorType: "None" }),
+      {
+        ...word({ word: "are", accuracyScore: 95, errorType: "None" }),
+        prosodyFeedback: { breakErrorType: "MissingBreak" as const },
+      },
+    ];
+    expect(focusFor(strongScores, words)).toEqual({
+      kind: "word",
+      word: "are",
+      errorType: "Missing break",
+      coaching: "Add a short pause here.",
+    });
+  });
+
+  it("surfaces Monotone only when no word issue and no break issue were found", () => {
+    const words = [
+      {
+        ...word({ word: "there", accuracyScore: 95, errorType: "None" }),
+        prosodyFeedback: { intonationErrorType: "Monotone" as const },
+      },
+    ];
+    expect(focusFor(strongScores, words)).toEqual({
+      kind: "word",
+      word: "there",
+      errorType: "Monotone",
+      coaching: "Use more pitch variation and stress the key words.",
+    });
+  });
+
+  it("falls back to a single weak metric when no word or prosody issue is flagged", () => {
     const scores = { accuracy: 95, fluency: 50, completeness: 100, prosody: 90 };
     expect(focusFor(scores, [])).toEqual({
       kind: "metric",
@@ -296,11 +492,10 @@ describe("focusFor", () => {
     expect(focusFor({}, [])).toBeNull();
   });
 
-  it("falls through to strong when currentSentenceProblemWords excludes a word scored exactly at the threshold", () => {
-    // Composition test: a word scored exactly 70 is excluded by
-    // currentSentenceProblemWords (threshold is exclusive), so focusFor
-    // never sees it and falls through to the strong-result branch.
-    const words = currentSentenceProblemWords([{ word: "fine", accuracyScore: 70, errorType: "Mispronunciation" }]);
+  it("falls through to strong when a word scored exactly at the threshold isn't flagged", () => {
+    // A word scored exactly 70 is excluded by currentSentenceProblemWords
+    // (threshold is exclusive), so focusFor never sees it as a problem word.
+    const words = [word({ word: "fine", accuracyScore: 70, errorType: "Mispronunciation" })];
     expect(focusFor(strongScores, words)).toEqual({ kind: "strong", message: expect.any(String) });
   });
 });

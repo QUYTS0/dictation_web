@@ -7,6 +7,7 @@ import { useEvaluationSummaryCollapsedPreference } from "../useEvaluationSummary
 import { MetricGrid } from "./MetricGrid";
 
 const PROBLEM_WORD_INITIAL_LIMIT = 5;
+const WEAKEST_SENTENCE_INITIAL_LIMIT = 2;
 
 /**
  * Session-scoped summary over every SentenceEvaluation recorded so far this
@@ -27,6 +28,7 @@ export function EvaluationSessionSummary({
 }) {
   const { collapsed, setCollapsed } = useEvaluationSummaryCollapsedPreference();
   const [showAllProblemWords, setShowAllProblemWords] = useState(false);
+  const [showAllWeakestSentences, setShowAllWeakestSentences] = useState(false);
 
   const {
     evaluatedCount,
@@ -40,7 +42,18 @@ export function EvaluationSessionSummary({
   } = summary;
 
   const coveragePct = totalCount > 0 ? Math.round((evaluatedCount / totalCount) * 100) : 0;
-  const visibleProblemWords = showAllProblemWords ? problemWords : problemWords.slice(0, PROBLEM_WORD_INITIAL_LIMIT);
+  // Display-only re-sort, lowest average score first — the underlying list
+  // (which words make the cut at all) still comes from rankProblemWords'
+  // own severity+recurrence ranking (see useShadowingEvaluations.ts), whose
+  // order is separately tested; this just changes how the same set reads
+  // in this panel, from "most rank-worthy" to "worst score first".
+  const sortedProblemWords = [...problemWords].sort((a, b) => a.avgScore - b.avgScore);
+  const visibleProblemWords = showAllProblemWords
+    ? sortedProblemWords
+    : sortedProblemWords.slice(0, PROBLEM_WORD_INITIAL_LIMIT);
+  const visibleWeakestSentences = showAllWeakestSentences
+    ? weakestSentences
+    : weakestSentences.slice(0, WEAKEST_SENTENCE_INITIAL_LIMIT);
   const usedFallbackScore = weakestSentences.some((s) => s.usedFallbackScore);
 
   return (
@@ -66,14 +79,20 @@ export function EvaluationSessionSummary({
 
       {!collapsed && (
         <div id="evaluation-session-summary-body" className="flex flex-col gap-3">
-          <MetricGrid
-            metrics={[
-              { label: "Accuracy", value: weightedAccuracy },
-              { label: "Fluency", value: weightedFluency },
-              { label: "Completeness", value: weightedCompleteness },
-              { label: "Prosody", value: weightedProsody },
-            ]}
-          />
+          <div className="flex flex-col gap-1.5">
+            {/* Distinguishes these from the current-sentence Pronunciation
+                card's scores directly above this panel — same metric names,
+                but averaged across every evaluated sentence this session. */}
+            <p className="text-xs font-semibold text-[var(--text-faint)]">Session averages</p>
+            <MetricGrid
+              metrics={[
+                { label: "Accuracy", value: weightedAccuracy },
+                { label: "Fluency", value: weightedFluency },
+                { label: "Completeness", value: weightedCompleteness },
+                { label: "Prosody", value: weightedProsody },
+              ]}
+            />
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold text-[var(--text-faint)]">Words to practice</p>
@@ -123,21 +142,32 @@ export function EvaluationSessionSummary({
             {weakestSentences.length === 0 ? (
               <p className="text-xs text-[var(--text-faint)]">No sentences evaluated yet.</p>
             ) : (
-              <div className="flex flex-col gap-1">
-                {weakestSentences.map((s) => (
+              <>
+                <div className="flex flex-col gap-1">
+                  {visibleWeakestSentences.map((s) => (
+                    <button
+                      key={s.segmentIndex}
+                      type="button"
+                      onClick={() => onJumpToSegment(s.segmentIndex)}
+                      aria-label={`Jump to sentence ${s.segmentIndex + 1}, score ${Math.round(s.score)}`}
+                      className="flex min-h-[36px] items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-[var(--text)]">{s.referenceText}</span>
+                      <span className="shrink-0 font-semibold text-[var(--text-muted)]">{Math.round(s.score)}</span>
+                      <ChevronRight size={12} className="shrink-0 text-[var(--text-faint)]" />
+                    </button>
+                  ))}
+                </div>
+                {!showAllWeakestSentences && weakestSentences.length > WEAKEST_SENTENCE_INITIAL_LIMIT && (
                   <button
-                    key={s.segmentIndex}
                     type="button"
-                    onClick={() => onJumpToSegment(s.segmentIndex)}
-                    aria-label={`Jump to sentence ${s.segmentIndex + 1}, score ${Math.round(s.score)}`}
-                    className="flex min-h-[36px] items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    onClick={() => setShowAllWeakestSentences(true)}
+                    className="min-h-[36px] self-start rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                   >
-                    <span className="min-w-0 flex-1 truncate text-[var(--text)]">{s.referenceText}</span>
-                    <span className="shrink-0 font-semibold text-[var(--text-muted)]">{Math.round(s.score)}</span>
-                    <ChevronRight size={12} className="shrink-0 text-[var(--text-faint)]" />
+                    View all
                   </button>
-                ))}
-              </div>
+                )}
+              </>
             )}
             {usedFallbackScore && weakestSentences.length > 0 && (
               <p className="text-xs text-[var(--text-faint)]">

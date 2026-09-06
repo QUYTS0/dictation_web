@@ -1,5 +1,5 @@
-import { stripEdgePunctuation } from "./helpers";
-import type { TrueEvaluationResult, TrueEvaluationWord } from "./types";
+import { formatErrorTypeLabel, stripEdgePunctuation } from "./helpers";
+import type { TrueEvaluationPhoneme, TrueEvaluationResult, TrueEvaluationSyllable, TrueEvaluationWord } from "./types";
 
 /**
  * Deterministic, template-based scoring/feedback rules for the Pronunciation
@@ -46,6 +46,16 @@ export function semanticTierFor(value: number): SemanticTier {
   if (value >= 60) return "moderate";
   return "weak";
 }
+
+/** Single strong/moderate/weak → color map shared by MetricGrid and the
+ *  Pronunciation card's headline score, so a color always means the same
+ *  thing everywhere it's used as a secondary (never sole) signal alongside
+ *  the /100 number. */
+export const SEMANTIC_TEXT_CLASS: Record<SemanticTier, string> = {
+  strong: "text-[var(--green)]",
+  moderate: "text-[var(--text)]",
+  weak: "text-[var(--red)]",
+};
 
 /** The single "should the learner act on this" threshold — below this, a
  *  metric triggers a Focus feedback line, a word counts as a problem word,
@@ -107,21 +117,30 @@ const METRIC_LABELS: Record<MetricKey, string> = {
 };
 
 const LOW_METRIC_FEEDBACK: Record<MetricKey, FeedbackMessage> = {
+  // Reached only when accuracy itself is the weakest metric but no
+  // individual word was flagged with a low enough score to explain why
+  // (focusFor's word-level check already wins otherwise) — so this can't
+  // point at "the words flagged below" the way it used to.
   accuracy: {
     title: "Focus on accuracy",
-    body: "Several sounds didn't quite match the target. Try slowing down and repeating just the words flagged below.",
+    body: "Repeat the lowest-scoring word more carefully.",
   },
   fluency: {
     title: "Focus on fluency",
-    body: "Your pronunciation was on target, but the pacing had noticeable pauses or hesitation. Try reading the sentence a few times before recording.",
+    body: "Try the sentence again with smoother connections and fewer pauses.",
   },
   completeness: {
     title: "Focus on completeness",
     body: "Part of the sentence wasn't picked up. Make sure you say every word out loud, including short ones at the start or end.",
   },
+  // Deliberately not "match the speaker's rhythm" — that phrasing implied a
+  // specific rhythm problem even when Azure's actual prosody feedback (see
+  // ProsodyFeedback) gave no such evidence; focusFor already prefers the
+  // real Break/Monotone diagnosis when one exists and only falls back to
+  // this generic line when it doesn't.
   prosody: {
     title: "Focus on prosody",
-    body: "Your pronunciation was clear, but try matching the speaker's rhythm and sentence stress more closely.",
+    body: "Use more natural stress and intonation.",
   },
 };
 
@@ -189,27 +208,174 @@ export function currentSentenceProblemWords(
 }
 
 export type FocusResult =
-  | { kind: "word"; word: string; score: number; message: string }
+  | { kind: "word"; word: string; errorType: string; score?: number; weakestSound?: WeakestSound; coaching?: string }
   | { kind: "metric"; key: MetricKey; title: string; body: string }
   | { kind: "strong"; message: string }
   | null;
+
+const WORD_ERROR_COACHING: Record<string, string> = {
+  Mispronunciation: "Say it again with clearer pronunciation.",
+  Omission: "Don't skip this word. Say the full phrase.",
+  Insertion: "Avoid adding an extra word here.",
+};
+
+const BREAK_COACHING: Record<"UnexpectedBreak" | "MissingBreak", string> = {
+  UnexpectedBreak: "Keep these words connected. Avoid pausing here.",
+  MissingBreak: "Add a short pause here.",
+};
+
+const MONOTONE_COACHING = "Use more pitch variation and stress the key words.";
+
+/** The single weakest-scoring phoneme in a word (ties keep the first/
+ *  earliest one) — null when the word has no phoneme data or every
+ *  phoneme's score is missing. */
+function weakestPhoneme(
+  phonemes: TrueEvaluationPhoneme[] | undefined
+): { phoneme: TrueEvaluationPhoneme; index: number; score: number } | null {
+  if (!phonemes) return null;
+  let weakest: { phoneme: TrueEvaluationPhoneme; index: number; score: number } | null = null;
+  phonemes.forEach((phoneme, index) => {
+    if (phoneme.accuracyScore === null || phoneme.accuracyScore === undefined) return;
+    if (!weakest || phoneme.accuracyScore < weakest.score) {
+      weakest = { phoneme, index, score: phoneme.accuracyScore };
+    }
+  });
+  return weakest;
+}
+
+export interface WeakestSound {
+  phoneme: string;
+  score: number;
+  /** Azure's OWN top-ranked NBestPhonemes candidate, but ONLY when it
+   *  actually differs from the phoneme itself. A low AccuracyScore does not
+   *  mean Azure heard something else — NBestPhonemes[0] is very often the
+   *  expected phoneme itself (Azure is just marking it as poorly executed),
+   *  and picking a lower-ranked candidate as "heard" in that case would be
+   *  a fabricated claim. See the doc comment on weakestSoundFor(). */
+  heardAs?: string;
+}
+
+/**
+ * The one weakest-scoring phoneme in a word, for every learner-facing
+ * surface (Focus, Word details, Detailed Report) to render identically.
+ *
+ * IMPORTANT — the Expected/Heard rule: `heardAs` is set only when Azure's
+ * own top NBest candidate (`nBestPhonemes[0]`, unfiltered) differs from the
+ * phoneme itself. Earlier logic filtered the phoneme OUT of the candidate
+ * list first and then picked the best remaining alternative above a score
+ * threshold — which fabricated a "heard" phoneme even when Azure's actual
+ * top guess matched the expected phoneme all along (e.g. expected /ɪ/,
+ * AccuracyScore 4, NBestPhonemes [/ɪ/ 100, /z/ 45, ...] — a low score is
+ * not evidence of hearing something else). There is no score-threshold
+ * heuristic here; Azure's own ranking is the only signal used.
+ */
+export function weakestSoundFor(phonemes: TrueEvaluationPhoneme[] | undefined): WeakestSound | null {
+  const weakest = weakestPhoneme(phonemes);
+  if (!weakest) return null;
+  const topCandidate = weakest.phoneme.nBestPhonemes?.[0];
+  const heardAs = topCandidate && topCandidate.phoneme !== weakest.phoneme.phoneme ? topCandidate.phoneme : undefined;
+  return { phoneme: weakest.phoneme.phoneme, score: weakest.score, heardAs };
+}
+
+export interface WeakestSyllable {
+  syllable: string;
+  grapheme?: string;
+  score: number;
+}
+
+/** The one weakest-scoring syllable in a word — same "ties keep first,
+ *  missing scores excluded" rule as weakestPhoneme, exposed for the
+ *  Detailed Report's Word analysis (Word details in the right panel does
+ *  not surface a weakest syllable, only a weakest sound). */
+export function weakestSyllableFor(syllables: TrueEvaluationSyllable[] | undefined): WeakestSyllable | null {
+  if (!syllables) return null;
+  let weakest: WeakestSyllable | null = null;
+  for (const s of syllables) {
+    if (s.accuracyScore === null || s.accuracyScore === undefined) continue;
+    if (!weakest || s.accuracyScore < weakest.score) {
+      weakest = { syllable: s.syllable, grapheme: s.grapheme, score: s.accuracyScore };
+    }
+  }
+  return weakest;
+}
+
+export function formatWeakestSoundLabel(sound: WeakestSound): string {
+  return `Weakest sound: /${sound.phoneme}/ · ${Math.round(sound.score)}/100`;
+}
+
+export function formatWeakestSyllableLabel(syllable: WeakestSyllable): string {
+  const grapheme = syllable.grapheme ? `${syllable.grapheme} · ` : "";
+  return `Weakest part: ${grapheme}/${syllable.syllable}/ · ${Math.round(syllable.score)}/100`;
+}
+
+/** Null when Azure's top candidate matches the expected phoneme — never
+ *  fabricates an Expected/Heard claim from a lower-ranked candidate. */
+export function formatExpectedHeardLabel(sound: WeakestSound): string | null {
+  if (!sound.heardAs) return null;
+  return `Expected /${sound.phoneme}/ → Heard /${sound.heardAs}/`;
+}
+
+/** Looks up a word by its display text (edge punctuation stripped,
+ *  case-insensitive) — the same normalization currentSentenceProblemWords
+ *  already applies internally, needed here to go from a ProblemWordDisplay
+ *  back to the full TrueEvaluationWord (for its phonemes/syllables). */
+export function findWord(words: TrueEvaluationWord[] | undefined, displayName: string): TrueEvaluationWord | undefined {
+  return words?.find((w) => stripEdgePunctuation(w.word).toLowerCase() === displayName.toLowerCase());
+}
 
 /**
  * The single deterministic "what should the learner do next" block,
  * replacing three separate (and sometimes contradictory) surfaces —
  * "Strong result" / "Words to improve" / "Word-level detail" — with one.
- * Priority is fixed and structural, not a special case: a weak word always
- * wins over a weak metric, which always wins over a positive message, so
- * "Strong result" can never be shown while a flagged word or metric exists.
+ * Priority is fixed and structural: phoneme-level evidence on the weakest
+ * flagged word > that word's own error type > a sentence-wide break/
+ * monotone problem (only reached when no word was flagged at all) > a
+ * single weak metric > a positive message. Never fabricates a phoneme or
+ * rhythm claim Azure didn't actually provide — see weakestSoundFor() and
+ * the ProsodyFeedback fields on TrueEvaluationWord.
  */
-export function focusFor(scores: MetricScores, problemWords: ProblemWordDisplay[]): FocusResult {
+export function focusFor(scores: MetricScores, words: TrueEvaluationWord[] | undefined): FocusResult {
+  const problemWords = currentSentenceProblemWords(words);
+
   if (problemWords.length > 0) {
     const weakest = problemWords[0];
+    const wordObj = findWord(words, weakest.word);
+    const rawErrorType = wordObj?.errorType && wordObj.errorType !== "None" ? wordObj.errorType : "Mispronunciation";
+    const weakestSound = weakestSoundFor(wordObj?.phonemes) ?? undefined;
     return {
       kind: "word",
       word: weakest.word,
+      errorType: formatErrorTypeLabel(rawErrorType),
       score: weakest.score,
-      message: `Practice "${weakest.word}" and match the speaker's rhythm.`,
+      weakestSound,
+      // The structured weakest-sound/Expected-Heard lines replace this
+      // prose entirely when phoneme data is available — only used as a
+      // fallback for older records or words Azure returned no phoneme
+      // breakdown for.
+      coaching: weakestSound ? undefined : WORD_ERROR_COACHING[rawErrorType],
+    };
+  }
+
+  // No word was flagged on accuracy — check for a sentence-wide prosody
+  // problem before falling back to generic metric-level copy.
+  const breakWord = words?.find((w) => w.prosodyFeedback?.breakErrorType);
+  const breakType = breakWord?.prosodyFeedback?.breakErrorType;
+  if (breakWord && breakType) {
+    return {
+      kind: "word",
+      word: breakWord.word,
+      errorType: formatErrorTypeLabel(breakType),
+      coaching: BREAK_COACHING[breakType],
+    };
+  }
+
+  const monotoneWord = words?.find((w) => w.prosodyFeedback?.intonationErrorType === "Monotone");
+  if (monotoneWord) {
+    return {
+      kind: "word",
+      word: monotoneWord.word,
+      errorType: formatErrorTypeLabel("Monotone"),
+      coaching: MONOTONE_COACHING,
     };
   }
 

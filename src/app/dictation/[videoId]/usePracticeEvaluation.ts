@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { blobToWav16kMono } from "@/lib/utils/wavEncode";
-import type { TrueEvaluationWord } from "./types";
+import type { AzureRawPronunciationResult, TrueEvaluationWord } from "./types";
 
 export interface PracticeQuotaState {
   /** False until the first successful quota fetch resolves, and while Azure
@@ -33,6 +33,7 @@ export interface TrueEvaluationSuccess {
   prosodyScore: number | undefined;
   words: TrueEvaluationWord[];
   recognizedText: string;
+  rawAzureResult: AzureRawPronunciationResult | undefined;
 }
 
 export type TrueEvaluationOutcome =
@@ -149,6 +150,7 @@ export function usePracticeEvaluation() {
             prosodyScore: data.prosody ?? undefined,
             words: data.words ?? [],
             recognizedText: data.recognizedText ?? "",
+            rawAzureResult: data.rawResult ?? undefined,
           },
         };
       } catch {

@@ -24,14 +24,47 @@ export class AzureSpeechError extends Error {
   }
 }
 
+export interface AzureNBestPhoneme {
+  phoneme: string;
+  score: number;
+}
+
 export interface AzurePronunciationSyllable {
   syllable: string;
   accuracyScore: number | null;
+  /** The word letters this syllable corresponds to, e.g. "there" for
+   *  syllable "ðɛɹ" — Azure returns this alongside the IPA syllable itself. */
+  grapheme?: string;
+  /** 100-nanosecond ticks, Azure's native unit — convert for display with
+   *  formatAzureDuration() rather than showing raw ticks. */
+  offset?: number;
+  duration?: number;
 }
 
 export interface AzurePronunciationPhoneme {
   phoneme: string;
   accuracyScore: number | null;
+  offset?: number;
+  duration?: number;
+  /** Azure's ranked alternative phoneme candidates (requested via
+   *  NBestPhonemeCount) — present alongside the flat AccuracyScore, not
+   *  nested under it. Absent when Azure has nothing better to suggest. */
+  nBestPhonemes?: AzureNBestPhoneme[];
+}
+
+/** A word's prosody diagnostics — confirmed against a real Azure response to
+ *  live under `Words[].Feedback.Prosody`, flat, alongside (not nested
+ *  inside) the word's own PronunciationAssessment fields. Azure always
+ *  returns an ErrorTypes array (e.g. ["None"]) even when nothing is wrong —
+ *  only "UnexpectedBreak"/"MissingBreak"/"Monotone" count as an actual
+ *  issue. The break confidence sub-objects are themselves optional even
+ *  when unrelated to the first word in a sentence (no prior word to break
+ *  from). */
+export interface AzureProsodyFeedback {
+  breakErrorType?: "UnexpectedBreak" | "MissingBreak";
+  breakConfidence?: number;
+  intonationErrorType?: "Monotone";
+  monotoneConfidence?: number;
 }
 
 export interface AzurePronunciationWord {
@@ -42,7 +75,17 @@ export interface AzurePronunciationWord {
   duration?: number;
   syllables?: AzurePronunciationSyllable[];
   phonemes?: AzurePronunciationPhoneme[];
+  prosodyFeedback?: AzureProsodyFeedback;
 }
+
+/** The complete sanitized per-sentence Azure payload — the top (only
+ *  scored) NBest candidate plus the top-level recognition status/text.
+ *  Never includes the API key, headers, subscription info, or audio.
+ *  Deliberately loosely typed (JSON-compatible, not re-declared field by
+ *  field) since its only purpose is to preserve whatever Azure actually
+ *  returned for the Detailed Report's "Raw Azure response" section —
+ *  including fields the normalized model above doesn't parse. */
+export type AzureRawPronunciationResult = Record<string, unknown>;
 
 export interface AzurePronunciationResult {
   /** Azure's overall PronScore — the headline "Pronunciation Score". Not a
@@ -54,6 +97,7 @@ export interface AzurePronunciationResult {
   prosody: number | null;
   words: AzurePronunciationWord[];
   recognizedText: string;
+  rawResult: AzureRawPronunciationResult;
 }
 
 // Shape of the fields this code reads from Azure's short-audio recognition
@@ -77,15 +121,45 @@ interface AzureWordAssessmentFields {
   AccuracyScore?: number;
   ErrorType?: string;
 }
+interface AzureNBestPhonemeResult {
+  Phoneme: string;
+  Score?: number;
+}
 interface AzureSyllableResult {
   Syllable: string;
+  Grapheme?: string;
+  Offset?: number;
+  Duration?: number;
   AccuracyScore?: number;
   PronunciationAssessment?: { AccuracyScore?: number };
 }
 interface AzurePhonemeResult {
   Phoneme: string;
+  Offset?: number;
+  Duration?: number;
   AccuracyScore?: number;
-  PronunciationAssessment?: { AccuracyScore?: number };
+  NBestPhonemes?: AzureNBestPhonemeResult[];
+  PronunciationAssessment?: { AccuracyScore?: number; NBestPhonemes?: AzureNBestPhonemeResult[] };
+}
+// Confirmed against a real Azure response (en-US, EnableProsodyAssessment)
+// — flat under Words[].Feedback.Prosody, not nested inside
+// PronunciationAssessment. ErrorTypes is always present (e.g. ["None"]);
+// the UnexpectedBreak/MissingBreak/Monotone sub-objects are only present
+// some of the time even when unrelated to the ErrorTypes flag.
+interface AzureProsodyBreakResult {
+  ErrorTypes?: string[];
+  UnexpectedBreak?: { Confidence?: number };
+  MissingBreak?: { Confidence?: number };
+}
+interface AzureProsodyIntonationResult {
+  ErrorTypes?: string[];
+  Monotone?: { Confidence?: number };
+}
+interface AzureWordFeedbackResult {
+  Prosody?: {
+    Break?: AzureProsodyBreakResult;
+    Intonation?: AzureProsodyIntonationResult;
+  };
 }
 interface AzureWordResult extends AzureWordAssessmentFields {
   Word: string;
@@ -94,6 +168,7 @@ interface AzureWordResult extends AzureWordAssessmentFields {
   PronunciationAssessment?: AzureWordAssessmentFields;
   Syllables?: AzureSyllableResult[];
   Phonemes?: AzurePhonemeResult[];
+  Feedback?: AzureWordFeedbackResult;
 }
 interface AzureNBestResult extends AzureUtteranceAssessmentFields {
   Display?: string;
@@ -142,6 +217,8 @@ export async function assessPronunciation(params: {
     Dimension: "Comprehensive",
     EnableMiscue: true,
     EnableProsodyAssessment: true,
+    PhonemeAlphabet: "IPA",
+    NBestPhonemeCount: 5,
   };
   const pronunciationHeader = Buffer.from(JSON.stringify(assessmentConfig)).toString("base64");
   const url = `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${encodeURIComponent(language)}&format=detailed`;
@@ -227,11 +304,21 @@ export async function assessPronunciation(params: {
     syllables: w.Syllables?.map((s) => ({
       syllable: s.Syllable,
       accuracyScore: firstFiniteNumber(s.PronunciationAssessment?.AccuracyScore, s.AccuracyScore),
+      grapheme: s.Grapheme,
+      offset: s.Offset,
+      duration: s.Duration,
     })),
     phonemes: w.Phonemes?.map((p) => ({
       phoneme: p.Phoneme,
       accuracyScore: firstFiniteNumber(p.PronunciationAssessment?.AccuracyScore, p.AccuracyScore),
+      offset: p.Offset,
+      duration: p.Duration,
+      nBestPhonemes: (p.NBestPhonemes ?? p.PronunciationAssessment?.NBestPhonemes)?.map((n) => ({
+        phoneme: n.Phoneme,
+        score: n.Score ?? 0,
+      })),
     })),
+    prosodyFeedback: prosodyFeedbackFor(w.Feedback),
   }));
 
   return {
@@ -242,5 +329,45 @@ export async function assessPronunciation(params: {
     prosody,
     words,
     recognizedText: json.DisplayText ?? nbest?.Display ?? "",
+    rawResult: {
+      recognitionStatus: json.RecognitionStatus,
+      displayText: json.DisplayText,
+      nBest: nbest,
+    },
+  };
+}
+
+/** Only "UnexpectedBreak"/"MissingBreak"/"Monotone" count as a real issue —
+ *  Azure always returns an ErrorTypes array even when nothing is wrong
+ *  (e.g. ["None"]), so a bare presence check on the sub-object would false-
+ *  positive on words whose confidence values are just noise. Returns
+ *  undefined (not an empty object) when neither dimension flags anything,
+ *  so callers can use a simple truthiness check. */
+function prosodyFeedbackFor(feedback: AzureWordFeedbackResult | undefined): AzureProsodyFeedback | undefined {
+  const breakTypes = feedback?.Prosody?.Break?.ErrorTypes ?? [];
+  const intonationTypes = feedback?.Prosody?.Intonation?.ErrorTypes ?? [];
+
+  const breakErrorType = breakTypes.includes("UnexpectedBreak")
+    ? "UnexpectedBreak"
+    : breakTypes.includes("MissingBreak")
+      ? "MissingBreak"
+      : undefined;
+  const intonationErrorType = intonationTypes.includes("Monotone") ? "Monotone" : undefined;
+
+  if (!breakErrorType && !intonationErrorType) return undefined;
+
+  const breakConfidence =
+    breakErrorType === "UnexpectedBreak"
+      ? feedback?.Prosody?.Break?.UnexpectedBreak?.Confidence
+      : breakErrorType === "MissingBreak"
+        ? feedback?.Prosody?.Break?.MissingBreak?.Confidence
+        : undefined;
+
+  return {
+    breakErrorType,
+    breakConfidence: typeof breakConfidence === "number" ? breakConfidence : undefined,
+    intonationErrorType,
+    monotoneConfidence:
+      intonationErrorType === "Monotone" ? feedback?.Prosody?.Intonation?.Monotone?.Confidence : undefined,
   };
 }

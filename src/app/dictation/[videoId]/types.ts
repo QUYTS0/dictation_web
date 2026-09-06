@@ -86,14 +86,42 @@ export interface WordMatchResult {
 
 export type TrueEvaluationStatus = "idle" | "processing" | "completed" | "failed" | "unavailable";
 
+export interface TrueEvaluationNBestPhoneme {
+  phoneme: string;
+  score: number;
+}
+
 export interface TrueEvaluationSyllable {
   syllable: string;
   accuracyScore: number | null;
+  /** The word letters this syllable corresponds to (e.g. "there" for IPA
+   *  syllable "ðɛɹ") — absent on evaluations recorded before this field
+   *  was added. */
+  grapheme?: string;
+  /** 100-nanosecond ticks, Azure's native unit — format with
+   *  formatAzureDuration() from helpers.ts rather than showing raw ticks. */
+  offset?: number;
+  duration?: number;
 }
 
 export interface TrueEvaluationPhoneme {
   phoneme: string;
   accuracyScore: number | null;
+  offset?: number;
+  duration?: number;
+  /** Azure's ranked alternative phoneme candidates. Absent on older stored
+   *  evaluations and whenever Azure has nothing better to suggest. */
+  nBestPhonemes?: TrueEvaluationNBestPhoneme[];
+}
+
+/** A word's prosody diagnostics (break/intonation), present only when Azure
+ *  actually flagged something for this word — see prosodyFeedbackFor() in
+ *  lib/azureSpeech.ts. Absent on older stored evaluations. */
+export interface ProsodyFeedback {
+  breakErrorType?: "UnexpectedBreak" | "MissingBreak";
+  breakConfidence?: number;
+  intonationErrorType?: "Monotone";
+  monotoneConfidence?: number;
 }
 
 export interface TrueEvaluationWord {
@@ -104,7 +132,15 @@ export interface TrueEvaluationWord {
   duration?: number;
   syllables?: TrueEvaluationSyllable[];
   phonemes?: TrueEvaluationPhoneme[];
+  prosodyFeedback?: ProsodyFeedback;
 }
+
+/** The sanitized per-sentence Azure payload backing the Detailed Report's
+ *  "Raw Azure response" section — see AzureRawPronunciationResult in
+ *  lib/azureSpeech.ts (kept as a local, loosely-typed alias here so this
+ *  client-shared file has no import from the server-only module). Absent on
+ *  evaluations recorded before this field was added. */
+export type AzureRawPronunciationResult = Record<string, unknown>;
 
 export interface TrueEvaluationResult {
   status: TrueEvaluationStatus;
@@ -123,6 +159,10 @@ export interface TrueEvaluationResult {
    *  silently showing a score that belongs to a discarded take. Only set on
    *  a completed result. */
   clipId?: string;
+  /** The full sanitized Azure response for this sentence, powering the
+   *  Detailed Report. Absent on evaluations recorded before this field was
+   *  added — the report simply omits sections/the raw JSON in that case. */
+  rawAzureResult?: AzureRawPronunciationResult;
 }
 
 export interface SentenceEvaluation {

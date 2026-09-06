@@ -109,6 +109,34 @@ export function stripEdgePunctuation(text: string): string {
   return text.replace(LEADING_PUNCTUATION, "").replace(TRAILING_PUNCTUATION, "");
 }
 
+/** Human-readable labels for Azure's word ErrorType values plus this app's
+ *  own break/intonation error-type strings (see ProsodyFeedback in
+ *  types.ts) — shared by the Focus card, Word details, and the Detailed
+ *  Report so "Mispronunciation · 41/100" always reads identically wherever
+ *  it appears. Falls back to the raw value for anything not in the map
+ *  rather than hiding an error type we don't have copy for yet. */
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  Mispronunciation: "Mispronunciation",
+  Omission: "Omission",
+  Insertion: "Insertion",
+  UnexpectedBreak: "Unexpected break",
+  MissingBreak: "Missing break",
+  Monotone: "Monotone",
+};
+
+export function formatErrorTypeLabel(errorType: string): string {
+  return ERROR_TYPE_LABELS[errorType] ?? errorType;
+}
+
+/** Azure reports Offset/Duration in 100-nanosecond ticks — converts to a
+ *  compact human-readable duration ("240ms" / "1.24s") for the Detailed
+ *  Report rather than showing the raw tick count. */
+export function formatAzureDuration(ticks: number): string {
+  const ms = ticks / 10_000;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 function splitEdgePunctuation(text: string): { leading: string; core: string; trailing: string } {
   const leading = text.match(LEADING_PUNCTUATION)?.[0] ?? "";
   const rest = leading ? text.slice(leading.length) : text;

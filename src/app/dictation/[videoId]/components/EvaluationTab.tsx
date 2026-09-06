@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Loader2, Mic, RotateCcw } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, FileText, Loader2, Mic, RotateCcw } from "lucide-react";
 import { checkAnswer } from "@/lib/utils/text";
 import type { CheckResult } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
@@ -9,16 +9,22 @@ import { ComparedSentenceText } from "./ComparedSentenceText";
 import { EvaluationSessionSummary } from "./EvaluationSessionSummary";
 import { MetricGrid } from "./MetricGrid";
 import { MetricInfoPopover } from "./MetricInfoPopover";
-import { buildComparedTokens, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
+import { PronunciationReportModal } from "./PronunciationReportModal";
+import { WordMatchInfoPopover } from "./WordMatchInfoPopover";
+import { buildComparedTokens, formatErrorTypeLabel, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 import type { SentenceEvaluation, TrueEvaluationResult, TrueEvaluationWord } from "../types";
 import {
-  currentSentenceProblemWords,
   deriveEvaluationUiState,
   focusFor,
+  formatExpectedHeardLabel,
+  formatWeakestSoundLabel,
   scoreTierFor,
+  semanticTierFor,
+  SEMANTIC_TEXT_CLASS,
   tierLabel,
+  weakestSoundFor,
 } from "../evaluationFeedback";
 
 /** Every expected token matched with nothing missing/wrong and nothing
@@ -35,46 +41,48 @@ function formatChange(change: WordMatchChange): string {
   return `${change.got} — Extra`;
 }
 
-function formatErrorType(errorType: string): string {
-  return errorType.replace(/([A-Z])/g, " $1").trim();
+/** Score/error line shared by the collapsed Word details row and the Focus
+ *  card — "Mispronunciation · 41/100", never a bare number. Omits the
+ *  score suffix when there isn't one (a break/monotone issue has no
+ *  per-word accuracy score attached). */
+function ScoreLabel({ errorType, score }: { errorType?: string; score?: number | null }) {
+  const parts: string[] = [];
+  if (errorType && errorType !== "None") parts.push(formatErrorTypeLabel(errorType));
+  if (score !== null && score !== undefined) parts.push(`${Math.round(score)}/100`);
+  if (parts.length === 0) return null;
+  return <>{parts.join(" · ")}</>;
 }
 
 function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
   const hasDetail = (word.syllables?.length ?? 0) > 0 || (word.phonemes?.length ?? 0) > 0;
+  const weakestSound = weakestSoundFor(word.phonemes);
+  const expectedHeard = weakestSound ? formatExpectedHeardLabel(weakestSound) : null;
 
-  const summaryContent = (
-    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
-      <span className="font-medium text-[var(--red)]">{word.word}</span>
-      <span className="flex items-center gap-1.5 text-[var(--text-faint)]">
-        {word.errorType && word.errorType !== "None" && <span>{formatErrorType(word.errorType)}</span>}
-        {word.accuracyScore !== null && (
-          <span className="font-semibold text-[var(--red)]">{Math.round(word.accuracyScore)}</span>
-        )}
-        {hasDetail && <ChevronDown size={12} className="shrink-0 transition-transform group-open:rotate-180" />}
-      </span>
-    </summary>
+  const wordHeader = (
+    <div>
+      <p className="font-medium text-[var(--red)]">{word.word}</p>
+      <p className="text-[var(--text-faint)]">
+        <ScoreLabel errorType={word.errorType} score={word.accuracyScore} />
+      </p>
+    </div>
   );
 
   if (!hasDetail) {
     return (
       <div className="rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-medium text-[var(--red)]">{word.word}</span>
-          <span className="flex items-center gap-1.5 text-[var(--text-faint)]">
-            {word.errorType && word.errorType !== "None" && <span>{formatErrorType(word.errorType)}</span>}
-            {word.accuracyScore !== null && (
-              <span className="font-semibold text-[var(--red)]">{Math.round(word.accuracyScore)}</span>
-            )}
-          </span>
-        </div>
+        {wordHeader}
       </div>
     );
   }
 
   return (
     <details className="group rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-xs">
-      {summaryContent}
-      <div className="mt-1.5 flex flex-col gap-1 border-t border-[var(--red)]/20 pt-1.5">
+      <summary className="flex cursor-pointer list-none items-start justify-between gap-2 [&::-webkit-details-marker]:hidden">
+        {wordHeader}
+        <ChevronDown size={12} className="mt-0.5 shrink-0 text-[var(--text-faint)] transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="mt-1.5 flex flex-col gap-1.5 border-t border-[var(--red)]/20 pt-1.5">
+        {weakestSound && <p className="text-[var(--text-faint)]">{formatWeakestSoundLabel(weakestSound)}</p>}
         {word.syllables && word.syllables.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {word.syllables.map((s, i) => (
@@ -95,6 +103,7 @@ function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
             ))}
           </div>
         )}
+        {expectedHeard && <p className="text-[var(--text-faint)]">{expectedHeard}</p>}
       </div>
     </details>
   );
@@ -106,29 +115,36 @@ function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
  *  state and for showing a preserved previous result alongside a failed
  *  retry's error message. */
 function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResult; stale: boolean }) {
+  const [showReport, setShowReport] = useState(false);
   const scores = {
     accuracy: result.accuracyScore ?? null,
     fluency: result.fluencyScore ?? null,
     completeness: result.completenessScore ?? null,
     prosody: result.prosodyScore ?? null,
   };
-  const problemWords = currentSentenceProblemWords(result.words);
-  const focus = focusFor(scores, problemWords);
+  const focus = focusFor(scores, result.words);
   const tier = result.pronunciationScore !== undefined ? scoreTierFor(result.pronunciationScore) : null;
 
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
           {stale ? "Previous score" : "Pronunciation"}
-          {!stale && <MetricInfoPopover />}
         </p>
-        {result.pronunciationScore !== undefined && tier && (
-          <p className="text-sm font-bold text-[var(--accent)]">
-            {Math.round(result.pronunciationScore)} · {tierLabel(tier)}
-          </p>
-        )}
+        {!stale && <MetricInfoPopover />}
       </div>
+
+      {result.pronunciationScore !== undefined && tier && (
+        <div className="flex items-baseline gap-2">
+          <p className="text-[28px] font-bold leading-none text-[var(--text)]">
+            {Math.round(result.pronunciationScore)}
+            <span className="text-lg font-semibold text-[var(--text-faint)]">/100</span>
+          </p>
+          <p className={`text-[15px] font-semibold ${SEMANTIC_TEXT_CLASS[semanticTierFor(result.pronunciationScore)]}`}>
+            {tierLabel(tier)}
+          </p>
+        </div>
+      )}
 
       <MetricGrid
         metrics={[
@@ -144,10 +160,20 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">Focus</p>
           {focus.kind === "word" ? (
             <>
-              <p className="text-sm font-semibold text-[var(--text)]">
-                {focus.word} · <span className="text-[var(--red)]">{Math.round(focus.score)}</span>
+              <p className="text-sm font-semibold text-[var(--text)]">{focus.word}</p>
+              <p className="text-xs text-[var(--red)]">
+                <ScoreLabel errorType={focus.errorType} score={focus.score} />
               </p>
-              <p className="text-xs text-[var(--text-muted)]">{focus.message}</p>
+              {focus.weakestSound ? (
+                <>
+                  <p className="text-xs text-[var(--text-muted)]">{formatWeakestSoundLabel(focus.weakestSound)}</p>
+                  {formatExpectedHeardLabel(focus.weakestSound) && (
+                    <p className="text-xs text-[var(--text-muted)]">{formatExpectedHeardLabel(focus.weakestSound)}</p>
+                  )}
+                </>
+              ) : (
+                focus.coaching && <p className="text-xs text-[var(--text-muted)]">{focus.coaching}</p>
+              )}
             </>
           ) : focus.kind === "metric" ? (
             <>
@@ -174,6 +200,19 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
               ))}
           </div>
         </details>
+      )}
+
+      {!stale && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowReport(true)}
+            className="flex min-h-[36px] w-fit items-center gap-1.5 rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          >
+            <FileText size={13} /> Detailed report
+          </button>
+          <PronunciationReportModal open={showReport} onClose={() => setShowReport(false)} result={result} />
+        </>
       )}
     </div>
   );
@@ -301,7 +340,10 @@ export function EvaluationTab({
           ) : wordMatch?.status === "completed" && wordMatchCheck ? (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
+                <span className="flex items-center gap-1.5">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
+                  <WordMatchInfoPopover />
+                </span>
                 {exactMatch ? (
                   <span className="flex items-center gap-1 rounded-full border border-[var(--green)]/30 bg-[var(--green)]/15 px-2 py-0.5 text-xs font-bold text-[var(--green)]">
                     <Check size={11} /> Exact match

@@ -204,4 +204,161 @@ describe("assessPronunciation", () => {
     mockFetchOnce(200, { RecognitionStatus: "NoMatch" });
     await expect(assessPronunciation(baseArgs)).rejects.toThrow(/No speech was recognized/);
   });
+
+  it("requests IPA phonemes and 5 N-best candidates in the Pronunciation-Assessment header", async () => {
+    mockFetchOnce(200, {
+      RecognitionStatus: "Success",
+      DisplayText: "hi",
+      NBest: [{ Display: "hi", AccuracyScore: 80 }],
+    });
+
+    await assessPronunciation(baseArgs);
+
+    const call = (global.fetch as jest.Mock).mock.calls[0];
+    const headers = call[1].headers as Record<string, string>;
+    const config = JSON.parse(Buffer.from(headers["Pronunciation-Assessment"], "base64").toString("utf8"));
+    expect(config.PhonemeAlphabet).toBe("IPA");
+    expect(config.NBestPhonemeCount).toBe(5);
+  });
+
+  it("normalizes syllable Grapheme/Offset/Duration (flat, as Azure actually returns them)", async () => {
+    mockFetchOnce(200, {
+      RecognitionStatus: "Success",
+      DisplayText: "there",
+      NBest: [
+        {
+          Display: "there",
+          AccuracyScore: 90,
+          Words: [
+            {
+              Word: "there",
+              AccuracyScore: 97,
+              ErrorType: "None",
+              Syllables: [{ Syllable: "ðɛɹ", Grapheme: "there", Offset: 900000, Duration: 3100000, AccuracyScore: 92 }],
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await assessPronunciation(baseArgs);
+    expect(result.words[0].syllables).toEqual([
+      { syllable: "ðɛɹ", accuracyScore: 92, grapheme: "there", offset: 900000, duration: 3100000 },
+    ]);
+  });
+
+  it("normalizes phoneme Offset/Duration/NBestPhonemes (flat, as Azure actually returns them)", async () => {
+    mockFetchOnce(200, {
+      RecognitionStatus: "Success",
+      DisplayText: "there",
+      NBest: [
+        {
+          Display: "there",
+          AccuracyScore: 90,
+          Words: [
+            {
+              Word: "there",
+              AccuracyScore: 97,
+              ErrorType: "None",
+              Phonemes: [
+                {
+                  Phoneme: "ð",
+                  Offset: 900000,
+                  Duration: 1500000,
+                  AccuracyScore: 83,
+                  NBestPhonemes: [
+                    { Phoneme: "ð", Score: 100 },
+                    { Phoneme: "θ", Score: 11 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await assessPronunciation(baseArgs);
+    expect(result.words[0].phonemes).toEqual([
+      {
+        phoneme: "ð",
+        accuracyScore: 83,
+        offset: 900000,
+        duration: 1500000,
+        nBestPhonemes: [
+          { phoneme: "ð", score: 100 },
+          { phoneme: "θ", score: 11 },
+        ],
+      },
+    ]);
+  });
+
+  it("extracts word prosody feedback only when ErrorTypes actually flags an issue (not just present)", async () => {
+    mockFetchOnce(200, {
+      RecognitionStatus: "Success",
+      DisplayText: "there are",
+      NBest: [
+        {
+          Display: "there are",
+          AccuracyScore: 90,
+          Words: [
+            {
+              Word: "there",
+              AccuracyScore: 97,
+              ErrorType: "None",
+              // Real Azure shape: ErrorTypes is always present (e.g. ["None"]),
+              // and the confidence sub-objects can appear even when nothing
+              // was actually flagged — presence alone must not be treated as
+              // an issue.
+              Feedback: {
+                Prosody: {
+                  Break: { ErrorTypes: ["None"], UnexpectedBreak: { Confidence: 3.7e-8 }, MissingBreak: { Confidence: 1 } },
+                  Intonation: { ErrorTypes: ["None"] },
+                },
+              },
+            },
+            {
+              Word: "are",
+              AccuracyScore: 95,
+              ErrorType: "None",
+              Feedback: {
+                Prosody: {
+                  Break: { ErrorTypes: ["MissingBreak"], MissingBreak: { Confidence: 0.9 } },
+                  Intonation: { ErrorTypes: ["Monotone"], Monotone: { Confidence: 0.5 } },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await assessPronunciation(baseArgs);
+    expect(result.words[0].prosodyFeedback).toBeUndefined();
+    expect(result.words[1].prosodyFeedback).toEqual({
+      breakErrorType: "MissingBreak",
+      breakConfidence: 0.9,
+      intonationErrorType: "Monotone",
+      monotoneConfidence: 0.5,
+    });
+  });
+
+  it("captures the top NBest candidate as the sanitized raw result, without leaking other candidates", async () => {
+    mockFetchOnce(200, {
+      RecognitionStatus: "Success",
+      DisplayText: "hi",
+      NBest: [
+        { Display: "hi", AccuracyScore: 80 },
+        { Display: "hi there", AccuracyScore: 10 },
+      ],
+    });
+
+    const result = await assessPronunciation(baseArgs);
+    expect(result.rawResult).toMatchObject({
+      recognitionStatus: "Success",
+      displayText: "hi",
+      nBest: { Display: "hi", AccuracyScore: 80 },
+    });
+    expect(JSON.stringify(result.rawResult)).not.toContain("hi there");
+  });
 });
