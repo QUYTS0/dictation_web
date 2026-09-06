@@ -6,7 +6,25 @@ import { Mic, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS } from "../constants";
 import { ModeSwitcher } from "./ModeSwitcher";
+import type { PracticeQuotaState } from "../usePracticeEvaluation";
 import type { InputMode, ShortcutEntry } from "../types";
+
+/** Compact "{h}h {m}m"/"{m}m {ss}s"/"{s}s" duration — mirrors the same
+ *  formatter used in EvaluationTab so the two Azure-usage surfaces (the
+ *  short inline line in the Evaluation tab and this full breakdown) always
+ *  read the same way. */
+function formatCompactDuration(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    const remSeconds = seconds % 60;
+    return remSeconds === 0 ? `${minutes}m` : `${minutes}m ${remSeconds.toString().padStart(2, "0")}s`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  const remMinutes = Math.floor((seconds % 3600) / 60);
+  return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
+}
 
 function ShortcutGroup({ title, shortcuts }: { title: string; shortcuts: ShortcutEntry[] }) {
   return (
@@ -58,6 +76,7 @@ export function SettingsDrawer({
   onToggleSound,
   autoWordMatch,
   onToggleAutoWordMatch,
+  practiceQuota,
   regenerateTranslation,
   regeneratingTranslation,
   regenerateTranslationError,
@@ -85,6 +104,9 @@ export function SettingsDrawer({
   onToggleSound: () => void;
   autoWordMatch: boolean;
   onToggleAutoWordMatch: () => void;
+  /** Optional — undefined when Shadowing/Azure isn't relevant to the caller.
+   *  Drives the "Pronunciation evaluation usage" breakdown below. */
+  practiceQuota?: PracticeQuotaState;
   regenerateTranslation: () => void;
   regeneratingTranslation: boolean;
   regenerateTranslationError: string | null;
@@ -332,6 +354,20 @@ export function SettingsDrawer({
                 not available in every browser.
               </p>
             </div>
+
+            {practiceQuota?.engineConfigured && (
+              <div className="flex flex-col gap-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
+                <p className="text-xs font-semibold text-[var(--text)]">Pronunciation evaluation usage</p>
+                <p className="text-sm font-semibold text-[var(--text)] tabular-nums">
+                  {formatCompactDuration(practiceQuota.usedSec)} / {formatCompactDuration(practiceQuota.limitSec)} this
+                  month
+                </p>
+                <p className="text-[11px] leading-snug text-[var(--text-faint)]">
+                  Shared across everyone using this site, not tracked per person or device — the monthly free Azure
+                  Pronunciation Assessment quota resets at the start of each calendar month.
+                </p>
+              </div>
+            )}
 
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">

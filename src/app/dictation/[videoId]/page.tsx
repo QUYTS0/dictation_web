@@ -334,9 +334,10 @@ export default function DictationPage({ params }: PageProps) {
       wordCount: splitSentenceIntoWords(referenceText).length,
       audioDuration: durationSec,
     });
+    const clipId = recorder.clip.url;
     void practiceEval.evaluate(segmentIndex, { audioBlob, referenceText, durationSec }).then((outcome) => {
       if (outcome.ok) {
-        completeTrueEvaluation(segmentIndex, outcome.data);
+        completeTrueEvaluation(segmentIndex, { ...outcome.data, clipId });
       } else {
         failTrueEvaluation(segmentIndex, outcome.error, outcome.status);
       }
@@ -838,6 +839,7 @@ export default function DictationPage({ params }: PageProps) {
             onToggleSound={() => setSoundEnabled(!soundEnabled)}
             autoWordMatch={autoWordMatch}
             onToggleAutoWordMatch={() => setAutoWordMatch(!autoWordMatch)}
+            practiceQuota={practiceEval.quota}
             regenerateTranslation={() => void regenerateTranslation()}
             regeneratingTranslation={regeneratingTranslation}
             regenerateTranslationError={regenerateTranslationError}

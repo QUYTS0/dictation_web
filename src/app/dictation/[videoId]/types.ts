@@ -117,6 +117,12 @@ export interface TrueEvaluationResult {
   words?: TrueEvaluationWord[];
   error?: string;
   evaluatedAt?: string;
+  /** Identifies which take this result was scored from — the recorded
+   *  clip's own object URL (see useAudioRecorder), unique per take. Lets the
+   *  UI detect a "new recording, not yet evaluated" state instead of
+   *  silently showing a score that belongs to a discarded take. Only set on
+   *  a completed result. */
+  clipId?: string;
 }
 
 export interface SentenceEvaluation {
@@ -126,5 +132,14 @@ export interface SentenceEvaluation {
   audioDuration: number;
 
   wordMatch?: WordMatchResult;
+  /** The current attempt's status machine (idle/processing/completed/
+   *  failed/unavailable) — reset to "processing" the instant a new
+   *  evaluation starts, so it can go stale/failed without losing the last
+   *  good score (see lastSuccessfulTrueEvaluation below). */
   trueEvaluation?: TrueEvaluationResult;
+  /** The most recent *completed* True Evaluation for this sentence, kept
+   *  untouched by a subsequent start/failure — this is what session
+   *  aggregation and "previous score" UI should read, so a failed retry
+   *  never destroys the last good result. Always has status "completed". */
+  lastSuccessfulTrueEvaluation?: TrueEvaluationResult;
 }
