@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
     // best-effort, free-only lookup (never blocks the save) if the caller
     // didn't send them.
     const translation = precomputedTranslation
-      ? { text: precomputedTranslation, source: precomputedTranslationSource ?? "free_library" }
+      ? { text: precomputedTranslation, source: precomputedTranslationSource ?? "azure" }
       : await translateText(term.trim(), VOCABULARY_TRANSLATION_LANGUAGE).catch(() => null);
 
     const wordDetails = precomputedDefinition

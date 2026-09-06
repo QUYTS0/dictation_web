@@ -766,6 +766,7 @@ export default function DictationPage({ params }: PageProps) {
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverPreviewError,
+    retryScriptPopoverPreview,
     scriptPopoverSavedItem,
     scriptPopoverSavedFeedback,
     scriptSelectedType,
@@ -1472,7 +1473,14 @@ export default function DictationPage({ params }: PageProps) {
 
                 {!scriptPopoverPreviewLoading && scriptPopoverPreviewError && (
                   <p className="text-xs font-medium text-[var(--accent)]">
-                    Translation unavailable, try again shortly.
+                    {scriptPopoverPreview?.translationError?.message ?? "Translation unavailable, try again shortly."}{" "}
+                    <button
+                      type="button"
+                      onClick={retryScriptPopoverPreview}
+                      className="underline underline-offset-2 hover:no-underline"
+                    >
+                      Retry
+                    </button>
                   </p>
                 )}
               </div>

@@ -374,7 +374,7 @@ export interface VocabularyItem {
   note: string | null;
   translation: string | null;
   translation_language: string;
-  translation_source: "free_library" | "gemini" | null;
+  translation_source: "azure" | "free_library" | "gemini" | null;
   phonetic: string | null;
   part_of_speech: string | null;
   definition: string | null;
@@ -399,7 +399,7 @@ export interface VocabularyRequest {
   note?: string;
   /** Pre-computed by the popover's live preview, to skip a duplicate lookup on save. */
   translation?: string;
-  translationSource?: "free_library" | "gemini";
+  translationSource?: "azure" | "free_library" | "gemini";
   phonetic?: string;
   partOfSpeech?: string;
   definition?: string;
@@ -426,15 +426,31 @@ export interface VocabularyPreviewRequest {
   isWord: boolean;
 }
 
+export type TranslationErrorCode =
+  | "TRANSLATION_CONFIG_ERROR"
+  | "TRANSLATION_AUTH_ERROR"
+  | "TRANSLATION_RATE_LIMITED"
+  | "TRANSLATION_TIMEOUT"
+  | "TRANSLATION_INVALID_RESPONSE"
+  | "TRANSLATION_SERVICE_ERROR"
+  | "TRANSLATION_INVALID_INPUT";
+
 export interface VocabularyPreviewResponse {
-  translation: { text: string; source: "free_library" | "gemini" } | null;
+  translation: {
+    text: string;
+    source: "azure" | "gemini";
+    /** Other dictionary senses for a single word, most-relevant first. */
+    alternatives?: { text: string; partOfSpeech?: string | null }[];
+  } | null;
   /**
-   * True when a translation was attempted but failed (e.g. the free
-   * Google-Translate scraper got rate-limited/blocked), as opposed to
-   * `translation` being null because there's genuinely nothing to show.
-   * Lets the client tell "temporarily unavailable" apart from "no result".
+   * True when a translation was attempted but failed (Azure error, timeout,
+   * rate limit, etc.), as opposed to `translation` being null because
+   * there's genuinely nothing to show. Lets the client tell "temporarily
+   * unavailable" apart from "no result". Mirrors `!!translationError`.
    */
   translationFailed?: boolean;
+  /** Stable code + human-readable message for the failure, when translationFailed is true. */
+  translationError?: { code: TranslationErrorCode; message: string } | null;
   wordDetails: {
     phonetic: string | null;
     partOfSpeech: string | null;

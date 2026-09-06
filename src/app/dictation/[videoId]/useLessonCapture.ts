@@ -55,6 +55,9 @@ export function useLessonCapture({
   // or the server reporting translationFailed) — distinct from a clean
   // response that simply found nothing to show.
   const [scriptPopoverPreviewError, setScriptPopoverPreviewError] = useState(false);
+  // Bumped by retryScriptPopoverPreview to re-run the preview effect below
+  // for the exact same selection, without requiring the user to reselect.
+  const [scriptPopoverPreviewRetryToken, setScriptPopoverPreviewRetryToken] = useState(0);
   const [scriptPopoverNoteMode, setScriptPopoverNoteMode] = useState(false);
   const [scriptPopoverSavedFeedback, setScriptPopoverSavedFeedback] = useState<LessonItemType | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -829,7 +832,11 @@ export function useLessonCapture({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [scriptPopover, findPhraseTranslation]);
+  }, [scriptPopover, findPhraseTranslation, scriptPopoverPreviewRetryToken]);
+
+  const retryScriptPopoverPreview = useCallback(() => {
+    setScriptPopoverPreviewRetryToken((t) => t + 1);
+  }, []);
 
   const handleScriptPopoverAction = useCallback(
     (type: "word" | "phrase" | "sentence" | "note") => {
@@ -989,6 +996,7 @@ export function useLessonCapture({
     scriptPopoverPreview,
     scriptPopoverPreviewLoading,
     scriptPopoverPreviewError,
+    retryScriptPopoverPreview,
     scriptPopoverSavedItem,
     scriptPopoverSavedFeedback,
     scriptPopoverNoteMode,
