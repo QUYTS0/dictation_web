@@ -165,6 +165,33 @@ export interface TrueEvaluationResult {
   rawAzureResult?: AzureRawPronunciationResult;
 }
 
+/** A single word's score within one historical attempt — deliberately much
+ *  lighter than TrueEvaluationWord (no phonemes/syllables/offsets): kept for
+ *  every retained attempt, so it must stay cheap. Full detail is only ever
+ *  kept for the latest attempt (see lastSuccessfulTrueEvaluation). */
+export interface AttemptWordScore {
+  word: string;
+  accuracyScore: number | null;
+  errorType: string;
+}
+
+/** One retained historical evaluation of a sentence — see
+ *  "Video-wide learning history" plan. Compact by design (scores + light
+ *  per-word scores only, no phonemes/syllables/nBest/rawAzureResult) so
+ *  keeping several of these per sentence in sessionStorage stays cheap; the
+ *  one full-detail copy of the latest attempt still lives on
+ *  lastSuccessfulTrueEvaluation. */
+export interface SentenceEvaluationAttempt {
+  evaluatedAt: string;
+  clipId?: string;
+  pronunciationScore?: number;
+  accuracyScore?: number;
+  fluencyScore?: number;
+  completenessScore?: number;
+  prosodyScore?: number;
+  words: AttemptWordScore[];
+}
+
 export interface SentenceEvaluation {
   segmentIndex: number;
   referenceText: string;
@@ -182,4 +209,11 @@ export interface SentenceEvaluation {
    *  aggregation and "previous score" UI should read, so a failed retry
    *  never destroys the last good result. Always has status "completed". */
   lastSuccessfulTrueEvaluation?: TrueEvaluationResult;
+  /** Every retained completed attempt for this sentence, oldest first,
+   *  capped at MAX_ATTEMPTS_PER_SENTENCE (see useShadowingEvaluations.ts) —
+   *  its last entry always matches lastSuccessfulTrueEvaluation's scores.
+   *  Absent on evaluations recorded before this field was added; readers
+   *  should treat that the same as a single-point history containing just
+   *  lastSuccessfulTrueEvaluation (see toAttempt() in useShadowingEvaluations.ts). */
+  attempts?: SentenceEvaluationAttempt[];
 }

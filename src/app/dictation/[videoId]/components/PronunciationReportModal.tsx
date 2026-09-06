@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { ChevronDown, Copy, X } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { useState } from "react";
+import { ChevronDown, Copy } from "lucide-react";
 import { formatErrorTypeLabel } from "../helpers";
 import {
   currentSentenceProblemWords,
@@ -19,9 +17,7 @@ import {
   weakestSyllableFor,
 } from "../evaluationFeedback";
 import type { TrueEvaluationResult, TrueEvaluationWord } from "../types";
-
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+import { ReportDialogShell } from "./ReportDialogShell";
 
 function ScoreRow({ label, value }: { label: string; value: number | undefined }) {
   if (value === undefined) return null;
@@ -260,40 +256,13 @@ function RawResponseSection({ rawResult }: { rawResult: Record<string, unknown> 
  * rendered prominently anywhere in this hierarchy — see WordAnalysisRow's
  * own doc comment — only inside Raw Azure response.
  *
- * Rendered via a React portal directly into `document.body` — NOT as a
- * normal in-place child. This component is used from deep inside the right
- * panel, which page.tsx animates with Framer Motion's `x` motion value
- * (see the `motion.div ref={rightPanelRef}` wrapper around RightPanelTabs).
- * Framer Motion keeps that transform applied via inline style even at rest
- * (`translateX(0px)`), and any non-none `transform` on an ancestor becomes
- * the containing block for every `position: fixed` descendant — so without
- * the portal, this modal's `inset`/centering resolves against that narrow
- * right-panel box instead of the viewport, and gets visually confined to
- * (and clipped by) the sidebar. Portaling to `document.body` sidesteps that
- * ancestor entirely, matching the app's SettingsDrawer/MobileBottomSheet
- * dialog z-index layer (backdrop z-[70], panel z-[75]) but escaping every
- * stacking/containing-block context inside the practice page.
- *
- * Desktop: a centered card (see PANEL_SIZE_CLASS). Mobile: a true
- * full-screen sheet (100dvh, safe-area aware), not just a narrower card —
- * this content is long tables/JSON, not a handful of toggles. The header is
- * a non-scrolling flex sibling above the scrollable content (rather than
- * `position: sticky`), so the close button can never be scrolled away.
- * Every section is omitted (not shown empty) when the corresponding data is
- * absent, so an older stored evaluation (missing these fields entirely)
- * still opens without error, just with fewer sections.
+ * The portal/focus-trap/backdrop-opacity chrome lives in ReportDialogShell
+ * (shared with VideoPracticeSummaryModal) — see that file's doc comment for
+ * why this must be a portal at all. Every section here is omitted (not
+ * shown empty) when the corresponding data is absent, so an older stored
+ * evaluation (missing these fields entirely) still opens without error,
+ * just with fewer sections.
  */
-// Deliberately no backdrop-blur (or any other filter/opacity) here — this
-// is the Dialog surface, not the Backdrop, and must stay 100% opaque. A
-// `backdrop-filter` on this element previously let the YouTube iframe
-// behind it bleed through despite the solid --surface background: iframes
-// get their own compositing layer, and Chromium doesn't reliably composite
-// backdrop-filter over that layer the way it does over ordinary painted
-// content, even when the element's own background-color has alpha=1. See
-// the Backdrop layer below for the (intentionally translucent) dimming.
-const PANEL_SIZE_CLASS =
-  "fixed inset-0 z-[75] flex flex-col overflow-hidden bg-[var(--surface)] text-[var(--text)] sm:inset-0 sm:m-auto sm:h-[min(85vh,850px)] sm:w-[min(900px,calc(100vw-64px))] sm:max-w-[1000px] sm:rounded-3xl sm:border sm:border-[var(--border)] sm:shadow-2xl";
-
 export function PronunciationReportModal({
   open,
   onClose,
@@ -303,166 +272,44 @@ export function PronunciationReportModal({
   onClose: () => void;
   result: TrueEvaluationResult;
 }) {
-  const [mounted, setMounted] = useState(false);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-
-  // The portal target (document.body) only exists client-side — this flips
-  // true on the first client render so the initial server-rendered markup
-  // never tries to portal (avoids a hydration mismatch), matching the
-  // standard SSR-safe portal pattern.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMounted(true);
-  }, []);
-
-  // The whole point of this modal is a page-level overlay — the underlying
-  // practice page (video, script, control bar) must not scroll behind it.
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const firstFocusable = panelRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
-    firstFocusable?.focus();
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab" || !panelRef.current) return;
-
-      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      previouslyFocusedRef.current?.focus?.();
-    };
-  }, [open, onClose]);
-
   const words = result.words ?? [];
 
-  if (!mounted) return null;
-
-  return createPortal(
-    // The `player-dark-theme` class carries the --surface/--text/--border/etc.
-    // custom properties this component's Tailwind arbitrary-value classes
-    // (bg-[var(--surface)], text-[var(--text)], ...) all depend on — it's
-    // normally provided by an ancestor further up the practice page (see
-    // player-theme.css: "scoped under this class so it never leaks into the
-    // rest of the app"). Portaling to document.body moves this subtree
-    // outside that ancestor, so those variables would otherwise be
-    // undefined and every background using one of these tokens would
-    // resolve to its CSS initial value (transparent) — which is what
-    // actually caused the video to show through the "opaque" surface, not
-    // backdrop-filter. Re-declaring
-    // the class here gives the portalled subtree its own copy of the same
-    // tokens, independent of where in the DOM it landed.
-    <div className="player-dark-theme">
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm"
-              onClick={onClose}
-            />
-            <motion.div
-              ref={panelRef}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="pronunciation-report-title"
-              initial={{ opacity: 0, y: 12, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 12, scale: 0.98 }}
-              transition={{ type: "tween", ease: "easeOut", duration: 0.2 }}
-              className={PANEL_SIZE_CLASS}
-            >
-              {/* Header is a non-scrolling flex sibling above the scrollable
-                  content below — not `position: sticky` — so the close
-                  button can never end up scrolled out of view (acceptance:
-                  header stays accessible while scrolling). */}
-              <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-5 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-5">
-                <h2 id="pronunciation-report-title" className="text-sm font-semibold text-[var(--text)]">
-                  Detailed report
-                </h2>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-white/10"
-                  aria-label="Close detailed report"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                <section className="flex flex-col gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Overview</h3>
-                  {result.pronunciationScore !== undefined && (
-                    <p className="text-sm font-semibold text-[var(--text)]">
-                      {Math.round(result.pronunciationScore)}/100 ·{" "}
-                      <span className={SEMANTIC_TEXT_CLASS[semanticTierFor(result.pronunciationScore)]}>
-                        {tierLabel(scoreTierFor(result.pronunciationScore))}
-                      </span>
-                    </p>
-                  )}
-                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                    <ScoreRow label="Accuracy" value={result.accuracyScore} />
-                    <ScoreRow label="Fluency" value={result.fluencyScore} />
-                    <ScoreRow label="Completeness" value={result.completenessScore} />
-                    <ScoreRow label="Prosody" value={result.prosodyScore} />
-                  </div>
-                </section>
-
-                <WhatToImproveSection words={words} />
-
-                {words.length > 0 && (
-                  <section className="flex flex-col gap-2">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word analysis</h3>
-                    <div className="flex flex-col gap-1.5">
-                      {words.map((w, i) => (
-                        <WordAnalysisRow key={`${w.word}-${i}`} word={w} />
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                <AdvancedDetailsSection words={words} />
-
-                {result.rawAzureResult && <RawResponseSection rawResult={result.rawAzureResult} />}
-              </div>
-            </motion.div>
-          </>
+  return (
+    <ReportDialogShell open={open} onClose={onClose} titleId="pronunciation-report-title" title="Detailed report">
+      <section className="flex flex-col gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Overview</h3>
+        {result.pronunciationScore !== undefined && (
+          <p className="text-sm font-semibold text-[var(--text)]">
+            {Math.round(result.pronunciationScore)}/100 ·{" "}
+            <span className={SEMANTIC_TEXT_CLASS[semanticTierFor(result.pronunciationScore)]}>
+              {tierLabel(scoreTierFor(result.pronunciationScore))}
+            </span>
+          </p>
         )}
-      </AnimatePresence>
-    </div>,
-    document.body
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          <ScoreRow label="Accuracy" value={result.accuracyScore} />
+          <ScoreRow label="Fluency" value={result.fluencyScore} />
+          <ScoreRow label="Completeness" value={result.completenessScore} />
+          <ScoreRow label="Prosody" value={result.prosodyScore} />
+        </div>
+      </section>
+
+      <WhatToImproveSection words={words} />
+
+      {words.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word analysis</h3>
+          <div className="flex flex-col gap-1.5">
+            {words.map((w, i) => (
+              <WordAnalysisRow key={`${w.word}-${i}`} word={w} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <AdvancedDetailsSection words={words} />
+
+      {result.rawAzureResult && <RawResponseSection rawResult={result.rawAzureResult} />}
+    </ReportDialogShell>
   );
 }
