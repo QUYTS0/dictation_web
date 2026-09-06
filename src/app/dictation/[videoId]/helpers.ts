@@ -211,3 +211,38 @@ export function buildComparedTokens({
 
   return { expectedTokens, userTokens };
 }
+
+export type WordMatchChange =
+  | { kind: "substitution"; expected: string; got: string }
+  | { kind: "missing"; expected: string }
+  | { kind: "extra"; got: string };
+
+/**
+ * Reduces a word-level diff down to just its differences, for a compact
+ * "crop → grub" style summary instead of rendering the full Script/What We
+ * Heard comparison. Relies on wordDiff()'s own pairing guarantee
+ * (src/lib/utils/text.ts) that a "wrong" token is always immediately
+ * followed by the "missing" token it substitutes for — so a wrong+missing
+ * pair becomes one substitution entry, a standalone "missing" is a pure
+ * omission, and a standalone "extra" (never paired into "wrong") is a pure
+ * insertion. "correct" tokens produce no entries.
+ */
+export function summarizeWordMatchDiff(diff: DiffToken[]): WordMatchChange[] {
+  const changes: WordMatchChange[] = [];
+  for (let i = 0; i < diff.length; i++) {
+    const token = diff[i];
+    if (token.status === "correct") continue;
+    if (token.status === "wrong") {
+      const next = diff[i + 1];
+      changes.push({ kind: "substitution", expected: next?.word ?? "", got: token.word });
+      if (next?.status === "missing") i++;
+      continue;
+    }
+    if (token.status === "missing") {
+      changes.push({ kind: "missing", expected: token.word });
+      continue;
+    }
+    changes.push({ kind: "extra", got: token.word });
+  }
+  return changes;
+}

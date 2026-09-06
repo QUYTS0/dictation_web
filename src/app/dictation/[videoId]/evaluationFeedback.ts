@@ -47,17 +47,18 @@ export function semanticTierFor(value: number): SemanticTier {
   return "weak";
 }
 
-/** A metric counts as "low" for feedback purposes below this — distinct
- *  from the (stricter) coloring threshold above, so a "moderate" 65-79
- *  score doesn't also trigger a nagging feedback line. */
-const LOW_METRIC_THRESHOLD = 70;
-/** Current-sentence "words to improve" threshold — a word's Azure
- *  accuracyScore below this is shown; 0 is a valid, included score, only
- *  null/undefined (no score at all) is excluded. */
-export const PROBLEM_WORD_THRESHOLD = 70;
-/** "Needs practice" sentence-grouping threshold — same number family as the
- *  metric/word thresholds, one number to remember across the feature. */
-export const NEEDS_PRACTICE_THRESHOLD = 70;
+/** The single "should the learner act on this" threshold — below this, a
+ *  metric triggers a Focus feedback line, a word counts as a problem word,
+ *  and a sentence would count as "needs practice." Previously three
+ *  separately-named constants independently hard-coded to the same value
+ *  (LOW_METRIC_THRESHOLD, PROBLEM_WORD_THRESHOLD, NEEDS_PRACTICE_THRESHOLD)
+ *  — consolidated into one so a future change can't drift between them.
+ *  Deliberately a different scale from scoreTierFor (90/75/60, "how good in
+ *  words") and semanticTierFor (80/60, "what color") — those answer
+ *  different questions and merging them would lose real functionality
+ *  (a 78 should read as a solid "Great" while still not being urgent
+ *  enough to trigger a Focus callout). */
+export const FOCUS_THRESHOLD = 70;
 
 export type MetricKey = "accuracy" | "fluency" | "completeness" | "prosody";
 
@@ -136,14 +137,14 @@ export function feedbackFor(scores: MetricScores, weakest: WeakestMetric | null)
 
   const lowMetrics = METRIC_ORDER.filter((key) => {
     const value = scores[key];
-    return value !== null && value !== undefined && value < LOW_METRIC_THRESHOLD;
+    return value !== null && value !== undefined && value < FOCUS_THRESHOLD;
   });
 
   if (lowMetrics.length >= 2) {
     const names = lowMetrics.map((key) => METRIC_LABELS[key]).join(", ");
     return {
       title: "A few areas to work on",
-      body: `Your ${names} scores were all below ${LOW_METRIC_THRESHOLD}. Try recording a slower, more deliberate take of this sentence.`,
+      body: `Your ${names} scores were all below ${FOCUS_THRESHOLD}. Try recording a slower, more deliberate take of this sentence.`,
     };
   }
 
@@ -162,14 +163,14 @@ export interface ProblemWordDisplay {
   score: number;
 }
 
-/** Current-sentence "words to improve": Azure word-level accuracy scores
- *  below PROBLEM_WORD_THRESHOLD, deduped (case-insensitive) and with
+/** Current-sentence problem words (surfaced via the Focus block): Azure
+ *  word-level accuracy scores below FOCUS_THRESHOLD, deduped (case-insensitive) and with
  *  punctuation-only tokens excluded, sorted weakest first. A score of
  *  exactly 0 is included; a missing score (null/undefined) is excluded
  *  since there's nothing to rank. */
 export function currentSentenceProblemWords(
   words: TrueEvaluationWord[] | undefined,
-  threshold: number = PROBLEM_WORD_THRESHOLD
+  threshold: number = FOCUS_THRESHOLD
 ): ProblemWordDisplay[] {
   if (!words || words.length === 0) return [];
   const seen = new Set<string>();
@@ -185,6 +186,39 @@ export function currentSentenceProblemWords(
     result.push({ word: stripped, score: w.accuracyScore });
   }
   return result.sort((a, b) => a.score - b.score);
+}
+
+export type FocusResult =
+  | { kind: "word"; word: string; score: number; message: string }
+  | { kind: "metric"; key: MetricKey; title: string; body: string }
+  | { kind: "strong"; message: string }
+  | null;
+
+/**
+ * The single deterministic "what should the learner do next" block,
+ * replacing three separate (and sometimes contradictory) surfaces —
+ * "Strong result" / "Words to improve" / "Word-level detail" — with one.
+ * Priority is fixed and structural, not a special case: a weak word always
+ * wins over a weak metric, which always wins over a positive message, so
+ * "Strong result" can never be shown while a flagged word or metric exists.
+ */
+export function focusFor(scores: MetricScores, problemWords: ProblemWordDisplay[]): FocusResult {
+  if (problemWords.length > 0) {
+    const weakest = problemWords[0];
+    return {
+      kind: "word",
+      word: weakest.word,
+      score: weakest.score,
+      message: `Practice "${weakest.word}" and match the speaker's rhythm.`,
+    };
+  }
+
+  const weakestMetricResult = weakestMetric(scores);
+  const feedback = feedbackFor(scores, weakestMetricResult);
+  if (!feedback) return null;
+  if (feedback.title === "Strong result") return { kind: "strong", message: feedback.body };
+  if (!weakestMetricResult) return null;
+  return { kind: "metric", key: weakestMetricResult.key, title: feedback.title, body: feedback.body };
 }
 
 export type EvaluationUiState =

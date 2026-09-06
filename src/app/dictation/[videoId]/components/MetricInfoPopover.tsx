@@ -63,6 +63,10 @@ export function MetricInfoPopover() {
                 <p className="text-[var(--text-muted)]">{item.body}</p>
               </div>
             ))}
+            <p className="border-t border-[var(--border)] pt-2 text-[var(--text-faint)]">
+              Powered by Azure AI Speech. Your recording is sent for scoring only and is never stored. Some metrics
+              may be unavailable depending on locale, configuration, and pricing tier.
+            </p>
           </div>
         </div>
       )}

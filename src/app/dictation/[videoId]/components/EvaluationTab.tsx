@@ -7,66 +7,32 @@ import type { CheckResult } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
 import { ComparedSentenceText } from "./ComparedSentenceText";
 import { EvaluationSessionSummary } from "./EvaluationSessionSummary";
-import { MetricBar } from "./MetricBar";
+import { MetricGrid } from "./MetricGrid";
 import { MetricInfoPopover } from "./MetricInfoPopover";
-import { buildComparedTokens } from "../helpers";
+import { buildComparedTokens, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 import type { SentenceEvaluation, TrueEvaluationResult, TrueEvaluationWord } from "../types";
 import {
   currentSentenceProblemWords,
   deriveEvaluationUiState,
-  feedbackFor,
+  focusFor,
   scoreTierFor,
   tierLabel,
-  weakestMetric,
 } from "../evaluationFeedback";
 
-type MatchTier = "needs-work" | "getting-there" | "solid";
-
-const TIER_LABEL: Record<MatchTier, string> = {
-  "needs-work": "Needs work",
-  "getting-there": "Getting there",
-  solid: "Solid",
-};
-
-const TIER_CLASS: Record<MatchTier, string> = {
-  "needs-work": "bg-[var(--red)]/15 text-[var(--red)] border-[var(--red)]/30",
-  "getting-there": "bg-[var(--accent-soft)] text-[var(--accent)] border-[var(--accent-border)]",
-  solid: "bg-[var(--green)]/15 text-[var(--green)] border-[var(--green)]/30",
-};
-
-function tierFor(result: CheckResult): MatchTier {
-  const expectedCount = result.diff.filter((t) => t.status !== "extra").length;
-  const correctCount = result.diff.filter((t) => t.status === "correct").length;
-  const ratio = expectedCount > 0 ? correctCount / expectedCount : 0;
-  if (ratio >= 0.85) return "solid";
-  if (ratio >= 0.5) return "getting-there";
-  return "needs-work";
-}
-
 /** Every expected token matched with nothing missing/wrong and nothing
- *  extra recognized — a stricter bar than the "solid" tier (which allows up
- *  to 15% mismatch), used to decide whether the diff view can start
- *  collapsed. */
+ *  extra recognized. */
 function isExactMatch(result: CheckResult): boolean {
   return result.diff.length > 0 && result.diff.every((t) => t.status === "correct");
 }
 
-/** Compact "{h}h {m}m"/"{m}m {ss}s"/"{s}s" duration, e.g. 18000 -> "5h",
- *  188 -> "3m 08s". Used for both the used and limit halves of the Azure
- *  usage line so "3m 08s / 5h" reads as one consistent unit system. */
-function formatCompactDuration(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.round(totalSeconds));
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) {
-    const minutes = Math.floor(seconds / 60);
-    const remSeconds = seconds % 60;
-    return remSeconds === 0 ? `${minutes}m` : `${minutes}m ${remSeconds.toString().padStart(2, "0")}s`;
-  }
-  const hours = Math.floor(seconds / 3600);
-  const remMinutes = Math.floor((seconds % 3600) / 60);
-  return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
+const COMPACT_DIFF_LIMIT = 3;
+
+function formatChange(change: WordMatchChange): string {
+  if (change.kind === "substitution") return `${change.expected} → ${change.got}`;
+  if (change.kind === "missing") return `${change.expected} — Missing`;
+  return `${change.got} — Extra`;
 }
 
 function formatErrorType(errorType: string): string {
@@ -91,7 +57,7 @@ function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
 
   if (!hasDetail) {
     return (
-      <div className="rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-[11px]">
+      <div className="rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-xs">
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-[var(--red)]">{word.word}</span>
           <span className="flex items-center gap-1.5 text-[var(--text-faint)]">
@@ -106,7 +72,7 @@ function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
   }
 
   return (
-    <details className="group rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-[11px]">
+    <details className="group rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-xs">
       {summaryContent}
       <div className="mt-1.5 flex flex-col gap-1 border-t border-[var(--red)]/20 pt-1.5">
         {word.syllables && word.syllables.length > 0 && (
@@ -134,10 +100,11 @@ function TrueEvaluationWordRow({ word }: { word: TrueEvaluationWord }) {
   );
 }
 
-/** Renders the full score card (headline + bars + feedback + words to
- *  improve) for a completed TrueEvaluationResult — reused both for the
- *  live "success" state and for showing a preserved previous result
- *  alongside a failed retry's error message. */
+/** Renders the Pronunciation card's body (header score, metric grid, and —
+ *  unless `stale` — the single FOCUS block + Word details disclosure) for
+ *  a completed TrueEvaluationResult. Reused both for the live "success"
+ *  state and for showing a preserved previous result alongside a failed
+ *  retry's error message. */
 function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResult; stale: boolean }) {
   const scores = {
     accuracy: result.accuracyScore ?? null,
@@ -145,69 +112,58 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
     completeness: result.completenessScore ?? null,
     prosody: result.prosodyScore ?? null,
   };
-  const weakest = weakestMetric(scores);
-  const feedback = feedbackFor(scores, weakest);
   const problemWords = currentSentenceProblemWords(result.words);
+  const focus = focusFor(scores, problemWords);
   const tier = result.pronunciationScore !== undefined ? scoreTierFor(result.pronunciationScore) : null;
 
   return (
     <div className="flex flex-col gap-2.5">
-      {stale && (
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">Previous score</p>
-      )}
-      {result.pronunciationScore !== undefined && tier && (
-        <div className="flex items-baseline gap-2">
-          <span className="text-3xl font-bold leading-none text-[var(--accent)]">
-            {Math.round(result.pronunciationScore)}
-          </span>
-          <span className="text-sm font-medium text-[var(--text-faint)]">/ 100</span>
-          <span className="text-xs font-semibold text-[var(--text-muted)]">{tierLabel(tier)}</span>
-        </div>
-      )}
-      <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
-        <MetricBar label="Accuracy" value={scores.accuracy} />
-        <MetricBar label="Fluency" value={scores.fluency} />
-        <MetricBar label="Completeness" value={scores.completeness} />
-        <MetricBar label="Prosody" value={scores.prosody} />
-      </div>
-      {[scores.accuracy, scores.fluency, scores.completeness, scores.prosody].some((v) => v === null) && (
-        <p className="text-[10px] text-[var(--text-faint)]">
-          Some metrics may be unavailable depending on locale, configuration, and pricing tier.
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+          {stale ? "Previous score" : "Pronunciation"}
+          {!stale && <MetricInfoPopover />}
         </p>
-      )}
+        {result.pronunciationScore !== undefined && tier && (
+          <p className="text-sm font-bold text-[var(--accent)]">
+            {Math.round(result.pronunciationScore)} · {tierLabel(tier)}
+          </p>
+        )}
+      </div>
 
-      {feedback && !stale && (
-        <div className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] p-2">
-          <p className="text-xs font-semibold text-[var(--accent)]">{feedback.title}</p>
-          <p className="text-[11px] text-[var(--text-muted)]">{feedback.body}</p>
-        </div>
-      )}
+      <MetricGrid
+        metrics={[
+          { label: "Accuracy", value: scores.accuracy },
+          { label: "Fluency", value: scores.fluency },
+          { label: "Completeness", value: scores.completeness },
+          { label: "Prosody", value: scores.prosody },
+        ]}
+      />
 
-      {!stale && (
-        <div className="flex flex-col gap-1.5">
-          <p className="text-[11px] font-semibold text-[var(--text-faint)]">Words to improve</p>
-          {problemWords.length === 0 ? (
-            <p className="text-[11px] text-[var(--text-faint)]">No major pronunciation issues detected.</p>
+      {!stale && focus && (
+        <div className="flex flex-col gap-1 rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] p-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">Focus</p>
+          {focus.kind === "word" ? (
+            <>
+              <p className="text-sm font-semibold text-[var(--text)]">
+                {focus.word} · <span className="text-[var(--red)]">{Math.round(focus.score)}</span>
+              </p>
+              <p className="text-xs text-[var(--text-muted)]">{focus.message}</p>
+            </>
+          ) : focus.kind === "metric" ? (
+            <>
+              <p className="text-sm font-semibold text-[var(--text)]">{focus.title}</p>
+              <p className="text-xs text-[var(--text-muted)]">{focus.body}</p>
+            </>
           ) : (
-            <div className="flex flex-col gap-1">
-              {problemWords.slice(0, 6).map((w) => (
-                <div
-                  key={w.word}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-[11px]"
-                >
-                  <span className="font-medium text-[var(--red)]">{w.word}</span>
-                  <span className="font-semibold text-[var(--red)]">{Math.round(w.score)}</span>
-                </div>
-              ))}
-            </div>
+            <p className="text-xs text-[var(--text-muted)]">{focus.message}</p>
           )}
         </div>
       )}
 
       {!stale && result.words && result.words.some((w) => w.errorType !== "None") && (
-        <details className="group rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[11px]">
+        <details className="group rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-semibold text-[var(--text-faint)] [&::-webkit-details-marker]:hidden">
-            Word-level detail
+            Word details
             <ChevronDown size={12} className="shrink-0 transition-transform group-open:rotate-180" />
           </summary>
           <div className="mt-1.5 flex flex-col gap-1">
@@ -228,11 +184,8 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
  * Evaluation are both driven, stored, and kept alive (across tab switches,
  * sentence changes, and a same-tab refresh) by page.tsx + useShadowingEvaluations;
  * this component just renders whatever `entry` currently holds for the
- * active sentence. Per the confirmed hybrid placement decision, this tab is
- * a pure results display — Record, Play my recording, and Evaluate/Retry
- * all live on the control bar (see ControlBar.tsx); this component never
- * triggers a network request itself. See "Shadowing Evaluation Improvement
- * Plan" Parts A and B.
+ * active sentence. Record, Play my recording, and Evaluate/Retry all live
+ * on the control bar — this component never triggers a network request.
  */
 export function EvaluationTab({
   entry,
@@ -269,8 +222,23 @@ export function EvaluationTab({
     return checkAnswer(entry.referenceText, wordMatch.recognizedText ?? "", "relaxed");
   }, [entry, wordMatch]);
 
-  const tier = wordMatchCheck ? tierFor(wordMatchCheck) : null;
   const exactMatch = wordMatchCheck ? isExactMatch(wordMatchCheck) : false;
+  const wordMatchChanges = wordMatchCheck ? summarizeWordMatchDiff(wordMatchCheck.diff) : [];
+  const noSpeechDetected = wordMatchCheck && wordMatchCheck.normalizedUser.length === 0;
+
+  // Word Match diff detail always starts collapsed (a compact "crop → grub"
+  // line + Details toggle instead), regardless of exact/mismatched — a
+  // manual toggle always wins until a genuinely new recognized result
+  // arrives (a new recording), which resets it. Reset happens during
+  // render (React's documented pattern for "adjusting state when a prop
+  // changes") rather than in an effect.
+  const [wordMatchExpandedOverride, setWordMatchExpandedOverride] = useState(false);
+  const [lastSeenRecognizedText, setLastSeenRecognizedText] = useState(wordMatch?.recognizedText);
+  if (wordMatch?.recognizedText !== lastSeenRecognizedText) {
+    setLastSeenRecognizedText(wordMatch?.recognizedText);
+    setWordMatchExpandedOverride(false);
+  }
+
   const { expectedTokens, userTokens } = wordMatchCheck
     ? buildComparedTokens({
         diff: wordMatchCheck.diff,
@@ -278,23 +246,6 @@ export function EvaluationTab({
         userText: wordMatchCheck.normalizedUser,
       })
     : { expectedTokens: [], userTokens: [] };
-  const noSpeechDetected = wordMatchCheck && wordMatchCheck.normalizedUser.length === 0;
-
-  // Compact/expanded Word Match diff view: defaults to collapsed on an
-  // exact match and expanded otherwise, but a manual Show/Hide always wins
-  // until a genuinely new recognized result arrives (a new recording),
-  // which resets back to the default — switching right-panel tabs never
-  // touches this. Reset happens during render (React's documented pattern
-  // for "adjusting state when a prop changes") rather than in an effect, so
-  // it takes effect before the stale-override paint rather than one tick
-  // after it.
-  const [wordMatchExpandedOverride, setWordMatchExpandedOverride] = useState<boolean | null>(null);
-  const [lastSeenRecognizedText, setLastSeenRecognizedText] = useState(wordMatch?.recognizedText);
-  if (wordMatch?.recognizedText !== lastSeenRecognizedText) {
-    setLastSeenRecognizedText(wordMatch?.recognizedText);
-    setWordMatchExpandedOverride(null);
-  }
-  const wordMatchExpanded = wordMatchExpandedOverride ?? !exactMatch;
 
   const evaluationUiState = deriveEvaluationUiState({
     hasClip,
@@ -342,69 +293,70 @@ export function EvaluationTab({
                 type="button"
                 onClick={onRetryWordMatch}
                 disabled={isRecording}
-                className="flex min-h-[36px] w-fit items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex min-h-[36px] w-fit items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs font-semibold text-[var(--text)] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <RotateCcw size={12} /> Retry Word Match
               </button>
             </div>
-          ) : wordMatch?.status === "completed" && tier ? (
+          ) : wordMatch?.status === "completed" && wordMatchCheck ? (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
               <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
-                  Word Match
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
                 {exactMatch ? (
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--green)]/30 bg-[var(--green)]/15 px-2 py-0.5 text-[11px] font-bold text-[var(--green)]">
+                  <span className="flex items-center gap-1 rounded-full border border-[var(--green)]/30 bg-[var(--green)]/15 px-2 py-0.5 text-xs font-bold text-[var(--green)]">
                     <Check size={11} /> Exact match
                   </span>
                 ) : (
-                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${TIER_CLASS[tier]}`}>
-                    {TIER_LABEL[tier]}
+                  <span className="text-xs font-semibold text-[var(--text-muted)]">
+                    {wordMatchChanges.length} difference{wordMatchChanges.length !== 1 ? "s" : ""}
                   </span>
                 )}
               </div>
 
               {noSpeechDetected ? (
-                <p className="text-xs text-[var(--text-muted)]">
-                  No speech was recognized. Try recording again.
-                </p>
-              ) : exactMatch && !wordMatchExpanded ? (
+                <p className="text-xs text-[var(--text-muted)]">No speech was recognized. Try recording again.</p>
+              ) : exactMatch ? null : !wordMatchExpandedOverride ? (
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-[var(--text-muted)]">All words were recognized correctly.</p>
+                  <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
+                    {wordMatchChanges
+                      .slice(0, COMPACT_DIFF_LIMIT)
+                      .map(formatChange)
+                      .join(", ")}
+                    {wordMatchChanges.length > COMPACT_DIFF_LIMIT
+                      ? `, +${wordMatchChanges.length - COMPACT_DIFF_LIMIT} more`
+                      : ""}
+                  </p>
                   <button
                     type="button"
                     onClick={() => setWordMatchExpandedOverride(true)}
-                    className="min-h-[36px] shrink-0 rounded-lg px-2 text-[11px] font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    className="flex min-h-[36px] shrink-0 items-center rounded-lg px-2 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                   >
-                    Show
+                    Details ›
                   </button>
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
                   <div className="rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] p-2 text-xs">
-                    <p className="text-[11px] font-semibold text-[var(--green)]">Script</p>
+                    <p className="text-xs font-semibold text-[var(--green)]">Script</p>
                     <ComparedSentenceText tokens={expectedTokens} tone="expected" />
                   </div>
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
-                    <p className="text-[11px] font-semibold text-[var(--text-faint)]">What we heard</p>
+                    <p className="text-xs font-semibold text-[var(--text-faint)]">What we heard</p>
                     <ComparedSentenceText tokens={userTokens} tone="user" emptyFallback="(nothing recognized)" />
                   </div>
-                  {exactMatch && (
-                    <button
-                      type="button"
-                      onClick={() => setWordMatchExpandedOverride(false)}
-                      className="min-h-[36px] w-fit rounded-lg px-1.5 text-[11px] font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                    >
-                      Hide
-                    </button>
-                  )}
+                  <p className="text-xs text-[var(--text-faint)]">
+                    Word Match — your browser&apos;s speech recognition, compared against the script. Not a
+                    pronunciation score.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setWordMatchExpandedOverride(false)}
+                    className="flex min-h-[36px] w-fit items-center rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                  >
+                    Hide
+                  </button>
                 </div>
               )}
-
-              <p className="text-[10px] text-[var(--text-faint)]">
-                Word Match — your browser&apos;s speech recognition, compared against the script. Not a pronunciation
-                score.
-              </p>
             </div>
           ) : (
             <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs text-[var(--text-muted)]">
@@ -413,28 +365,21 @@ export function EvaluationTab({
             </div>
           )}
 
-          {/* ---- Pronunciation Assessment (Azure) ---- */}
+          {/* ---- Pronunciation (Azure) ---- */}
           {quota.engineConfigured && (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-faint)]">
-                    Pronunciation Assessment
+              {/* PronunciationScoreCard renders its own "Pronunciation"/
+                  "Previous score" header (with the info popover) once a
+                  score card is shown — this header only covers the states
+                  that precede any score card. */}
+              {evaluationUiState !== "success" && !(evaluationUiState === "error" && lastSuccessful) && (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">
+                    Pronunciation
                   </p>
-                  <p className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-faint)]/70">
-                    Current sentence
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {quota.usedSec > 0 && (
-                    <span className="text-[10px] font-medium text-[var(--text-faint)]">
-                      Azure usage: {formatCompactDuration(quota.usedSec)} / {formatCompactDuration(quota.limitSec)}{" "}
-                      this month
-                    </span>
-                  )}
                   <MetricInfoPopover />
                 </div>
-              </div>
+              )}
 
               {quota.limitReached &&
               evaluationUiState !== "success" &&
@@ -460,7 +405,7 @@ export function EvaluationTab({
                     <div className="flex flex-col gap-1">
                       <p className="text-xs font-medium text-[var(--text)]">New recording ready for evaluation</p>
                       {lastSuccessful.pronunciationScore !== undefined && (
-                        <p className="text-[11px] text-[var(--text-faint)]">
+                        <p className="text-xs text-[var(--text-faint)]">
                           Previous score: {Math.round(lastSuccessful.pronunciationScore)}
                         </p>
                       )}
@@ -486,7 +431,7 @@ export function EvaluationTab({
                         <AlertCircle size={12} className="shrink-0" /> {trueEvaluation?.error}
                       </p>
                       {trueEvaluation?.status !== "unavailable" && (
-                        <p className="text-[11px] text-[var(--text-faint)]">
+                        <p className="text-xs text-[var(--text-faint)]">
                           Press <span className="font-semibold text-[var(--text)]">Retry</span> on the control bar to
                           try again.
                         </p>
@@ -499,10 +444,6 @@ export function EvaluationTab({
                   )}
                 </>
               )}
-
-              <p className="text-[10px] text-[var(--text-faint)]">
-                Powered by Azure AI Speech — your recording is sent for scoring only, never stored.
-              </p>
             </div>
           )}
         </>

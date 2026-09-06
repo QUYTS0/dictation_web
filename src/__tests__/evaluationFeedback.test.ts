@@ -2,6 +2,8 @@ import {
   currentSentenceProblemWords,
   deriveEvaluationUiState,
   feedbackFor,
+  focusFor,
+  FOCUS_THRESHOLD,
   scoreTierFor,
   semanticTierFor,
   tierLabel,
@@ -232,5 +234,73 @@ describe("deriveEvaluationUiState", () => {
         lastSuccessful: undefined,
       })
     ).toBe("error");
+  });
+});
+
+describe("FOCUS_THRESHOLD", () => {
+  it("is 70, and both consumers that used to be separate constants fire at the same boundary", () => {
+    expect(FOCUS_THRESHOLD).toBe(70);
+    // currentSentenceProblemWords' default threshold
+    expect(currentSentenceProblemWords([{ word: "a", accuracyScore: 69, errorType: "Mispronunciation" }])).toEqual([
+      { word: "a", score: 69 },
+    ]);
+    expect(currentSentenceProblemWords([{ word: "a", accuracyScore: 70, errorType: "Mispronunciation" }])).toEqual([]);
+    // feedbackFor's low-metric trigger
+    expect(feedbackFor({ accuracy: 69, fluency: 90, completeness: 90, prosody: 90 }, { key: "accuracy", value: 69 })?.title).toBe(
+      "Focus on accuracy"
+    );
+    expect(feedbackFor({ accuracy: 70, fluency: 90, completeness: 90, prosody: 90 }, { key: "accuracy", value: 70 })?.title).toBe(
+      "Strong result"
+    );
+  });
+});
+
+describe("focusFor", () => {
+  const strongScores = { accuracy: 95, fluency: 92, completeness: 100, prosody: 90 };
+
+  it("prioritizes a weak word over a weak metric — never 'Strong result' while a word is flagged", () => {
+    const scores = { accuracy: 95, fluency: 40, completeness: 100, prosody: 90 }; // fluency is also weak
+    const result = focusFor(scores, [{ word: "agriculture", score: 41 }]);
+    expect(result).toEqual({
+      kind: "word",
+      word: "agriculture",
+      score: 41,
+      message: 'Practice "agriculture" and match the speaker\'s rhythm.',
+    });
+  });
+
+  it("falls back to a single weak metric when no word is flagged", () => {
+    const scores = { accuracy: 95, fluency: 50, completeness: 100, prosody: 90 };
+    expect(focusFor(scores, [])).toEqual({
+      kind: "metric",
+      key: "fluency",
+      title: "Focus on fluency",
+      body: expect.any(String),
+    });
+  });
+
+  it("uses the combined multi-metric template when several metrics are weak", () => {
+    const scores = { accuracy: 50, fluency: 55, completeness: 100, prosody: 90 };
+    const result = focusFor(scores, []);
+    expect(result?.kind).toBe("metric");
+    if (result?.kind === "metric") {
+      expect(result.title).toBe("A few areas to work on");
+    }
+  });
+
+  it("returns a strong-result message when nothing is weak", () => {
+    expect(focusFor(strongScores, [])).toEqual({ kind: "strong", message: expect.any(String) });
+  });
+
+  it("returns null when there are no words and no metrics at all", () => {
+    expect(focusFor({}, [])).toBeNull();
+  });
+
+  it("falls through to strong when currentSentenceProblemWords excludes a word scored exactly at the threshold", () => {
+    // Composition test: a word scored exactly 70 is excluded by
+    // currentSentenceProblemWords (threshold is exclusive), so focusFor
+    // never sees it and falls through to the strong-result branch.
+    const words = currentSentenceProblemWords([{ word: "fine", accuracyScore: 70, errorType: "Mispronunciation" }]);
+    expect(focusFor(strongScores, words)).toEqual({ kind: "strong", message: expect.any(String) });
   });
 });
