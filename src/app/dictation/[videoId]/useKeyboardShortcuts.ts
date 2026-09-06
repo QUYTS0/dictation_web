@@ -13,13 +13,24 @@ interface UseKeyboardShortcutsOptions {
   isListeningMode: boolean;
   isZenMode: boolean;
   onZenModeChange: (value: boolean | ((prev: boolean) => boolean)) => void;
+  /** Shadowing-only shortcuts (Record, Play my recording, Evaluate, Open
+   *  evaluation details) — all optional and all gated on isShadowingMode so
+   *  passing nothing is safe for Dictation/Listening callers. See
+   *  "Shadowing Evaluation Improvement Plan" Part B §B10. */
+  isShadowingMode?: boolean;
+  onToggleRecording?: () => void;
+  onToggleMyRecordingPlayback?: () => void;
+  onEvaluate?: () => void;
+  onOpenEvaluationDetails?: () => void;
 }
 
 /**
  * Wires the dictation page's global keyboard shortcuts (Space play/pause in
  * Listening Mode, Shift+Space replay, Shift+Arrow prev/next, "/" to focus the
- * answer input, "Z" to toggle Zen mode, Escape to exit it). Returns a signal
- * that increments each time "/" is pressed, so the page can focus its input.
+ * answer input, "Z" to toggle Zen mode, Escape to exit it, and — in Shadowing
+ * — R / Shift+P / Shift+E / Shift+D for Record / Play my recording / Evaluate
+ * / Open evaluation details). Returns a signal that increments each time "/"
+ * is pressed, so the page can focus its input.
  */
 export function useKeyboardShortcuts({
   onReplay,
@@ -29,6 +40,11 @@ export function useKeyboardShortcuts({
   isListeningMode,
   isZenMode,
   onZenModeChange,
+  isShadowingMode = false,
+  onToggleRecording,
+  onToggleMyRecordingPlayback,
+  onEvaluate,
+  onOpenEvaluationDetails,
 }: UseKeyboardShortcutsOptions) {
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
 
@@ -106,11 +122,56 @@ export function useKeyboardShortcuts({
         return;
       }
 
+      if (isShadowingMode && !isTypingTarget && !e.repeat) {
+        // Record/Stop — bare "R", distinct from any Shift-chord shortcut
+        // since it's a lower-stakes, frequently-used action (mirrors the
+        // existing bare "Z" convention for Zen mode).
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "r" && onToggleRecording) {
+          e.preventDefault();
+          onToggleRecording();
+          return;
+        }
+        // Play/Pause my recording — Shift+P, distinct from plain Space
+        // (which plays/pauses the source video, not the user's own take) so
+        // the two are never confused.
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "p" && onToggleMyRecordingPlayback) {
+          e.preventDefault();
+          onToggleMyRecordingPlayback();
+          return;
+        }
+        // Evaluate/Retry — Shift+E, a deliberate Shift-chord (matching
+        // Shift+Space/Shift+Arrow) since it can send audio to Azure.
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "e" && onEvaluate) {
+          e.preventDefault();
+          onEvaluate();
+          return;
+        }
+        // Open evaluation details (the score badge's action) — Shift+D.
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "d" && onOpenEvaluationDetails) {
+          e.preventDefault();
+          onOpenEvaluationDetails();
+          return;
+        }
+      }
+
       if (isTypingTarget) return;
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [onReplay, onSkip, onPrevious, onTogglePlayback, isListeningMode, isZenMode, onZenModeChange]);
+  }, [
+    onReplay,
+    onSkip,
+    onPrevious,
+    onTogglePlayback,
+    isListeningMode,
+    isZenMode,
+    onZenModeChange,
+    isShadowingMode,
+    onToggleRecording,
+    onToggleMyRecordingPlayback,
+    onEvaluate,
+    onOpenEvaluationDetails,
+  ]);
 
   return { inputFocusSignal };
 }

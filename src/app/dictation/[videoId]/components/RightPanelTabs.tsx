@@ -55,6 +55,7 @@ function TabButton({
   isActive,
   count,
   evaluationStatus,
+  hasUnread,
   onSelect,
   buttonRef,
   onKeyDown,
@@ -65,6 +66,12 @@ function TabButton({
   isActive: boolean;
   count: number;
   evaluationStatus?: EvaluationTabStatus;
+  /** A completed/failed evaluation the user hasn't opened this tab to see
+   *  yet — deliberately a separate dot (top-left) from evaluationStatus's
+   *  own dot (top-right, the *current segment's* live status) so the two
+   *  meanings never visually merge. See "Shadowing Evaluation Improvement
+   *  Plan" Part B §B7/§B8. */
+  hasUnread?: boolean;
   onSelect: () => void;
   buttonRef: (el: HTMLButtonElement | null) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
@@ -77,7 +84,7 @@ function TabButton({
       id={`rightpanel-tab-${id}`}
       aria-selected={isActive}
       aria-controls="rightpanel-tabpanel"
-      aria-label={label}
+      aria-label={hasUnread ? `${label}, new result available` : label}
       title={label}
       tabIndex={isActive ? 0 : -1}
       onClick={onSelect}
@@ -96,6 +103,9 @@ function TabButton({
         {isActive && <span className="min-w-0 truncate">{label}</span>}
         {count > 0 && <CountBadge count={count} />}
       </span>
+      {hasUnread && (
+        <span className="absolute left-2 top-2 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" aria-hidden="true" />
+      )}
       {evaluationStatus && evaluationStatus !== "idle" && (
         <span
           className={clsx(
@@ -148,10 +158,9 @@ export function RightPanelTabs({
   evaluations,
   autoWordMatchEnabled,
   onRetryWordMatch,
-  onTriggerTrueEvaluation,
-  trueEvalBusy,
   trueEvalQuota,
   evaluationSummary,
+  hasUnreadEvaluation,
 }: {
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
@@ -202,10 +211,11 @@ export function RightPanelTabs({
   evaluations: Record<number, SentenceEvaluation>;
   autoWordMatchEnabled: boolean;
   onRetryWordMatch: () => void;
-  onTriggerTrueEvaluation: () => void;
-  trueEvalBusy: boolean;
   trueEvalQuota: PracticeQuotaState;
   evaluationSummary: ShadowingEvaluationSummary;
+  /** A completed/failed evaluation not yet viewed via this tab — see
+   *  TabButton's own doc comment. */
+  hasUnreadEvaluation?: boolean;
 }) {
   const tabRefs = useRef<Partial<Record<RightPanelTabValue, HTMLButtonElement | null>>>({});
   const visibleTabs = TAB_CONFIG.filter((tab) => tab.id !== "evaluation" || inputMode === "shadowing");
@@ -257,6 +267,7 @@ export function RightPanelTabs({
               isActive={rightPanelTab === tab.id}
               count={countFor(tab.id)}
               evaluationStatus={tab.id === "evaluation" ? evaluationStatusFor(evaluations[currentSegIdx]) : undefined}
+              hasUnread={tab.id === "evaluation" ? hasUnreadEvaluation && rightPanelTab !== "evaluation" : false}
               onSelect={() => setRightPanelTab(tab.id)}
               buttonRef={(el) => {
                 tabRefs.current[tab.id] = el;
@@ -329,8 +340,6 @@ export function RightPanelTabs({
             recordingClip={recordingClip}
             autoWordMatchEnabled={autoWordMatchEnabled}
             onRetryWordMatch={onRetryWordMatch}
-            onTriggerTrueEvaluation={onTriggerTrueEvaluation}
-            trueEvalBusy={trueEvalBusy}
             quota={trueEvalQuota}
             evaluationSummary={evaluationSummary}
             onJumpToSegment={onSeekToSegment}

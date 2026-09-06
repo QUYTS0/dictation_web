@@ -56,8 +56,10 @@ import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { usePlaybackToggle } from "@/hooks/usePlaybackToggle";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
 import { splitSentenceIntoWords } from "./helpers";
+import { deriveEvaluationUiState, feedbackFor, weakestMetric } from "./evaluationFeedback";
 
 import { ConfettiBurst } from "./components/ConfettiBurst";
 import { SettingsDrawer } from "./components/SettingsDrawer";
@@ -69,6 +71,7 @@ import {
   VIDEO_SIZE_MODE_CLASS,
   COMBO_MILESTONE_INTERVAL,
   REPLAY_HINT_SEEN_KEY,
+  SHADOWING_HINT_SEEN_KEY,
 } from "./constants";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import type { RightPanelTab } from "./types";
@@ -100,6 +103,17 @@ export default function DictationPage({ params }: PageProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
   const [showReplayHint, setShowReplayHint] = useState(false);
+  // Hybrid control-bar discoverability (see "Shadowing Evaluation
+  // Improvement Plan" Part B): a completed/failed evaluation the user
+  // hasn't opened the Evaluation tab to see yet; a one-time onboarding hint
+  // shown the first time Shadowing is entered; and a compact mobile result
+  // notification shown after a successful evaluation completes off-screen.
+  const [hasUnreadEvaluation, setHasUnreadEvaluation] = useState(false);
+  const [showShadowingHint, setShowShadowingHint] = useState(false);
+  const [mobileEvalNotice, setMobileEvalNotice] = useState<{
+    score: number | null;
+    feedbackTitle: string | null;
+  } | null>(null);
   const { inputMode, setInputMode } = useInputModePreference(videoId);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
@@ -169,6 +183,12 @@ export default function DictationPage({ params }: PageProps) {
   // so this has to run alongside recording rather than after it.
   const speech = useSpeechRecognition();
   const isShadowingMode = inputMode === "shadowing";
+  // Lifted up from ControlBar (rather than called there) so the same
+  // toggle function can also be bound to the Shift+P keyboard shortcut —
+  // see "Shadowing Evaluation Improvement Plan" Part B §B8.
+  const { isPlaying: isPlayingMyRecording, toggle: toggleMyRecordingPlayback } = usePlaybackToggle(
+    recorder.clip?.url ?? null
+  );
   const { autoWordMatch, setAutoWordMatch } = useAutoWordMatchPreference();
   // True Evaluation (Azure) network/quota engine — instantiated here (not
   // inside EvaluationTab) so an in-flight request's eventual result always
@@ -198,16 +218,51 @@ export default function DictationPage({ params }: PageProps) {
   // recording is only "acceptable" (per the Shadowing plan) when the user
   // hasn't already navigated elsewhere themselves.
   const userNavigatedTabRef = useRef(false);
+  // Mirrors rightPanelTab for use inside async callbacks (e.g. the True
+  // Evaluation network response) so "was the user looking at the
+  // Evaluation tab when this landed" reflects the tab at completion time,
+  // not a stale value captured when the request started.
+  const rightPanelTabRef = useRef(rightPanelTab);
+  rightPanelTabRef.current = rightPanelTab;
+  // The right panel's own container — scrolled into view (mobile only, and
+  // only on an explicit "View details"/score-badge click) by
+  // handleOpenEvaluationDetails below.
+  const rightPanelRef = useRef<HTMLDivElement>(null);
+
   const handleSelectRightPanelTab = useCallback((tab: RightPanelTab) => {
     userNavigatedTabRef.current = true;
+    if (tab === "evaluation") setHasUnreadEvaluation(false);
     setRightPanelTab(tab);
   }, []);
 
   const handleStartRecording = useCallback(() => {
     userNavigatedTabRef.current = false;
+    setShowShadowingHint(false);
+    if (typeof window !== "undefined") window.localStorage.setItem(SHADOWING_HINT_SEEN_KEY, "1");
     recorder.start();
     speech.start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // One-time onboarding hint the first time Shadowing is entered — mirrors
+  // the existing REPLAY_HINT_SEEN_KEY pattern (a plain localStorage flag
+  // checked/set inside a mount-style effect, never during render, so there
+  // is no SSR/hydration mismatch), except this key is version-suffixed so a
+  // future copy change can deliberately re-show it. Never auto-dismisses on
+  // a timer — only an explicit close, Escape, or starting a recording
+  // dismisses it.
+  const shadowingHintCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!isShadowingMode || shadowingHintCheckedRef.current) return;
+    shadowingHintCheckedRef.current = true;
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem(SHADOWING_HINT_SEEN_KEY)) return;
+    setShowShadowingHint(true);
+  }, [isShadowingMode]);
+
+  const dismissShadowingHint = useCallback(() => {
+    setShowShadowingHint(false);
+    if (typeof window !== "undefined") window.localStorage.setItem(SHADOWING_HINT_SEEN_KEY, "1");
   }, []);
 
   const handleStopRecording = useCallback(() => {
@@ -321,28 +376,94 @@ export default function DictationPage({ params }: PageProps) {
     markWordMatchUnsupported,
   ]);
 
+  // Shared six-value evaluation lifecycle for the current sentence — the
+  // single source of truth for both the control bar's third center button
+  // and the Evaluation tab's own state, so the two surfaces can never
+  // disagree (see "Shadowing Evaluation Improvement Plan" Part B §B6).
+  const currentEvaluationEntry = evaluations[currentSegIdx];
+  const evaluationUiState = useMemo(
+    () =>
+      deriveEvaluationUiState({
+        hasClip: !!recorder.clip,
+        recordingClipId: recorder.clip?.url ?? null,
+        trueEvaluation: currentEvaluationEntry?.trueEvaluation,
+        lastSuccessful: currentEvaluationEntry?.lastSuccessfulTrueEvaluation,
+      }),
+    [recorder.clip, currentEvaluationEntry]
+  );
+  const latestScore = currentEvaluationEntry?.lastSuccessfulTrueEvaluation?.pronunciationScore ?? null;
+
   // Manual, quota-limited True Evaluation trigger — captures the current
   // segment/clip by value so the eventual result always lands on the right
-  // sentence even if the user has since moved on to another one.
+  // sentence even if the user has since moved on to another one. Also owns
+  // the hybrid control-bar discoverability behavior: auto-selects the
+  // Evaluation tab on desktop so its loading state is visible, and — for
+  // whichever surface (desktop tab-dot vs. mobile notification) the user
+  // isn't already looking at when the result lands — surfaces it there.
   const handleTriggerTrueEvaluation = useCallback(() => {
     if (!currentSegment || !recorder.clip || practiceEval.busySegmentIndex !== null) return;
     const segmentIndex = currentSegIdx;
     const referenceText = currentSegment.text;
     const { blob: audioBlob, durationSec } = recorder.clip;
+    const clipId = recorder.clip.url;
     startTrueEvaluation(segmentIndex, {
       referenceText,
       wordCount: splitSentenceIntoWords(referenceText).length,
       audioDuration: durationSec,
     });
-    const clipId = recorder.clip.url;
+    const isDesktopViewport = typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches;
+    if (isDesktopViewport) setRightPanelTab("evaluation");
     void practiceEval.evaluate(segmentIndex, { audioBlob, referenceText, durationSec }).then((outcome) => {
+      const wasViewingEvaluationTab = rightPanelTabRef.current === "evaluation";
       if (outcome.ok) {
         completeTrueEvaluation(segmentIndex, { ...outcome.data, clipId });
+        if (!wasViewingEvaluationTab) {
+          const isMobileViewport = typeof window !== "undefined" && !window.matchMedia("(min-width: 768px)").matches;
+          if (isMobileViewport) {
+            const scores = {
+              accuracy: outcome.data.accuracyScore ?? null,
+              fluency: outcome.data.fluencyScore ?? null,
+              completeness: outcome.data.completenessScore ?? null,
+              prosody: outcome.data.prosodyScore ?? null,
+            };
+            const feedback = feedbackFor(scores, weakestMetric(scores));
+            setMobileEvalNotice({
+              score: outcome.data.pronunciationScore ?? null,
+              feedbackTitle: feedback?.title ?? null,
+            });
+          }
+          setHasUnreadEvaluation(true);
+        }
       } else {
         failTrueEvaluation(segmentIndex, outcome.error, outcome.status);
+        if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);
       }
     });
   }, [currentSegment, recorder.clip, practiceEval, currentSegIdx, startTrueEvaluation, completeTrueEvaluation, failTrueEvaluation]);
+
+  // Score badge / mobile "View details" — opens the Evaluation tab without
+  // starting a new network request. On mobile, also scrolls the right
+  // panel into view exactly once, in direct response to this explicit
+  // click (never automatically on completion) — instant rather than smooth
+  // when the user prefers reduced motion.
+  const handleOpenEvaluationDetails = useCallback(() => {
+    setHasUnreadEvaluation(false);
+    setMobileEvalNotice(null);
+    handleSelectRightPanelTab("evaluation");
+    if (typeof window === "undefined") return;
+    const isMobileViewport = !window.matchMedia("(min-width: 768px)").matches;
+    if (!isMobileViewport) return;
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    requestAnimationFrame(() => {
+      rightPanelRef.current?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+    });
+  }, [handleSelectRightPanelTab]);
+
+  useEffect(() => {
+    if (!mobileEvalNotice) return;
+    const timer = window.setTimeout(() => setMobileEvalNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [mobileEvalNotice]);
 
   const {
     bookmarkedSegmentIndexes,
@@ -427,6 +548,11 @@ export default function DictationPage({ params }: PageProps) {
     isListeningMode: inputMode !== "dictation",
     isZenMode,
     onZenModeChange: setIsZenMode,
+    isShadowingMode,
+    onToggleRecording: () => (recorder.status === "recording" ? handleStopRecording() : handleStartRecording()),
+    onToggleMyRecordingPlayback: toggleMyRecordingPlayback,
+    onEvaluate: handleTriggerTrueEvaluation,
+    onOpenEvaluationDetails: handleOpenEvaluationDetails,
   });
 
   // ---- Manual transcript paste fallback (used when captions aren't available) ----
@@ -909,6 +1035,14 @@ export default function DictationPage({ params }: PageProps) {
             recorderElapsedSec={recorder.elapsedSec}
             recorderLevel={recorder.level}
             recordingClip={recorder.clip}
+            isPlayingMyRecording={isPlayingMyRecording}
+            onToggleMyRecordingPlayback={toggleMyRecordingPlayback}
+            evaluationEngineConfigured={practiceEval.quota.engineConfigured}
+            evaluationLimitReached={practiceEval.quota.limitReached}
+            evaluationUiState={evaluationUiState}
+            latestScore={latestScore}
+            onTriggerEvaluation={handleTriggerTrueEvaluation}
+            onOpenEvaluationDetails={handleOpenEvaluationDetails}
           />
           </div>
 
@@ -1155,6 +1289,7 @@ export default function DictationPage({ params }: PageProps) {
           {showLearningPanel && (
             <motion.div
               key="learning-panel"
+              ref={rightPanelRef}
               initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
@@ -1212,10 +1347,9 @@ export default function DictationPage({ params }: PageProps) {
                   evaluations={evaluations}
                   autoWordMatchEnabled={autoWordMatch}
                   onRetryWordMatch={handleRetryWordMatch}
-                  onTriggerTrueEvaluation={handleTriggerTrueEvaluation}
-                  trueEvalBusy={practiceEval.busySegmentIndex === currentSegIdx}
                   trueEvalQuota={practiceEval.quota}
                   evaluationSummary={evaluationSummary}
+                  hasUnreadEvaluation={hasUnreadEvaluation}
                 />
                 </div>
               </motion.div>
@@ -1532,6 +1666,70 @@ export default function DictationPage({ params }: PageProps) {
               className="flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 font-semibold text-[var(--accent)] transition-colors hover:bg-white/20"
             >
               <Undo2 size={12} /> Undo
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* One-time Shadowing onboarding hint — see "Shadowing Evaluation
+          Improvement Plan" Part B §B7/§B14. Anchored to the control bar
+          area (bottom-of-screen, mirroring the undo-toast's positioning)
+          rather than the top-of-screen replay hint, since it's pointing at
+          Record/Evaluate, not the script. Stays until dismissed — no
+          auto-timeout, since it also doubles as a first-run explanation. */}
+      <AnimatePresence>
+        {showShadowingHint && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.2 }}
+            role="status"
+            className="fixed bottom-20 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--accent-border)] bg-[var(--surface)] px-4 py-2 text-xs font-medium text-[var(--text)] shadow-xl backdrop-blur-xl"
+          >
+            <span>Record yourself, listen back, then evaluate your pronunciation.</span>
+            <button
+              type="button"
+              onClick={dismissShadowingHint}
+              className="shrink-0 text-[var(--text-faint)] transition-colors hover:text-[var(--text)]"
+              aria-label="Dismiss hint"
+            >
+              <X size={12} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Compact mobile result notification — shown only when a successful
+          evaluation completes while the user isn't already viewing the
+          Evaluation tab, on a viewport narrow enough that the right panel
+          may be off-screen. Never auto-scrolls; "View details" is the only
+          thing that navigates there. See Part B §B4/§B9. */}
+      <AnimatePresence>
+        {mobileEvalNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.2 }}
+            role="status"
+            aria-live="polite"
+            className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 mx-auto flex max-w-sm items-center justify-between gap-3 rounded-2xl border border-[var(--border-strong)] bg-[var(--surface)] px-4 py-2.5 text-xs font-medium text-[var(--text)] shadow-2xl backdrop-blur-xl md:hidden"
+          >
+            <span className="min-w-0 flex-1 truncate">
+              {mobileEvalNotice.score !== null ? (
+                <>Pronunciation score: {Math.round(mobileEvalNotice.score)}</>
+              ) : (
+                "Pronunciation evaluation is ready"
+              )}
+              {mobileEvalNotice.feedbackTitle ? ` · ${mobileEvalNotice.feedbackTitle}` : ""}
+            </span>
+            <button
+              type="button"
+              onClick={handleOpenEvaluationDetails}
+              className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 font-semibold text-[var(--accent)] transition-colors hover:bg-white/20"
+            >
+              View details
             </button>
           </motion.div>
         )}

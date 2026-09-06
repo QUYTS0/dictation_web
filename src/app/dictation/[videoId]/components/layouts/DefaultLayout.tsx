@@ -6,6 +6,7 @@ import { Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import HintDisplay from "@/components/HintDisplay";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
+import type { EvaluationUiState } from "../../evaluationFeedback";
 import type { UXState, CheckAnswerResponse, HintLevel } from "@/lib/types";
 import type { CompletedSentenceReview } from "../../types";
 import { ControlBar } from "../ControlBar";
@@ -74,6 +75,14 @@ export function DefaultLayout({
   recorderElapsedSec,
   recorderLevel,
   recordingClip,
+  isPlayingMyRecording,
+  onToggleMyRecordingPlayback,
+  evaluationEngineConfigured,
+  evaluationLimitReached,
+  evaluationUiState,
+  latestScore,
+  onTriggerEvaluation,
+  onOpenEvaluationDetails,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -130,6 +139,16 @@ export function DefaultLayout({
   recorderElapsedSec: number;
   recorderLevel: number;
   recordingClip: RecordedClip | null;
+  /** Lifted to page.tsx so a keyboard shortcut can share the same toggle
+   *  the control-bar button uses — see ControlBar's own prop docs. */
+  isPlayingMyRecording?: boolean;
+  onToggleMyRecordingPlayback?: () => void;
+  evaluationEngineConfigured?: boolean;
+  evaluationLimitReached?: boolean;
+  evaluationUiState?: EvaluationUiState;
+  latestScore?: number | null;
+  onTriggerEvaluation?: () => void;
+  onOpenEvaluationDetails?: () => void;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -376,6 +395,14 @@ export function DefaultLayout({
               recorderElapsedSec={recorderElapsedSec}
               recorderLevel={recorderLevel}
               recordingClip={recordingClip}
+              isPlayingMyRecording={isPlayingMyRecording}
+              onToggleMyRecordingPlayback={onToggleMyRecordingPlayback}
+              evaluationEngineConfigured={evaluationEngineConfigured}
+              evaluationLimitReached={evaluationLimitReached}
+              evaluationUiState={evaluationUiState}
+              latestScore={latestScore}
+              onTriggerEvaluation={onTriggerEvaluation}
+              onOpenEvaluationDetails={onOpenEvaluationDetails}
             />
           </div>
         </>

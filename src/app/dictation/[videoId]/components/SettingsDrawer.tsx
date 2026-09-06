@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import { Mic, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS } from "../constants";
+import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS, SHADOWING_SHORTCUTS } from "../constants";
 import { ModeSwitcher } from "./ModeSwitcher";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 import type { InputMode, ShortcutEntry } from "../types";
@@ -375,6 +375,7 @@ export function SettingsDrawer({
               </p>
               <div className="flex flex-col gap-4">
                 <ShortcutGroup title="Dictation" shortcuts={DICTATION_SHORTCUTS} />
+                <ShortcutGroup title="Shadowing" shortcuts={SHADOWING_SHORTCUTS} />
                 <ShortcutGroup title="General" shortcuts={GENERAL_SHORTCUTS} />
               </div>
             </div>

@@ -18,6 +18,9 @@ export const SUBTITLE_VISIBILITY_STORAGE_KEY = "dictation.subtitle-visibility";
 export const AUTO_WORD_MATCH_STORAGE_KEY = "dictation.auto-word-match";
 export const REPLAY_HINT_SEEN_KEY = "dictation.seen-replay-hint";
 export const EVALUATION_SUMMARY_COLLAPSED_STORAGE_KEY = "dictation.shadowing-summary-collapsed";
+// Versioned (unlike REPLAY_HINT_SEEN_KEY above) so a future copy/behavior
+// change to this hint can re-show it once by bumping the suffix.
+export const SHADOWING_HINT_SEEN_KEY = "dictation.seen-shadowing-hint.v1";
 // Every Nth combo tick plays a brighter "milestone" chime instead of the normal tick.
 export const COMBO_MILESTONE_INTERVAL = 3;
 export const VIDEO_SIZE_MODE_CLASS: Record<VideoSizeMode, string> = {
@@ -58,6 +61,16 @@ export const DICTATION_SHORTCUTS: ShortcutEntry[] = [
   { keys: "Shift + ←", label: "Previous sentence" },
   { keys: "Shift + →", label: "Next sentence" },
   { keys: "/", label: "Focus the answer input" },
+];
+
+// Shadowing-only shortcuts (Record/Play-mine/Evaluate/Open details) — see
+// useKeyboardShortcuts.ts. Listed in Settings regardless of the current
+// mode, same as Dictation's own shortcuts are.
+export const SHADOWING_SHORTCUTS: ShortcutEntry[] = [
+  { keys: "R", label: "Start or stop recording" },
+  { keys: "Shift + P", label: "Play or pause your recording" },
+  { keys: "Shift + E", label: "Evaluate pronunciation (or retry after a failure)" },
+  { keys: "Shift + D", label: "Open evaluation details for the latest score" },
 ];
 
 // General page/app-level shortcuts, unrelated to answering the current sentence.

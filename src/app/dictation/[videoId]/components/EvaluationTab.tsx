@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Gauge, Loader2, Mic, RotateCcw } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Loader2, Mic, RotateCcw } from "lucide-react";
 import { checkAnswer } from "@/lib/utils/text";
 import type { CheckResult } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
@@ -228,8 +228,11 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
  * Evaluation are both driven, stored, and kept alive (across tab switches,
  * sentence changes, and a same-tab refresh) by page.tsx + useShadowingEvaluations;
  * this component just renders whatever `entry` currently holds for the
- * active sentence and forwards user actions (retry, trigger) upward. See
- * "Shadowing Evaluation Improvement Plan" Part A.
+ * active sentence. Per the confirmed hybrid placement decision, this tab is
+ * a pure results display — Record, Play my recording, and Evaluate/Retry
+ * all live on the control bar (see ControlBar.tsx); this component never
+ * triggers a network request itself. See "Shadowing Evaluation Improvement
+ * Plan" Parts A and B.
  */
 export function EvaluationTab({
   entry,
@@ -237,8 +240,6 @@ export function EvaluationTab({
   recordingClip,
   autoWordMatchEnabled,
   onRetryWordMatch,
-  onTriggerTrueEvaluation,
-  trueEvalBusy,
   quota,
   evaluationSummary,
   onJumpToSegment,
@@ -248,8 +249,6 @@ export function EvaluationTab({
   recordingClip: RecordedClip | null;
   autoWordMatchEnabled: boolean;
   onRetryWordMatch: () => void;
-  onTriggerTrueEvaluation: () => void;
-  trueEvalBusy: boolean;
   quota: PracticeQuotaState;
   evaluationSummary: ShadowingEvaluationSummary;
   onJumpToSegment: (segmentIndex: number) => void;
@@ -303,8 +302,6 @@ export function EvaluationTab({
     trueEvaluation,
     lastSuccessful,
   });
-
-  const canRunTrueEvaluation = hasClip && !isRecording && !trueEvalBusy && !quota.limitReached;
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -454,7 +451,8 @@ export function EvaluationTab({
                 <>
                   {evaluationUiState === "recording-ready" && (
                     <p className="text-xs text-[var(--text-muted)]">
-                      Record a sentence, then evaluate your pronunciation.
+                      Press <span className="font-semibold text-[var(--text)]">Evaluate</span> on the control bar to
+                      score your pronunciation.
                     </p>
                   )}
 
@@ -469,6 +467,13 @@ export function EvaluationTab({
                     </div>
                   )}
 
+                  {evaluationUiState === "evaluating" && (
+                    <p className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                      <Loader2 size={14} className="shrink-0 animate-spin text-[var(--text-faint)]" />
+                      Evaluating pronunciation…
+                    </p>
+                  )}
+
                   {evaluationUiState === "error" && (
                     <>
                       {lastSuccessful && (
@@ -480,32 +485,17 @@ export function EvaluationTab({
                       <p className="flex items-center gap-1.5 text-xs text-[var(--red)]">
                         <AlertCircle size={12} className="shrink-0" /> {trueEvaluation?.error}
                       </p>
+                      {trueEvaluation?.status !== "unavailable" && (
+                        <p className="text-[11px] text-[var(--text-faint)]">
+                          Press <span className="font-semibold text-[var(--text)]">Retry</span> on the control bar to
+                          try again.
+                        </p>
+                      )}
                     </>
                   )}
 
                   {evaluationUiState === "success" && trueEvaluation && (
                     <PronunciationScoreCard result={trueEvaluation} stale={false} />
-                  )}
-
-                  {/* "unavailable" (engine dropped mid-session) gets no button — retrying can't help. */}
-                  {evaluationUiState !== "success" && trueEvaluation?.status !== "unavailable" && (
-                    <button
-                      type="button"
-                      onClick={onTriggerTrueEvaluation}
-                      disabled={!canRunTrueEvaluation}
-                      className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm font-semibold text-[var(--accent)] transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {evaluationUiState === "evaluating" ? (
-                        <Loader2 size={15} className="animate-spin" />
-                      ) : (
-                        <Gauge size={15} />
-                      )}
-                      {evaluationUiState === "evaluating"
-                        ? "Evaluating pronunciation…"
-                        : evaluationUiState === "error"
-                          ? "Retry"
-                          : "Evaluate pronunciation"}
-                    </button>
                   )}
                 </>
               )}

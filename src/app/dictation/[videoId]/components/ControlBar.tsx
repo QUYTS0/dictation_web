@@ -2,7 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
-import { Eye, Lightbulb, Mic, MoreHorizontal, Pause, Play, RotateCcw, SkipBack, SkipForward, Repeat } from "lucide-react";
+import {
+  Eye,
+  Gauge,
+  Lightbulb,
+  Loader2,
+  Mic,
+  MoreHorizontal,
+  Pause,
+  Play,
+  RotateCcw,
+  SkipBack,
+  SkipForward,
+  Repeat,
+} from "lucide-react";
 import { ControlButton } from "./ControlButton";
 import { ComboStreak } from "./ComboStreak";
 import { SubtitleVisibilityPopup } from "./SubtitleVisibilityPopup";
@@ -10,9 +23,9 @@ import { ModeSwitcher } from "./ModeSwitcher";
 import { MobileBottomSheet } from "./MobileBottomSheet";
 import { formatClockTime } from "../helpers";
 import { INPUT_MODE_LABELS, MODE_ICONS, PLAYBACK_RATE_OPTIONS } from "../constants";
+import type { EvaluationUiState } from "../evaluationFeedback";
 import type { InputMode, SubtitleVisibility, SubtitleVisibilityState } from "../types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
-import { usePlaybackToggle } from "@/hooks/usePlaybackToggle";
 
 // Tiny in-button level meter — shown in place of the mic icon while
 // recording (see "Shadowing and Pronunciation Practice Plan.md" §5.1). Three
@@ -61,6 +74,14 @@ export function ControlBar({
   recorderElapsedSec = 0,
   recorderLevel = 0,
   recordingClip = null,
+  isPlayingMyRecording = false,
+  onToggleMyRecordingPlayback = () => {},
+  evaluationEngineConfigured = false,
+  evaluationLimitReached = false,
+  evaluationUiState = "no-recording",
+  latestScore = null,
+  onTriggerEvaluation = () => {},
+  onOpenEvaluationDetails = () => {},
 }: {
   currentSegIdx: number;
   totalSegments: number;
@@ -100,6 +121,33 @@ export function ControlBar({
   /** The current take, if any — drives the adjacent Play/Pause My Recording
    *  button (disabled until a clip exists). */
   recordingClip?: RecordedClip | null;
+  /** Headless playback state/toggle for "Play/Pause My Recording" — lifted
+   *  up to page.tsx (rather than called here) so the same toggle function
+   *  can also be bound to a keyboard shortcut. No seek bar, time, or volume
+   *  control, since this button has no dedicated surface to show them in. */
+  isPlayingMyRecording?: boolean;
+  onToggleMyRecordingPlayback?: () => void;
+  /** Whether Azure Pronunciation Assessment is configured server-side — the
+   *  third Shadowing center button only renders when this is true, mirroring
+   *  the same gate the Evaluation tab uses. */
+  evaluationEngineConfigured?: boolean;
+  /** Disables Evaluate/Retry with an explanatory tooltip once the shared
+   *  monthly Azure quota is used up — mirrors the Evaluation tab's own
+   *  quota.limitReached gate. */
+  evaluationLimitReached?: boolean;
+  /** Six-value evaluation lifecycle (shared with the Evaluation tab so the
+   *  two surfaces never disagree) — drives the third center button's icon,
+   *  label, and enabled state. See evaluationFeedback.ts. */
+  evaluationUiState?: EvaluationUiState;
+  /** Azure's own PronScore for the current sentence's last successful
+   *  evaluation — only used to render the score badge in the "success"
+   *  state. */
+  latestScore?: number | null;
+  /** Evaluate (idle/new-recording states) or Retry (error state). */
+  onTriggerEvaluation?: () => void;
+  /** Score badge click (success state) — opens the Evaluation tab without
+   *  starting a new network request. */
+  onOpenEvaluationDetails?: () => void;
 }) {
   // Dictation is the only mode with a typed-answer flow (Hint, combo streak,
   // accuracy). Listening and Shadowing both instead share a generic
@@ -109,12 +157,6 @@ export function ControlBar({
   const isSpeakingMode = inputMode === "shadowing";
   const isRecording = recorderStatus === "recording";
   const ModeIcon = MODE_ICONS[inputMode];
-  // Headless playback for "Play/Pause My Recording" — no seek bar, time, or
-  // volume control (unlike CompactAudioPlayer), since this button has no
-  // dedicated surface to show them in; see plan §5.2/§5.3.
-  const { isPlaying: isPlayingMyRecording, toggle: toggleMyRecordingPlayback } = usePlaybackToggle(
-    recordingClip?.url ?? null
-  );
   const [showVisibilityPopover, setShowVisibilityPopover] = useState(false);
   const visibilityPopoverRef = useRef<HTMLDivElement>(null);
   const [showModePopover, setShowModePopover] = useState(false);
@@ -159,23 +201,73 @@ export function ControlBar({
     };
   }, [showVisibilityPopover, showModePopover, showSpeedPopover, showSpeedPopoverDesktop]);
 
+  // Evaluate/score-badge/Retry — the third Shadowing-only center button.
+  // Reuses ControlButton's fixed square footprint (same trick already used
+  // by the playback-speed button, whose icon slot is a text span rather
+  // than a Lucide icon) so swapping between Evaluate/Evaluating/a numeric
+  // score/Retry never changes this button's width — see "Shadowing
+  // Evaluation Improvement Plan" Part B §B9.
+  const evaluateButton = evaluationEngineConfigured ? (
+    evaluationUiState === "success" ? (
+      <ControlButton
+        icon={<span className="text-sm font-bold leading-none">{latestScore !== null ? Math.round(latestScore) : "—"}</span>}
+        shortcut="Open evaluation details — Shift + D"
+        label={latestScore !== null ? `${Math.round(latestScore)}` : "Score"}
+        ariaLabel={
+          latestScore !== null
+            ? `Pronunciation score ${Math.round(latestScore)} out of 100. Open evaluation details.`
+            : "Pronunciation evaluation ready. Open evaluation details."
+        }
+        success
+        onClick={onOpenEvaluationDetails}
+      />
+    ) : (
+      <ControlButton
+        icon={
+          evaluationUiState === "evaluating" ? (
+            <Loader2 size={18} className="animate-spin" />
+          ) : evaluationUiState === "error" ? (
+            <RotateCcw size={18} />
+          ) : (
+            <Gauge size={18} />
+          )
+        }
+        shortcut={
+          evaluationUiState === "evaluating"
+            ? "Evaluating pronunciation…"
+            : evaluationLimitReached
+              ? "Monthly free evaluation limit reached"
+              : evaluationUiState === "error"
+                ? "Retry evaluation — Shift + E"
+                : !recordingClip
+                  ? "Record yourself first"
+                  : "Evaluate pronunciation — Shift + E"
+        }
+        label={evaluationUiState === "evaluating" ? "Evaluating…" : evaluationUiState === "error" ? "Retry" : "Evaluate"}
+        onClick={onTriggerEvaluation}
+        disabled={evaluationUiState === "evaluating" || evaluationUiState === "no-recording" || evaluationLimitReached}
+      />
+    )
+  ) : null;
+
   const centerButton = isSpeakingMode ? (
     <>
       <ControlButton
         icon={isRecording ? <MiniLevelMeter level={recorderLevel} /> : <Mic size={18} />}
-        shortcut={isRecording ? `Stop recording — ${formatClockTime(recorderElapsedSec)}` : "Record"}
+        shortcut={isRecording ? `Stop recording — ${formatClockTime(recorderElapsedSec)}` : "Record — R"}
         label={isRecording ? `Stop · ${formatClockTime(recorderElapsedSec)}` : "Record"}
         recording={isRecording}
         onClick={isRecording ? onStopRecording : onStartRecording}
       />
       <ControlButton
         icon={isPlayingMyRecording ? <Pause size={18} /> : <Play size={18} />}
-        shortcut={isPlayingMyRecording ? "Pause my recording" : "Play my recording"}
+        shortcut={isPlayingMyRecording ? "Pause my recording — Shift + P" : "Play my recording — Shift + P"}
         label={isPlayingMyRecording ? "Pause mine" : "Play mine"}
         active={isPlayingMyRecording}
         disabled={!recordingClip}
-        onClick={toggleMyRecordingPlayback}
+        onClick={onToggleMyRecordingPlayback}
       />
+      {evaluateButton}
     </>
   ) : !isDictationMode ? (
     <ControlButton
