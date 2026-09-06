@@ -12,10 +12,15 @@ export function isAzureSpeechConfigured(): boolean {
 
 export class AzureSpeechError extends Error {
   status?: number;
-  constructor(message: string, status?: number) {
+  /** Machine-readable reason, set for cases callers/tests may want to
+   *  distinguish from the human-readable `message` (e.g. quota logic,
+   *  regression tests) without string-matching prose. */
+  code?: string;
+  constructor(message: string, status?: number, code?: string) {
     super(message);
     this.name = "AzureSpeechError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -54,37 +59,61 @@ export interface AzurePronunciationResult {
 // Shape of the fields this code reads from Azure's short-audio recognition
 // response (`format=detailed`) — not the full documented schema, just what's
 // consumed below.
+//
+// Azure has been observed returning pronunciation assessment scores in two
+// different shapes for the same REST endpoint: nested under a
+// `PronunciationAssessment` object (the shape Microsoft's own docs show), and
+// flat, directly on the `NBest[]`/word/syllable/phoneme entry itself. Every
+// interface below declares both so a real response is never misread as
+// "missing" just because it used the other shape.
+interface AzureUtteranceAssessmentFields {
+  PronScore?: number;
+  AccuracyScore?: number;
+  FluencyScore?: number;
+  CompletenessScore?: number;
+  ProsodyScore?: number;
+}
+interface AzureWordAssessmentFields {
+  AccuracyScore?: number;
+  ErrorType?: string;
+}
 interface AzureSyllableResult {
   Syllable: string;
+  AccuracyScore?: number;
   PronunciationAssessment?: { AccuracyScore?: number };
 }
 interface AzurePhonemeResult {
   Phoneme: string;
+  AccuracyScore?: number;
   PronunciationAssessment?: { AccuracyScore?: number };
 }
-interface AzureWordResult {
+interface AzureWordResult extends AzureWordAssessmentFields {
   Word: string;
   Offset?: number;
   Duration?: number;
-  PronunciationAssessment?: { AccuracyScore?: number; ErrorType?: string };
+  PronunciationAssessment?: AzureWordAssessmentFields;
   Syllables?: AzureSyllableResult[];
   Phonemes?: AzurePhonemeResult[];
 }
-interface AzureNBestResult {
+interface AzureNBestResult extends AzureUtteranceAssessmentFields {
   Display?: string;
-  PronunciationAssessment?: {
-    PronScore?: number;
-    AccuracyScore?: number;
-    FluencyScore?: number;
-    CompletenessScore?: number;
-    ProsodyScore?: number;
-  };
+  PronunciationAssessment?: AzureUtteranceAssessmentFields;
   Words?: AzureWordResult[];
 }
 interface AzureRecognitionResponse {
   RecognitionStatus?: string;
   DisplayText?: string;
   NBest?: AzureNBestResult[];
+}
+
+/** Returns the first argument that is an actual finite number — deliberately
+ *  not a truthiness/`??` chain, since `0` is a valid score and must not be
+ *  skipped in favor of a later fallback. */
+function firstFiniteNumber(...values: Array<number | undefined>): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
 /**
@@ -159,40 +188,58 @@ export async function assessPronunciation(params: {
   }
 
   const nbest = json.NBest?.[0];
-  const pa = nbest?.PronunciationAssessment;
-  if (!pa) {
-    // RecognitionStatus was "Success" (speech was transcribed) but Azure
-    // returned no PronunciationAssessment block at all — the assessment
-    // itself failed even though plain recognition succeeded. This is
-    // distinct from one *metric* being unavailable (e.g. Prosody on some
-    // tiers), where `pa` exists but a field on it is missing — that case
-    // still returns normally below with the field as null. Logged (without
-    // audio) so a persistent report is diagnosable from server logs.
-    console.error("[azureSpeech] Success but no PronunciationAssessment in response:", JSON.stringify(json).slice(0, 500));
-    throw new AzureSpeechError("Pronunciation scoring wasn't returned for this recording. Please try again.");
+  // Nested shape wins when both are present (matches Microsoft's documented
+  // schema); flat fields on NBest itself are the fallback some responses use
+  // instead. See the AzureUtteranceAssessmentFields comment above.
+  const paNested = nbest?.PronunciationAssessment;
+  const pronScore = firstFiniteNumber(paNested?.PronScore, nbest?.PronScore);
+  const accuracy = firstFiniteNumber(paNested?.AccuracyScore, nbest?.AccuracyScore);
+  const fluency = firstFiniteNumber(paNested?.FluencyScore, nbest?.FluencyScore);
+  const completeness = firstFiniteNumber(paNested?.CompletenessScore, nbest?.CompletenessScore);
+  const prosody = firstFiniteNumber(paNested?.ProsodyScore, nbest?.ProsodyScore);
+
+  const hasAnyAssessmentScore = [pronScore, accuracy, fluency, completeness, prosody].some((v) => v !== null);
+  if (!hasAnyAssessmentScore) {
+    // RecognitionStatus was "Success" (speech was transcribed) but neither
+    // the nested nor the flat shape carried a single numeric assessment
+    // score — the assessment itself failed even though plain recognition
+    // succeeded. This is distinct from one *metric* being unavailable (e.g.
+    // Prosody on some tiers), which still returns normally below with just
+    // that field as null. Logged (without audio) so a persistent report is
+    // diagnosable from server logs.
+    console.error(
+      "[azureSpeech] Success but no pronunciation assessment score in response (checked nested and flat shapes):",
+      JSON.stringify(json).slice(0, 500)
+    );
+    throw new AzureSpeechError(
+      "Pronunciation scoring wasn't returned for this recording. Please try again.",
+      undefined,
+      "PRONUNCIATION_ASSESSMENT_MISSING"
+    );
   }
+
   const words: AzurePronunciationWord[] = (nbest?.Words ?? []).map((w) => ({
     word: w.Word,
-    accuracyScore: w.PronunciationAssessment?.AccuracyScore ?? null,
-    errorType: w.PronunciationAssessment?.ErrorType ?? "None",
+    accuracyScore: firstFiniteNumber(w.PronunciationAssessment?.AccuracyScore, w.AccuracyScore),
+    errorType: w.PronunciationAssessment?.ErrorType ?? w.ErrorType ?? "None",
     offset: w.Offset,
     duration: w.Duration,
     syllables: w.Syllables?.map((s) => ({
       syllable: s.Syllable,
-      accuracyScore: s.PronunciationAssessment?.AccuracyScore ?? null,
+      accuracyScore: firstFiniteNumber(s.PronunciationAssessment?.AccuracyScore, s.AccuracyScore),
     })),
     phonemes: w.Phonemes?.map((p) => ({
       phoneme: p.Phoneme,
-      accuracyScore: p.PronunciationAssessment?.AccuracyScore ?? null,
+      accuracyScore: firstFiniteNumber(p.PronunciationAssessment?.AccuracyScore, p.AccuracyScore),
     })),
   }));
 
   return {
-    pronScore: pa?.PronScore ?? null,
-    accuracy: pa?.AccuracyScore ?? null,
-    fluency: pa?.FluencyScore ?? null,
-    completeness: pa?.CompletenessScore ?? null,
-    prosody: pa?.ProsodyScore ?? null,
+    pronScore,
+    accuracy,
+    fluency,
+    completeness,
+    prosody,
     words,
     recognizedText: json.DisplayText ?? nbest?.Display ?? "",
   };
