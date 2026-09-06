@@ -55,7 +55,6 @@ This removes an entire parallel UI (a second panel, a second set of control-bar 
 - Shadowing's icon changes from its current mic-shaped SVG to the waveform/echo icon chosen in §4 (a microphone icon here would be misread as "this mode is about recording only," and collides visually with the mic icon the Record button itself now uses).
 
 ### 3.3 URL parameters and stored preferences — migration requirement
-[useInputModePreference.ts](src/app/dictation/[videoId]/useInputModePreference.ts) currently parses `?mode=` and the per-video localStorage key `dictation.input-mode.<videoId>` through a shared `parseInputMode()` helper backed by a `NON_DEFAULT_MODES` list. That helper is the single choke point for this migration:
 
 ```ts
 // Any link or stored value from before this revision may still say

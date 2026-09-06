@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
-import { Sparkles, Volume2, VolumeX, X } from "lucide-react";
+import { Mic, Sparkles, Volume2, VolumeX, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { DICTATION_SHORTCUTS, GENERAL_SHORTCUTS } from "../constants";
 import { ModeSwitcher } from "./ModeSwitcher";
@@ -56,6 +56,8 @@ export function SettingsDrawer({
   onSelectInputMode,
   soundEnabled,
   onToggleSound,
+  autoWordMatch,
+  onToggleAutoWordMatch,
   regenerateTranslation,
   regeneratingTranslation,
   regenerateTranslationError,
@@ -81,6 +83,8 @@ export function SettingsDrawer({
   onSelectInputMode: (mode: InputMode) => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
+  autoWordMatch: boolean;
+  onToggleAutoWordMatch: () => void;
   regenerateTranslation: () => void;
   regeneratingTranslation: boolean;
   regenerateTranslationError: string | null;
@@ -305,6 +309,29 @@ export function SettingsDrawer({
               </span>
               <span>{soundEnabled ? "On" : "Off"}</span>
             </button>
+
+            <div className="flex flex-col gap-1.5">
+              <button
+                onClick={onToggleAutoWordMatch}
+                className={clsx(
+                  "flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-semibold transition-colors",
+                  autoWordMatch
+                    ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                    : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)]"
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <Mic size={16} className={autoWordMatch ? "text-[var(--accent)]" : undefined} />
+                  Auto Word Match
+                </span>
+                <span>{autoWordMatch ? "On" : "Off"}</span>
+              </button>
+              <p className="px-1 text-[11px] leading-snug text-[var(--text-faint)]">
+                In Shadowing, automatically compares what your browser&apos;s speech recognition heard against the
+                script right after you record. Uses your browser&apos;s built-in (vendor) speech service — free, but
+                not available in every browser.
+              </p>
+            </div>
 
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">

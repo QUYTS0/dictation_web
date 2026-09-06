@@ -59,13 +59,64 @@ export interface ResumeState {
 }
 
 // ---- Shadowing evaluation — see "Shadowing and Pronunciation Practice
-// Plan.md" §11. Each sentence is evaluated individually; accuracy/
-// completeness/fluency/prosody are each optional since not every engine
-// (e.g. today's Word Match) produces every category.
+// Plan.md" §11. Word Match (free, browser speech recognition) and True
+// Evaluation (Azure Pronunciation Assessment, quota-limited) are two
+// independent results for the same sentence — each has its own state
+// machine so the UI can show processing/failed/unsupported without ever
+// conflating "no result yet" with "0%". Updating one must never overwrite
+// the other; both are read from the same shared, sessionStorage-backed map
+// (see useShadowingEvaluations.ts) so they survive switching right-panel
+// tabs, unlike component-local state.
 export interface EvaluationProblemWord {
   word: string;
   score?: number;
   errorType?: string;
+}
+
+export type WordMatchStatus = "idle" | "processing" | "completed" | "failed" | "unsupported";
+
+export interface WordMatchResult {
+  status: WordMatchStatus;
+  recognizedText?: string;
+  accuracy?: number;
+  completeness?: number;
+  problemWords?: EvaluationProblemWord[];
+  error?: string;
+}
+
+export type TrueEvaluationStatus = "idle" | "processing" | "completed" | "failed" | "unavailable";
+
+export interface TrueEvaluationSyllable {
+  syllable: string;
+  accuracyScore: number | null;
+}
+
+export interface TrueEvaluationPhoneme {
+  phoneme: string;
+  accuracyScore: number | null;
+}
+
+export interface TrueEvaluationWord {
+  word: string;
+  accuracyScore: number | null;
+  errorType: string;
+  offset?: number;
+  duration?: number;
+  syllables?: TrueEvaluationSyllable[];
+  phonemes?: TrueEvaluationPhoneme[];
+}
+
+export interface TrueEvaluationResult {
+  status: TrueEvaluationStatus;
+  pronunciationScore?: number;
+  accuracyScore?: number;
+  fluencyScore?: number;
+  completenessScore?: number;
+  prosodyScore?: number;
+  recognizedText?: string;
+  words?: TrueEvaluationWord[];
+  error?: string;
+  evaluatedAt?: string;
 }
 
 export interface SentenceEvaluation {
@@ -74,10 +125,6 @@ export interface SentenceEvaluation {
   wordCount: number;
   audioDuration: number;
 
-  accuracy?: number;
-  completeness?: number;
-  fluency?: number;
-  prosody?: number;
-
-  problemWords?: EvaluationProblemWord[];
+  wordMatch?: WordMatchResult;
+  trueEvaluation?: TrueEvaluationResult;
 }

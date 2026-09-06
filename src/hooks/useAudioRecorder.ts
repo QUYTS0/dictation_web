@@ -59,7 +59,6 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const startedAtRef = useRef(0);
   const timerIntervalRef = useRef<number | null>(null);
   const maxDurationTimeoutRef = useRef<number | null>(null);
@@ -67,6 +66,12 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
   const analyserRef = useRef<AnalyserNode | null>(null);
   const levelRafRef = useRef<number | null>(null);
   const clipUrlRef = useRef<string | null>(null);
+  // Bumped on every start()/discard() so a stale MediaRecorder's late
+  // ondataavailable/onstop (e.g. one still winding down from a previous take
+  // when a new recording begins) can recognize itself as stale and no-op
+  // instead of writing its chunks/state into the current recording — the
+  // same pattern useSpeechRecognition.ts already uses for its recognizer.
+  const generationRef = useRef(0);
 
   const clearTimers = useCallback(() => {
     if (timerIntervalRef.current !== null) {
@@ -98,13 +103,13 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
   }, []);
 
   const discard = useCallback(() => {
+    generationRef.current++;
     clearTimers();
     teardownStream();
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
       recorderRef.current.stop();
     }
     recorderRef.current = null;
-    chunksRef.current = [];
     if (clipUrlRef.current) {
       URL.revokeObjectURL(clipUrlRef.current);
       clipUrlRef.current = null;
@@ -125,6 +130,20 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
       return;
     }
 
+    // Defensively tear down any still-active previous recording before
+    // starting a new one. start() is normally only reachable once status has
+    // settled to "stopped"/"idle"/"error", but discard() calling
+    // recorderRef.current.stop() is asynchronous — its onstop may not have
+    // fired yet — so without this, a fast new start() could otherwise race a
+    // stale recorder/stream still winding down.
+    const generation = ++generationRef.current;
+    clearTimers();
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    recorderRef.current = null;
+    teardownStream();
+
     if (clipUrlRef.current) {
       URL.revokeObjectURL(clipUrlRef.current);
       clipUrlRef.current = null;
@@ -137,8 +156,16 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
+      if (generationRef.current !== generation) return;
       setError(classifyGetUserMediaError(err));
       setStatus("error");
+      return;
+    }
+
+    if (generationRef.current !== generation) {
+      // A newer start()/discard() happened while permission was pending —
+      // this stream belongs to an abandoned attempt, release it immediately.
+      stream.getTracks().forEach((track) => track.stop());
       return;
     }
 
@@ -168,6 +195,7 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
+        if (generationRef.current !== generation) return;
         const currentAnalyser = analyserRef.current;
         if (!currentAnalyser) return;
         currentAnalyser.getByteTimeDomainData(dataArray);
@@ -186,20 +214,24 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
     }
 
     const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32_000 });
-    chunksRef.current = [];
+    // Local to this start() call (not a shared ref) — a stale recorder from
+    // a previous generation can never write its chunks into a newer
+    // recording's array, even if its ondataavailable/onstop fires late.
+    const chunks: Blob[] = [];
 
     recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunksRef.current.push(event.data);
+      if (generationRef.current !== generation) return;
+      if (event.data.size > 0) chunks.push(event.data);
     };
 
     recorder.onstop = () => {
+      if (generationRef.current !== generation) return;
       clearTimers();
       // Wall-clock duration rather than trusting the Blob's own metadata —
       // Chrome's WebM/Opus recordings are a well-known case of an
       // unreliable/absent duration in the container itself.
       const durationSec = (Date.now() - startedAtRef.current) / 1000;
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      chunksRef.current = [];
+      const blob = new Blob(chunks, { type: mimeType });
       teardownStream();
 
       if (blob.size === 0) {
@@ -222,15 +254,21 @@ export function useAudioRecorder({ maxDurationSec = 20 }: UseAudioRecorderOption
     setElapsedSec(0);
 
     timerIntervalRef.current = window.setInterval(() => {
+      if (generationRef.current !== generation) return;
       setElapsedSec((Date.now() - startedAtRef.current) / 1000);
     }, 100);
 
-    maxDurationTimeoutRef.current = window.setTimeout(stop, maxDurationSec * 1000);
+    maxDurationTimeoutRef.current = window.setTimeout(() => {
+      if (generationRef.current !== generation) return;
+      stop();
+    }, maxDurationSec * 1000);
   }, [status, maxDurationSec, stop, clearTimers, teardownStream]);
 
   // Never leave a live mic stream/AudioContext running past unmount.
   useEffect(() => {
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- generationRef is a plain counter, not a DOM ref
+      generationRef.current++;
       clearTimers();
       teardownStream();
       if (recorderRef.current && recorderRef.current.state !== "inactive") {

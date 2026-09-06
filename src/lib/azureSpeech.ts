@@ -19,13 +19,30 @@ export class AzureSpeechError extends Error {
   }
 }
 
+export interface AzurePronunciationSyllable {
+  syllable: string;
+  accuracyScore: number | null;
+}
+
+export interface AzurePronunciationPhoneme {
+  phoneme: string;
+  accuracyScore: number | null;
+}
+
 export interface AzurePronunciationWord {
   word: string;
   accuracyScore: number | null;
   errorType: string;
+  offset?: number;
+  duration?: number;
+  syllables?: AzurePronunciationSyllable[];
+  phonemes?: AzurePronunciationPhoneme[];
 }
 
 export interface AzurePronunciationResult {
+  /** Azure's overall PronScore — the headline "Pronunciation Score". Not a
+   *  blend computed here; used as-is. */
+  pronScore: number | null;
   accuracy: number | null;
   fluency: number | null;
   completeness: number | null;
@@ -37,13 +54,26 @@ export interface AzurePronunciationResult {
 // Shape of the fields this code reads from Azure's short-audio recognition
 // response (`format=detailed`) — not the full documented schema, just what's
 // consumed below.
+interface AzureSyllableResult {
+  Syllable: string;
+  PronunciationAssessment?: { AccuracyScore?: number };
+}
+interface AzurePhonemeResult {
+  Phoneme: string;
+  PronunciationAssessment?: { AccuracyScore?: number };
+}
 interface AzureWordResult {
   Word: string;
+  Offset?: number;
+  Duration?: number;
   PronunciationAssessment?: { AccuracyScore?: number; ErrorType?: string };
+  Syllables?: AzureSyllableResult[];
+  Phonemes?: AzurePhonemeResult[];
 }
 interface AzureNBestResult {
   Display?: string;
   PronunciationAssessment?: {
+    PronScore?: number;
     AccuracyScore?: number;
     FluencyScore?: number;
     CompletenessScore?: number;
@@ -119,20 +149,46 @@ export async function assessPronunciation(params: {
 
   if (json.RecognitionStatus && json.RecognitionStatus !== "Success") {
     if (json.RecognitionStatus === "NoMatch") {
-      return { accuracy: null, fluency: null, completeness: null, prosody: null, words: [], recognizedText: "" };
+      // Azure understood the request but couldn't recognize any speech in
+      // the audio at all — surfacing this as a normal empty "result" used to
+      // render as a blank success card. Treat it as a failure instead so the
+      // UI can show an actionable reason and a Retry action.
+      throw new AzureSpeechError("No speech was recognized in this recording. Try recording again.");
     }
     throw new AzureSpeechError(`Evaluation engine could not process this recording (${json.RecognitionStatus}).`);
   }
 
   const nbest = json.NBest?.[0];
   const pa = nbest?.PronunciationAssessment;
+  if (!pa) {
+    // RecognitionStatus was "Success" (speech was transcribed) but Azure
+    // returned no PronunciationAssessment block at all — the assessment
+    // itself failed even though plain recognition succeeded. This is
+    // distinct from one *metric* being unavailable (e.g. Prosody on some
+    // tiers), where `pa` exists but a field on it is missing — that case
+    // still returns normally below with the field as null. Logged (without
+    // audio) so a persistent report is diagnosable from server logs.
+    console.error("[azureSpeech] Success but no PronunciationAssessment in response:", JSON.stringify(json).slice(0, 500));
+    throw new AzureSpeechError("Pronunciation scoring wasn't returned for this recording. Please try again.");
+  }
   const words: AzurePronunciationWord[] = (nbest?.Words ?? []).map((w) => ({
     word: w.Word,
     accuracyScore: w.PronunciationAssessment?.AccuracyScore ?? null,
     errorType: w.PronunciationAssessment?.ErrorType ?? "None",
+    offset: w.Offset,
+    duration: w.Duration,
+    syllables: w.Syllables?.map((s) => ({
+      syllable: s.Syllable,
+      accuracyScore: s.PronunciationAssessment?.AccuracyScore ?? null,
+    })),
+    phonemes: w.Phonemes?.map((p) => ({
+      phoneme: p.Phoneme,
+      accuracyScore: p.PronunciationAssessment?.AccuracyScore ?? null,
+    })),
   }));
 
   return {
+    pronScore: pa?.PronScore ?? null,
     accuracy: pa?.AccuracyScore ?? null,
     fluency: pa?.FluencyScore ?? null,
     completeness: pa?.CompletenessScore ?? null,

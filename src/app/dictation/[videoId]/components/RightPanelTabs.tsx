@@ -3,13 +3,30 @@ import { clsx } from "clsx";
 import { FileText, Type, AlignLeft, ClipboardCheck, type LucideIcon } from "lucide-react";
 import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
-import type { SpeechRecognitionStatus } from "@/hooks/useSpeechRecognition";
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
 import { SentencesTab } from "./SentencesTab";
 import { EvaluationTab } from "./EvaluationTab";
 import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue, SentenceEvaluation } from "../types";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import type { PracticeQuotaState } from "../usePracticeEvaluation";
+
+type EvaluationTabStatus = "idle" | "processing" | "completed" | "failed";
+
+function evaluationStatusFor(entry: SentenceEvaluation | undefined): EvaluationTabStatus {
+  if (!entry) return "idle";
+  const statuses = [entry.wordMatch?.status, entry.trueEvaluation?.status];
+  if (statuses.includes("processing")) return "processing";
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("completed")) return "completed";
+  return "idle";
+}
+
+const EVALUATION_STATUS_DOT_CLASS: Record<Exclude<EvaluationTabStatus, "idle">, string> = {
+  processing: "bg-[var(--accent)] animate-pulse",
+  completed: "bg-[var(--green)]",
+  failed: "bg-[var(--red)]",
+};
 
 const TAB_CONFIG: Array<{ id: RightPanelTabValue; label: string; icon: LucideIcon }> = [
   { id: "script", label: "Script", icon: FileText },
@@ -37,6 +54,7 @@ function TabButton({
   Icon,
   isActive,
   count,
+  evaluationStatus,
   onSelect,
   buttonRef,
   onKeyDown,
@@ -46,6 +64,7 @@ function TabButton({
   Icon: LucideIcon;
   isActive: boolean;
   count: number;
+  evaluationStatus?: EvaluationTabStatus;
   onSelect: () => void;
   buttonRef: (el: HTMLButtonElement | null) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
@@ -64,7 +83,7 @@ function TabButton({
       onClick={onSelect}
       onKeyDown={onKeyDown}
       className={clsx(
-        "flex min-h-[44px] w-full min-w-0 items-center justify-center rounded-lg px-1.5 text-sm font-bold outline-none",
+        "relative flex min-h-[44px] w-full min-w-0 items-center justify-center rounded-lg px-1.5 text-sm font-bold outline-none",
         "transition-[background-color,color,border-color] duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1",
         isActive
@@ -77,6 +96,15 @@ function TabButton({
         {isActive && <span className="min-w-0 truncate">{label}</span>}
         {count > 0 && <CountBadge count={count} />}
       </span>
+      {evaluationStatus && evaluationStatus !== "idle" && (
+        <span
+          className={clsx(
+            "absolute right-2 top-2 h-1.5 w-1.5 rounded-full",
+            EVALUATION_STATUS_DOT_CLASS[evaluationStatus]
+          )}
+          aria-hidden="true"
+        />
+      )}
     </button>
   );
 }
@@ -117,9 +145,12 @@ export function RightPanelTabs({
   onJumpBookmark,
   recorderStatus,
   recordingClip,
-  speechStatus,
-  transcript,
-  onEvaluationRecorded,
+  evaluations,
+  autoWordMatchEnabled,
+  onRetryWordMatch,
+  onTriggerTrueEvaluation,
+  trueEvalBusy,
+  trueEvalQuota,
   evaluationSummary,
 }: {
   rightPanelTab: RightPanelTabValue;
@@ -168,9 +199,12 @@ export function RightPanelTabs({
   onJumpBookmark: (segmentIndex: number) => void;
   recorderStatus: AudioRecorderStatus;
   recordingClip: RecordedClip | null;
-  speechStatus: SpeechRecognitionStatus;
-  transcript: string | null;
-  onEvaluationRecorded: (evaluation: SentenceEvaluation) => void;
+  evaluations: Record<number, SentenceEvaluation>;
+  autoWordMatchEnabled: boolean;
+  onRetryWordMatch: () => void;
+  onTriggerTrueEvaluation: () => void;
+  trueEvalBusy: boolean;
+  trueEvalQuota: PracticeQuotaState;
   evaluationSummary: ShadowingEvaluationSummary;
 }) {
   const tabRefs = useRef<Partial<Record<RightPanelTabValue, HTMLButtonElement | null>>>({});
@@ -222,6 +256,7 @@ export function RightPanelTabs({
               Icon={tab.icon}
               isActive={rightPanelTab === tab.id}
               count={countFor(tab.id)}
+              evaluationStatus={tab.id === "evaluation" ? evaluationStatusFor(evaluations[currentSegIdx]) : undefined}
               onSelect={() => setRightPanelTab(tab.id)}
               buttonRef={(el) => {
                 tabRefs.current[tab.id] = el;
@@ -289,14 +324,14 @@ export function RightPanelTabs({
           />
         ) : (
           <EvaluationTab
-            currentSegIdx={currentSegIdx}
-            currentSegment={scriptSegments[currentSegIdx]}
+            entry={evaluations[currentSegIdx]}
             recorderStatus={recorderStatus}
             recordingClip={recordingClip}
-            speechStatus={speechStatus}
-            transcript={transcript}
-            onEvaluated={() => setRightPanelTab("evaluation")}
-            onEvaluationRecorded={onEvaluationRecorded}
+            autoWordMatchEnabled={autoWordMatchEnabled}
+            onRetryWordMatch={onRetryWordMatch}
+            onTriggerTrueEvaluation={onTriggerTrueEvaluation}
+            trueEvalBusy={trueEvalBusy}
+            quota={trueEvalQuota}
             evaluationSummary={evaluationSummary}
             onJumpToSegment={onSeekToSegment}
           />

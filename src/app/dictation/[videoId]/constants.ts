@@ -15,6 +15,7 @@ export const PLAYBACK_RATE_STORAGE_KEY = "dictation.playback-rate";
 export const AUTO_ADVANCE_STORAGE_KEY = "dictation.auto-advance";
 export const PRACTICE_MODE_STORAGE_KEY = "dictation.practice-mode";
 export const SUBTITLE_VISIBILITY_STORAGE_KEY = "dictation.subtitle-visibility";
+export const AUTO_WORD_MATCH_STORAGE_KEY = "dictation.auto-word-match";
 export const REPLAY_HINT_SEEN_KEY = "dictation.seen-replay-hint";
 // Every Nth combo tick plays a brighter "milestone" chime instead of the normal tick.
 export const COMBO_MILESTONE_INTERVAL = 3;

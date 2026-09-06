@@ -49,12 +49,15 @@ import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
 import { useShadowingEvaluations } from "./useShadowingEvaluations";
+import { usePracticeEvaluation } from "./usePracticeEvaluation";
+import { useAutoWordMatchPreference } from "./useAutoWordMatchPreference";
 import { useScriptTranslation } from "./useScriptTranslation";
 import { useVocabHighlights } from "./useVocabHighlights";
 import { useBookmarks } from "@/hooks/useBookmarks";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
+import { splitSentenceIntoWords } from "./helpers";
 
 import { ConfettiBurst } from "./components/ConfettiBurst";
 import { SettingsDrawer } from "./components/SettingsDrawer";
@@ -151,8 +154,10 @@ export default function DictationPage({ params }: PageProps) {
     handleActiveSegmentChange,
   } = useDictationSession({ videoId, user, autoEnterPaused: inputMode !== "dictation" });
 
+  const currentSegment = segments[currentSegIdx];
+
   // Lives here (not inside DefaultLayout) so both ControlBar's Record/Stop
-  // button and a future Evaluation tab in RightPanelTabs — a sibling of
+  // button and the Evaluation tab in RightPanelTabs — a sibling of
   // DefaultLayout, not a descendant — can share the same recorder instance;
   // see "Shadowing and Pronunciation Practice Plan.md" §5.4/§7. Instantiated
   // unconditionally (hooks can't be conditional); it stays inert until
@@ -164,13 +169,42 @@ export default function DictationPage({ params }: PageProps) {
   // so this has to run alongside recording rather than after it.
   const speech = useSpeechRecognition();
   const isShadowingMode = inputMode === "shadowing";
-  // Per-sentence Shadowing evaluations + the live session summary derived
-  // from them — see "Shadowing and Pronunciation Practice Plan.md" §11.
-  // Lives here (not EvaluationTab) so the sessionStorage-backed map survives
-  // switching right-panel tabs and persists across a refresh within the tab.
-  const { recordEvaluation, summary: evaluationSummary } = useShadowingEvaluations(videoId, segments.length);
+  const { autoWordMatch, setAutoWordMatch } = useAutoWordMatchPreference();
+  // True Evaluation (Azure) network/quota engine — instantiated here (not
+  // inside EvaluationTab) so an in-flight request's eventual result always
+  // has somewhere stable to land even if the user switches right-panel tabs
+  // while it's pending. See usePracticeEvaluation.ts.
+  const practiceEval = usePracticeEvaluation();
+  // Per-sentence Shadowing evaluations (Word Match + True Evaluation, each
+  // independent) + the live session summary derived from them — see
+  // "Shadowing and Pronunciation Practice Plan.md" §10/§11. Lives here (not
+  // EvaluationTab) so the sessionStorage-backed map survives switching
+  // right-panel tabs, switching sentences, and a same-tab refresh.
+  const transcriptId = segments[0]?.transcript_id ?? null;
+  const {
+    evaluations,
+    summary: evaluationSummary,
+    startWordMatch,
+    completeWordMatch,
+    failWordMatch,
+    markWordMatchUnsupported,
+    startTrueEvaluation,
+    completeTrueEvaluation,
+    failTrueEvaluation,
+  } = useShadowingEvaluations(videoId, transcriptId, segments.length);
+
+  // Tracks whether the user has manually picked a right-panel tab since the
+  // current recording started — auto-opening the Evaluation tab after a
+  // recording is only "acceptable" (per the Shadowing plan) when the user
+  // hasn't already navigated elsewhere themselves.
+  const userNavigatedTabRef = useRef(false);
+  const handleSelectRightPanelTab = useCallback((tab: RightPanelTab) => {
+    userNavigatedTabRef.current = true;
+    setRightPanelTab(tab);
+  }, []);
 
   const handleStartRecording = useCallback(() => {
+    userNavigatedTabRef.current = false;
     recorder.start();
     speech.start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -181,6 +215,13 @@ export default function DictationPage({ params }: PageProps) {
     speech.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Word Match requires a live mic stream (see useSpeechRecognition) — a
+  // "Retry" after a recognition failure re-records rather than re-running
+  // anything against the existing take.
+  const handleRetryWordMatch = useCallback(() => {
+    handleStartRecording();
+  }, [handleStartRecording]);
 
   // A recorded take (and its transcript) only ever refers to the sentence it
   // was made for — moving to a different sentence must not leave a stale
@@ -202,6 +243,105 @@ export default function DictationPage({ params }: PageProps) {
     if (rightPanelTab === "evaluation") setRightPanelTab("script");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isShadowingMode]);
+
+  // Opens the Evaluation tab the moment a fresh recording finishes, but only
+  // if the user hasn't already navigated elsewhere themselves since starting
+  // it (userNavigatedTabRef) — never force-switches away from wherever
+  // they've deliberately gone. Keyed by the clip's own object URL (unique
+  // per take) so this fires exactly once per recording.
+  const autoOpenClipRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isShadowingMode || !recorder.clip) return;
+    if (autoOpenClipRef.current === recorder.clip.url) return;
+    autoOpenClipRef.current = recorder.clip.url;
+    if (!userNavigatedTabRef.current) setRightPanelTab("evaluation");
+  }, [isShadowingMode, recorder.clip]);
+
+  // Runs Word Match automatically once a recording finishes — see "Shadowing
+  // and Pronunciation Practice Plan.md" §3. Sets "processing" the moment a
+  // clip appears (recorder.stop() resolves before speech recognition's own
+  // async stop()), then finalizes once recognition's status settles.
+  // Refs (not state) track which clip has already been started/finalized —
+  // keyed by the clip's own object URL, unique per take — so this never
+  // double-fires as the effect re-runs on every speech.status change.
+  const wordMatchStartedClipRef = useRef<string | null>(null);
+  const wordMatchFinalizedClipRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isShadowingMode || !autoWordMatch || !recorder.clip || !currentSegment) return;
+    const clipUrl = recorder.clip.url;
+    const meta = {
+      referenceText: currentSegment.text,
+      wordCount: splitSentenceIntoWords(currentSegment.text).length,
+      audioDuration: recorder.clip.durationSec,
+    };
+
+    if (speech.status === "unsupported") {
+      if (wordMatchStartedClipRef.current !== clipUrl) {
+        wordMatchStartedClipRef.current = clipUrl;
+        markWordMatchUnsupported(currentSegIdx, meta);
+      }
+      return;
+    }
+
+    if (wordMatchStartedClipRef.current !== clipUrl) {
+      wordMatchStartedClipRef.current = clipUrl;
+      startWordMatch(currentSegIdx, meta);
+    }
+
+    if (speech.status === "done" && wordMatchFinalizedClipRef.current !== clipUrl) {
+      wordMatchFinalizedClipRef.current = clipUrl;
+      const checkResult = evaluateAutoAdvanceAnswer(currentSegment.text, speech.transcript ?? "", "relaxed");
+      const expectedCount = checkResult.diff.filter((t) => t.status !== "extra").length;
+      const correctCount = checkResult.diff.filter((t) => t.status === "correct").length;
+      const missingCount = checkResult.diff.filter((t) => t.status === "missing").length;
+      const problemWords = checkResult.diff
+        .filter((t) => t.status === "missing" || t.status === "wrong")
+        .map((t) => ({ word: t.word, errorType: t.status }));
+      completeWordMatch(currentSegIdx, {
+        recognizedText: speech.transcript ?? "",
+        accuracy: expectedCount > 0 ? (correctCount / expectedCount) * 100 : 0,
+        completeness: expectedCount > 0 ? ((expectedCount - missingCount) / expectedCount) * 100 : 0,
+        problemWords,
+      });
+    } else if (speech.status === "error" && wordMatchFinalizedClipRef.current !== clipUrl) {
+      wordMatchFinalizedClipRef.current = clipUrl;
+      failWordMatch(currentSegIdx, "Couldn't access speech recognition for this take.");
+    }
+  }, [
+    isShadowingMode,
+    autoWordMatch,
+    recorder.clip,
+    currentSegment,
+    speech.status,
+    speech.transcript,
+    currentSegIdx,
+    startWordMatch,
+    completeWordMatch,
+    failWordMatch,
+    markWordMatchUnsupported,
+  ]);
+
+  // Manual, quota-limited True Evaluation trigger — captures the current
+  // segment/clip by value so the eventual result always lands on the right
+  // sentence even if the user has since moved on to another one.
+  const handleTriggerTrueEvaluation = useCallback(() => {
+    if (!currentSegment || !recorder.clip || practiceEval.busySegmentIndex !== null) return;
+    const segmentIndex = currentSegIdx;
+    const referenceText = currentSegment.text;
+    const { blob: audioBlob, durationSec } = recorder.clip;
+    startTrueEvaluation(segmentIndex, {
+      referenceText,
+      wordCount: splitSentenceIntoWords(referenceText).length,
+      audioDuration: durationSec,
+    });
+    void practiceEval.evaluate(segmentIndex, { audioBlob, referenceText, durationSec }).then((outcome) => {
+      if (outcome.ok) {
+        completeTrueEvaluation(segmentIndex, outcome.data);
+      } else {
+        failTrueEvaluation(segmentIndex, outcome.error, outcome.status);
+      }
+    });
+  }, [currentSegment, recorder.clip, practiceEval, currentSegIdx, startTrueEvaluation, completeTrueEvaluation, failTrueEvaluation]);
 
   const {
     bookmarkedSegmentIndexes,
@@ -342,8 +482,6 @@ export default function DictationPage({ params }: PageProps) {
       setManualPasteText(autoTranscribeLiveText);
     }
   }, [autoTranscribeLiveText, autoTranscribeStatus, setManualPasteText]);
-
-  const currentSegment = segments[currentSegIdx];
 
   // Auto-advance: as soon as the typed text exactly matches the sentence
   // (post-normalization), submit automatically instead of waiting for
@@ -698,6 +836,8 @@ export default function DictationPage({ params }: PageProps) {
             onSelectInputMode={setInputMode}
             soundEnabled={soundEnabled}
             onToggleSound={() => setSoundEnabled(!soundEnabled)}
+            autoWordMatch={autoWordMatch}
+            onToggleAutoWordMatch={() => setAutoWordMatch(!autoWordMatch)}
             regenerateTranslation={() => void regenerateTranslation()}
             regeneratingTranslation={regeneratingTranslation}
             regenerateTranslationError={regenerateTranslationError}
@@ -1028,7 +1168,7 @@ export default function DictationPage({ params }: PageProps) {
                 <div className="w-full h-full min-h-0 flex flex-col bg-[var(--surface)] backdrop-blur-xl border border-[var(--border-strong)] rounded-3xl shadow-lg overflow-hidden text-[var(--text)]">
                 <RightPanelTabs
                   rightPanelTab={rightPanelTab}
-                  setRightPanelTab={setRightPanelTab}
+                  setRightPanelTab={handleSelectRightPanelTab}
                   scriptSegments={segments}
                   currentSegIdx={currentSegIdx}
                   inputMode={inputMode}
@@ -1067,9 +1207,12 @@ export default function DictationPage({ params }: PageProps) {
                   onJumpBookmark={handleBookmarkJump}
                   recorderStatus={recorder.status}
                   recordingClip={recorder.clip}
-                  speechStatus={speech.status}
-                  transcript={speech.transcript}
-                  onEvaluationRecorded={recordEvaluation}
+                  evaluations={evaluations}
+                  autoWordMatchEnabled={autoWordMatch}
+                  onRetryWordMatch={handleRetryWordMatch}
+                  onTriggerTrueEvaluation={handleTriggerTrueEvaluation}
+                  trueEvalBusy={practiceEval.busySegmentIndex === currentSegIdx}
+                  trueEvalQuota={practiceEval.quota}
                   evaluationSummary={evaluationSummary}
                 />
                 </div>
