@@ -4,6 +4,7 @@ import {
   YoutubeTranscriptDisabledError,
   YoutubeTranscriptNotAvailableError,
   YoutubeTranscriptNotAvailableLanguageError,
+  YoutubeTranscriptTooManyRequestError,
   YoutubeTranscriptVideoUnavailableError,
 } from "youtube-transcript";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -79,17 +80,18 @@ async function reportFetchFailure(
   hasWorkingTranscriptToPreserve: boolean,
   videoId: string,
   language: string,
-  userMessage: string
+  userMessage: string,
+  statusCode = 422
 ) {
   if (hasWorkingTranscriptToPreserve) {
-    return NextResponse.json({ status: "ready", error: userMessage }, { status: 422 });
+    return NextResponse.json({ status: "ready", error: userMessage }, { status: statusCode });
   }
 
   if (canonicalTranscript) {
     await supabase.from("transcripts").update({ status: "failed" }).eq("id", canonicalTranscript.id);
     return NextResponse.json(
       { transcriptId: canonicalTranscript.id, status: "failed", error: userMessage },
-      { status: 422 }
+      { status: statusCode }
     );
   }
 
@@ -101,8 +103,58 @@ async function reportFetchFailure(
 
   return NextResponse.json(
     { transcriptId: failedTranscript?.id, status: "failed", error: userMessage },
-    { status: 422 }
+    { status: statusCode }
   );
+}
+
+/**
+ * Classifies a caption-fetch failure into a stable (logTag, userMessage,
+ * statusCode) triple using the actual error class thrown by the
+ * youtube-transcript library, instead of fragile substring matching on the
+ * message text. A rate-limit/CAPTCHA block from YouTube (transient, affects
+ * every video) must never be reported to the user identically to a video
+ * that genuinely has no captions (permanent, video-specific) — conflating
+ * the two hid a systemic scraper block behind a "captions are disabled"
+ * message that pointed at the wrong cause.
+ */
+function classifyCaptionFetchError(
+  err: unknown,
+  language: string
+): { logTag: string; userMessage: string; statusCode: number } {
+  if (err instanceof YoutubeTranscriptTooManyRequestError) {
+    return {
+      logTag: "rate_limited",
+      userMessage:
+        "YouTube is temporarily blocking automated caption requests from our server. Please try again in a few minutes.",
+      statusCode: 503,
+    };
+  }
+  if (err instanceof YoutubeTranscriptVideoUnavailableError) {
+    return {
+      logTag: "video_unavailable",
+      userMessage: "This video is unavailable (private, deleted, or restricted in some regions).",
+      statusCode: 422,
+    };
+  }
+  if (err instanceof YoutubeTranscriptNotAvailableLanguageError) {
+    return {
+      logTag: "language_unavailable",
+      userMessage: `No ${language} captions available. Try a video with English captions enabled.`,
+      statusCode: 422,
+    };
+  }
+  if (err instanceof YoutubeTranscriptDisabledError || err instanceof YoutubeTranscriptNotAvailableError) {
+    return {
+      logTag: "captions_disabled",
+      userMessage: "Captions are disabled for this video. Please choose a video with captions enabled.",
+      statusCode: 422,
+    };
+  }
+  return {
+    logTag: "unknown",
+    userMessage: "Captions are disabled for this video. Please choose a video with captions enabled.",
+    statusCode: 422,
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -191,13 +243,19 @@ export async function POST(request: NextRequest) {
         // falls back to the manual-paste UI, so this isn't a server error.
         // Log a concise line instead of the full stack trace.
         const errMsg = captionErr instanceof Error ? captionErr.message : String(captionErr);
-        console.warn(`[transcript generate] caption fetch unavailable for ${videoId}: ${errMsg}`);
-        const isLangUnavailable = errMsg.toLowerCase().includes("no transcripts") ||
-          errMsg.toLowerCase().includes("language");
-        const userMessage = isLangUnavailable
-          ? `No ${language} captions available. Try a video with English captions enabled.`
-          : "Captions are disabled for this video. Please choose a video with captions enabled.";
-        return reportFetchFailure(supabase, canonicalTranscript, hasWorkingTranscriptToPreserve, videoId, language, userMessage);
+        const { logTag, userMessage, statusCode } = classifyCaptionFetchError(captionErr, language);
+        console.warn(
+          `[transcript generate] caption fetch unavailable for ${videoId} (${logTag}): ${errMsg}`
+        );
+        return reportFetchFailure(
+          supabase,
+          canonicalTranscript,
+          hasWorkingTranscriptToPreserve,
+          videoId,
+          language,
+          userMessage,
+          statusCode
+        );
       }
 
       if (!ytItems || ytItems.length === 0) {
