@@ -1,0 +1,29 @@
+{
+  "_note": "PARTIAL calibration fixture — 24 sentences. The plan calls for ~100-200 human-reviewed sentences before production rollout (Phase 3); this is a starting seed covering the required categories, not the full set. Expand before enabling for real users. Each entry's `expectedHighlights` is this implementation's own best-effort guess pending actual human review — treat as a draft to correct, not ground truth.",
+  "sentences": [
+    { "text": "Farm animals destined for food vanish—whisked away to another planet.", "category": "phrasal_verb", "expectedHighlights": ["destined", "whisked away"] },
+    { "text": "The universe expands rapidly, and new emissions targets were announced.", "category": "inflection", "expectedHighlights": ["expands", "emissions"] },
+    { "text": "I am here.", "category": "common_words", "expectedHighlights": [] },
+    { "text": "The proliferation of ubiquitous computing devices continues.", "category": "academic_term", "expectedHighlights": ["proliferation", "ubiquitous"] },
+    { "text": "He decided to give up after the third attempt.", "category": "phrasal_verb", "expectedHighlights": ["give up"] },
+    { "text": "She isn't ready to go yet.", "category": "contraction", "expectedHighlights": [] },
+    { "text": "They're planning a 24-hour hackathon this weekend.", "category": "contraction_hyphen", "expectedHighlights": [] },
+    { "text": "The committee will reconvene to discuss the ramifications.", "category": "academic_term", "expectedHighlights": ["reconvene", "ramifications"] },
+    { "text": "Um, so like, it was kind of weird, you know?", "category": "transcript_error", "expectedHighlights": [] },
+    { "text": "The whisk away trick fooled everyone in the audience.", "category": "phrasal_verb", "expectedHighlights": ["whisk away"] },
+    { "text": "Sarah walked into the room and greeted everyone warmly.", "category": "proper_noun", "expectedHighlights": [] },
+    { "text": "Google announced new emissions targets for its data centers.", "category": "proper_noun", "expectedHighlights": ["emissions"] },
+    { "text": "The access road was blocked by construction equipment.", "category": "multiword_expression", "expectedHighlights": ["access road"] },
+    { "text": "He gave up smoking last year after decades of trying.", "category": "phrasal_verb", "expectedHighlights": ["gave up"] },
+    { "text": "The rare orchid bloomed for the first time in a decade.", "category": "rare_word", "expectedHighlights": ["orchid"] },
+    { "text": "We need to look into this matter further.", "category": "phrasal_verb", "expectedHighlights": ["look into"] },
+    { "text": "The economy grew by three point two percent last quarter.", "category": "common_words", "expectedHighlights": [] },
+    { "text": "Her demeanor remained calm despite the escalating chaos.", "category": "rare_word", "expectedHighlights": ["demeanor", "escalating"] },
+    { "text": "Put off the meeting until next Tuesday, please.", "category": "phrasal_verb", "expectedHighlights": ["put off"] },
+    { "text": "The children played happily in the park all afternoon.", "category": "common_words", "expectedHighlights": [] },
+    { "text": "This ephemeral phenomenon disappears within seconds of forming.", "category": "academic_term", "expectedHighlights": ["ephemeral", "phenomenon"] },
+    { "text": "Turn off the lights before you leave the office.", "category": "phrasal_verb", "expectedHighlights": ["turn off"] },
+    { "text": "Bring up the topic gently during tomorrow's discussion.", "category": "phrasal_verb", "expectedHighlights": ["bring up"] },
+    { "text": "The, the, sorry, the results were inconclusive overall.", "category": "transcript_error", "expectedHighlights": ["inconclusive"] }
+  ]
+}

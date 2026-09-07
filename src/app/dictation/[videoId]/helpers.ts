@@ -45,16 +45,28 @@ interface HighlightedPhraseRun {
 }
 
 /**
- * Given a sentence and a list of AI-picked difficult phrases, returns each
- * phrase's contiguous run of token indexes into splitSentenceIntoTokens(text)
- * — including the whitespace tokens *between* its words, so a phrase like
+ * Given a sentence and a list of difficult phrases, returns each phrase's
+ * contiguous run of token indexes into splitSentenceIntoTokens(text) —
+ * including the whitespace tokens *between* its words, so a phrase like
  * "make sense of" can be rendered as a single seamless span rather than
  * three separately underlined words with gaps at the spaces.
+ *
+ * Phrases carrying explicit start/end offsets (the deterministic pipeline
+ * always provides these) are located directly by offset, so every
+ * occurrence of a repeated phrase highlights independently. Phrases without
+ * offsets (only possible for a pre-migration legacy cached row) fall back
+ * to a first-occurrence substring search, matching the old behavior.
  */
 function getHighlightedPhraseRuns(text: string, phrases: VocabHighlightPhrase[]): HighlightedPhraseRun[] {
   const lowerText = text.toLowerCase();
   const ranges: Array<[number, number]> = [];
-  for (const { phrase } of phrases) {
+  for (const { phrase, start: explicitStart, end: explicitEnd } of phrases) {
+    if (typeof explicitStart === "number" && typeof explicitEnd === "number") {
+      if (explicitStart >= 0 && explicitEnd <= text.length && explicitStart < explicitEnd) {
+        ranges.push([explicitStart, explicitEnd]);
+      }
+      continue;
+    }
     const needle = phrase.toLowerCase().trim();
     if (!needle) continue;
     const start = lowerText.indexOf(needle);

@@ -490,7 +490,13 @@ export default function DictationPage({ params }: PageProps) {
     wantTranslation: subtitleVisibility.translation !== "hide",
   });
 
-  const { phrasesBySegmentIndex, highlightsError: vocabHighlightsError } = useVocabHighlights({
+  const {
+    phrasesBySegmentIndex,
+    highlightsError: vocabHighlightsError,
+    regenerateVocabHighlights,
+    regeneratingHighlights,
+    regenerateHighlightsError,
+  } = useVocabHighlights({
     videoId,
     transcriptId: segments[0]?.transcript_id,
     enabled: rightPanelTab === "script",
@@ -970,6 +976,9 @@ export default function DictationPage({ params }: PageProps) {
             regenerateTranslation={() => void regenerateTranslation()}
             regeneratingTranslation={regeneratingTranslation}
             regenerateTranslationError={regenerateTranslationError}
+            regenerateVocabHighlights={() => void regenerateVocabHighlights()}
+            regeneratingHighlights={regeneratingHighlights}
+            regenerateHighlightsError={regenerateHighlightsError}
             onRegenerateScript={handleRegenerateClick}
             regenerating={regenerating}
             regenerateError={regenerateError}

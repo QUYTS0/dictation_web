@@ -17,6 +17,9 @@ const eslintConfig = defineConfig([
     ".prettierignore/**",
     ".vercelignore/**",
     ".eslintignore/**",
+    // Standalone Node/CommonJS build tooling (dataset preprocessing scripts,
+    // run via plain `node`, not part of the Next.js app's TS build).
+    "scripts/**",
   ]),
 ]);
 

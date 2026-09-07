@@ -125,6 +125,51 @@ export async function checkGeminiQuota(): Promise<GeminiQuotaResult> {
   return { allowed: true };
 }
 
+// Azure Language F0's 5,000 text-records/month pool is shared across
+// several Language features on the same resource (sentiment analysis, key
+// phrase extraction, language detection, NER, question answering, CLU) —
+// this counter is a conservative internal application budget only, NOT an
+// authoritative mirror of Azure Portal's own usage metering, which remains
+// the source of truth for actual billing. Unlike the Gemini counters above
+// (always +1 per call), a single Key Phrase Extraction document can cost
+// more than one text record (ceil(charLength/1000)), so this increments by
+// a variable amount.
+const AZURE_KEY_PHRASE_MONTH_KEY = "azure-key-phrase-quota:month";
+const AZURE_KEY_PHRASE_MONTH_SECONDS = 31 * 24 * 60 * 60;
+
+async function incrementWindowBy(key: string, amount: number, limit: number, windowSec: number): Promise<WindowResult> {
+  const redis = getRedis();
+  if (!redis) return { allowed: true, count: 0, retryAfterSec: 0 };
+
+  const count = await redis.incrby(key, amount);
+  if (count === amount) {
+    // First increment in this window — start its expiry now.
+    await redis.expire(key, windowSec);
+  }
+
+  if (count > limit) {
+    const ttl = await redis.ttl(key);
+    return { allowed: false, count, retryAfterSec: ttl > 0 ? ttl : windowSec };
+  }
+  return { allowed: true, count, retryAfterSec: 0 };
+}
+
+/**
+ * Call before sending an Azure Key Phrase Extraction request, with the
+ * request's real text-record cost (sum of ceil(charLength/1000) per
+ * document actually being sent). Returns allowed:false once the
+ * conservative monthly budget (AZURE_KEY_PHRASE_MONTHLY_RECORD_BUDGET) is
+ * reached — callers must stop issuing further Azure requests for the rest
+ * of the run, not retry.
+ */
+export async function checkAzureKeyPhraseQuota(
+  textRecordCost: number,
+  monthlyBudget: number
+): Promise<{ allowed: boolean; retryAfterSec?: number }> {
+  const result = await incrementWindowBy(AZURE_KEY_PHRASE_MONTH_KEY, textRecordCost, monthlyBudget, AZURE_KEY_PHRASE_MONTH_SECONDS);
+  return { allowed: result.allowed, retryAfterSec: result.allowed ? undefined : result.retryAfterSec };
+}
+
 export interface GeminiQuotaStatus {
   /** False when Upstash isn't configured — usage isn't actually tracked. */
   configured: boolean;

@@ -49,6 +49,9 @@ Supabase (Postgres + Auth) · Google Gemini
 - `npm run build` — production build
 - `npm run lint` — ESLint
 - `npm test` — Jest unit tests
+- `npm run build:vocab-datasets` — regenerates the deterministic vocab-highlight
+  pipeline's derived datasets (see `scripts/build-vocab-datasets/README.md`
+  and `THIRD_PARTY_NOTICES.md`)
 
 CI (`.github/workflows/ci.yml`) runs lint, tests, and build on every push/PR to `main`.
 

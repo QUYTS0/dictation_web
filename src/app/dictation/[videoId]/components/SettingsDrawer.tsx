@@ -80,6 +80,9 @@ export function SettingsDrawer({
   regenerateTranslation,
   regeneratingTranslation,
   regenerateTranslationError,
+  regenerateVocabHighlights,
+  regeneratingHighlights,
+  regenerateHighlightsError,
   onRegenerateScript,
   regenerating,
   regenerateError,
@@ -110,6 +113,13 @@ export function SettingsDrawer({
   regenerateTranslation: () => void;
   regeneratingTranslation: boolean;
   regenerateTranslationError: string | null;
+  /** Separate from regenerateTranslation/onRegenerateScript — only re-runs
+   *  the deterministic local (winkNLP/EFLLex/SUBTLEX/WordNet, + optional
+   *  Azure) vocabulary-highlight pipeline; doesn't touch translation or the
+   *  transcript itself. */
+  regenerateVocabHighlights: () => void;
+  regeneratingHighlights: boolean;
+  regenerateHighlightsError: string | null;
   onRegenerateScript: () => void;
   regenerating: boolean;
   regenerateError: string | null;
@@ -290,6 +300,14 @@ export function SettingsDrawer({
                   {regeneratingTranslation ? "Regenerating translation…" : "Regenerate translation"}
                 </button>
                 <button
+                  onClick={regenerateVocabHighlights}
+                  disabled={regeneratingHighlights}
+                  title="Re-run difficult-word highlighting for this video's script"
+                  className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-xs font-semibold text-[var(--accent)] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {regeneratingHighlights ? "Regenerating highlights…" : "Regenerate vocabulary highlights"}
+                </button>
+                <button
                   onClick={onRegenerateScript}
                   disabled={regenerating}
                   title="Re-fetch this video's script from YouTube's captions if it doesn't match the audio"
@@ -308,6 +326,7 @@ export function SettingsDrawer({
                 {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
                 {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
                 {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
+                {regenerateHighlightsError && <p className="text-xs text-[var(--red)]">{regenerateHighlightsError}</p>}
               </div>
             </div>
 

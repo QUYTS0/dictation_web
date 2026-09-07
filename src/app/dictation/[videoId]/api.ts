@@ -110,12 +110,14 @@ export async function fetchTranslation(
 
 export async function fetchVocabHighlights(
   videoId: string,
-  transcriptId: string
+  transcriptId: string,
+  learningLevel?: string,
+  force = false
 ): Promise<VocabHighlightsResponse> {
   const res = await fetch("/api/transcript/vocab-highlights", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ videoId, transcriptId }),
+    body: JSON.stringify({ videoId, transcriptId, learningLevel, force }),
   });
   if (!res.ok) throw new Error("Failed to fetch vocab highlights");
   return res.json();

@@ -171,12 +171,17 @@ export interface VocabHighlightPhrase {
   /** Exact substring of the segment's text worth a learner's attention. */
   phrase: string;
   /**
-   * Gemini's translation of the phrase as used in that sentence, computed in
-   * the same call that picked the phrase — reused for free instead of a
-   * separate translation request. Null for rows cached before translations
-   * were added (the client falls back to /api/vocabulary/preview for those).
+   * Null when no translation is available for this highlight — the client
+   * falls back to /api/vocabulary/preview for those (see
+   * useLessonCapture.ts's showPhrasePreview). The deterministic pipeline
+   * never produces its own translation; only legacy Gemini-era rows do.
    */
   translation: string | null;
+  /** Half-open [start, end) UTF-16 offsets into this segment's text_raw.
+   *  Optional: absent on any pre-migration cached row, which still renders
+   *  via helpers.ts's substring-search fallback. */
+  start?: number;
+  end?: number;
 }
 
 export interface VocabHighlightSegment {
@@ -187,12 +192,22 @@ export interface VocabHighlightSegment {
 export interface VocabHighlightsRequest {
   videoId: string;
   transcriptId: string;
+  /** Defaults server-side to DEFAULT_LEARNING_LEVEL when omitted. */
+  learningLevel?: "A1" | "A2" | "B1" | "B2" | "C1";
+  /** Bypasses the cache read for the current (learningLevel, pipelineVersion)
+   *  pair and recomputes. Mirrors transcript/translate's `force`. */
+  force?: boolean;
 }
 
 export interface VocabHighlightsResponse {
   status: "ready" | "error";
   highlights: VocabHighlightSegment[];
   error?: string;
+  /** true when one or more requested segments could not be resolved this
+   *  request (transient failure/deadline) and should be retried later —
+   *  lets the client distinguish "still pending" from "genuinely no
+   *  highlights". */
+  incomplete?: boolean;
 }
 
 export interface CheckAnswerRequest {
