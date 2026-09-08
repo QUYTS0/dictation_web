@@ -20,7 +20,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
     "motion": "^12.23.24",
-    "next": "16.2.3",
+    "next": "^16.3.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "subtlex-word-frequencies": "^2.0.0",

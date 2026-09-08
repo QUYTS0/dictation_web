@@ -52,7 +52,14 @@ const NLP4J_TO_UNIVERSAL: Record<string, string[]> = {
 
 let cached: RawEfllexFile | null = null;
 function loadRaw(): RawEfllexFile {
-  cached ??= JSON.parse(readFileSync(join(__dirname, "data", "efllex.json"), "utf8")) as RawEfllexFile;
+  // __dirname is unreliable here: Turbopack's bundled server output replaces
+  // it with a build-cache placeholder rather than the real source directory,
+  // so a __dirname-relative readFileSync 404s at runtime (ENOENT on
+  // 'C:\ROOT\...'). process.cwd() is the Next.js project root in both dev
+  // and prod and resolves correctly.
+  cached ??= JSON.parse(
+    readFileSync(join(process.cwd(), "src", "lib", "vocabHighlights", "data", "efllex.json"), "utf8"),
+  ) as RawEfllexFile;
   return cached;
 }
 
