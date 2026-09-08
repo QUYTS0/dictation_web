@@ -45,6 +45,19 @@ export function scoreCandidate(candidate: HighlightCandidate, learningLevel: Lea
     reasons.push("azure-topic-phrase");
   }
 
+  // Extra credit for a verified, complete construction (constructions.ts)
+  // over an arbitrary same-tier n-gram — on top of, not instead of, the
+  // kind-based bonus above.
+  if (candidate.canonicalForm) {
+    score += SCORING.CONSTRUCTION_BONUS;
+    reasons.push("construction-bonus");
+  }
+
+  if (candidate.isHyphenCompound && !candidate.evidence?.efllex) {
+    score += SCORING.HYPHEN_COMPOUND_BONUS;
+    reasons.push("hyphen-compound-bonus");
+  }
+
   if (reasons.includes("named-entity-suspected")) {
     score += SCORING.NAMED_ENTITY_PENALTY;
   }

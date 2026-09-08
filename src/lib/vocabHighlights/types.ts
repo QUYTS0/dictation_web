@@ -7,7 +7,7 @@ import type { LearningLevel } from "./publicConfig";
 import type { SubtlexFrequencyBand } from "./config";
 
 export type CandidateKind = "word" | "phrasal_verb" | "idiom" | "multiword_expression" | "topic_phrase";
-export type CandidateSource = "efllex" | "subtlex" | "wordnet" | "azure_key_phrase";
+export type CandidateSource = "efllex" | "subtlex" | "wordnet" | "azure_key_phrase" | "supplementary" | "construction";
 
 export type WordEvidence = {
   /** estimatedLevel: null means the lemma's cumulative EFLLex frequency
@@ -35,6 +35,20 @@ export type HighlightCandidate = {
   /** An ESTIMATE derived from learner-corpus frequency evidence, never an
    *  authoritative CEFR label. Never set for azure_key_phrase candidates. */
   estimatedLevel?: LearningLevel;
+  /** Set only by the construction-expansion stage (constructions.ts) — the
+   *  dictionary/normalized form this surface span is an instance of, e.g.
+   *  "pair with" for the surface "paired with". Distinguishes a reusable
+   *  lexical construction from the exact wording that happened to appear in
+   *  this sentence (`originalText`, the surfaceText). */
+  canonicalForm?: string;
+  /** Optional reusable explanation of the construction's usage pattern,
+   *  e.g. "go a long way toward(s) + noun/V-ing". Construction-expansion
+   *  only; never set by other candidate sources. */
+  learningPattern?: string;
+  /** Set for a candidate produced by hyphen-compound merging (e.g.
+   *  "meat-eating") — used by scoring.ts to apply a dedicated bonus since
+   *  compound forms are rarely themselves present in EFLLex/SUBTLEX. */
+  isHyphenCompound?: boolean;
   score: number;
   reasons: string[];
 };
@@ -61,4 +75,6 @@ export type PublicHighlightPhrase = {
   translation: string | null;
   start: number;
   end: number;
+  canonicalForm?: string;
+  learningPattern?: string;
 };

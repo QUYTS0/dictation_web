@@ -8,6 +8,8 @@ import {
 } from "./config";
 import { analyzeTranscript } from "./winkPipeline";
 import { generateSegmentCandidates } from "./candidates";
+import { expandConstructions } from "./constructions";
+import { validateLocalCandidates, isAzurePhraseBoundaryValid } from "./validation";
 import { scoreCandidate, scoreCandidates } from "./scoring";
 import { resolveOverlaps } from "./overlap";
 import { selectFinalCandidates } from "./selection";
@@ -179,8 +181,10 @@ export async function runPipeline(
       incompleteSegmentIndexes.push(seg.segmentIndex);
       continue;
     }
-    const candidates = generateSegmentCandidates(analysis, corroboratedPropnLemmas);
-    scoredBySegment.set(seg.segmentIndex, scoreCandidates(candidates, learningLevel));
+    const generated = generateSegmentCandidates(analysis, corroboratedPropnLemmas);
+    const expanded = [...generated, ...expandConstructions(analysis, generated)];
+    const validated = validateLocalCandidates(expanded, analysis);
+    scoredBySegment.set(seg.segmentIndex, scoreCandidates(validated, learningLevel));
   }
 
   // Azure enrichment: only for segments the local pass actually completed
@@ -200,6 +204,12 @@ export async function runPipeline(
 
     const azureCandidates = await enrichWithAzure(eligible, deadline);
     for (const { segmentIndex, candidate } of azureCandidates) {
+      const segmentAnalysis = analysisBySegment.get(segmentIndex);
+      // Azure has no lexicon backing at all, unlike local WordNet/EFLLex/
+      // construction candidates — a phrase ending in a bare preposition/
+      // particle here (e.g. "meat-eating in") is rejected outright rather
+      // than trusted merely for occurring as a substring.
+      if (!segmentAnalysis || !isAzurePhraseBoundaryValid(candidate, segmentAnalysis)) continue;
       const scored = scoreCandidate(candidate, learningLevel);
       scoredBySegment.get(segmentIndex)?.push(scored);
       azureUsedSegments.add(segmentIndex);
@@ -217,6 +227,8 @@ export async function runPipeline(
       translation: null,
       start: c.start,
       end: c.end,
+      ...(c.canonicalForm ? { canonicalForm: c.canonicalForm } : {}),
+      ...(c.learningPattern ? { learningPattern: c.learningPattern } : {}),
     }));
 
     bySegment.set(seg.segmentIndex, {

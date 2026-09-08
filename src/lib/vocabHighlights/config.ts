@@ -13,7 +13,7 @@ export { LEARNING_LEVELS, DEFAULT_LEARNING_LEVEL, type LearningLevel } from "./p
  * data/manifest.json is stored for observability only and does not
  * independently invalidate anything.
  */
-export const PIPELINE_VERSION = "vocab-pipeline-v1";
+export const PIPELINE_VERSION = "vocab-pipeline-v2";
 
 /** Legacy Gemini-era rows are backfilled with this value by the migration. */
 export const LEGACY_GEMINI_PIPELINE_VERSION = "gemini-legacy-v1";
@@ -65,6 +65,14 @@ export const SCORING = {
   AZURE_TOPIC_PHRASE_BONUS: 10,
   NAMED_ENTITY_PENALTY: -30,
   TRANSCRIPT_ERROR_PENALTY: -50,
+  /** Extra credit for a candidate the construction-expansion stage produced
+   *  or extended (canonicalForm is set) — reflects that it represents a
+   *  verified, complete learning unit rather than an arbitrary n-gram. */
+  CONSTRUCTION_BONUS: 15,
+  /** A hyphenated compound (e.g. "meat-eating") rarely has its own
+   *  EFLLex/SUBTLEX entry — this keeps it from scoring as if it were
+   *  worthless just because the compound-as-a-whole is unattested. */
+  HYPHEN_COMPOUND_BONUS: 20,
 };
 
 // ---- Overlap resolution ----
@@ -103,6 +111,18 @@ export const SELECTION = {
 export const HARD_EXCLUDED_ENTITY_TYPES = new Set([
   "EMAIL", "URL", "DATE", "TIME", "MONEY", "PERCENT", "CARDINAL", "ORDINAL", "HASHTAG", "EMOTICON", "EMOJI",
 ]);
+
+/** Universal POS tags with no independent vocabulary value on their own —
+ *  a defensive boundary-validation net (validation.ts) for any single-token
+ *  "word" candidate that reaches that stage, on top of winkNLP's own
+ *  stopWordFlag already filtering most of these at generation time. */
+export const FUNCTION_WORD_POS = new Set(["DET", "ADP", "CCONJ", "SCONJ", "PRON", "AUX", "PART"]);
+
+/** POS tags that make a candidate's trailing token "just a preposition/
+ *  particle with nothing construction-verified following it" — used only
+ *  for Azure-sourced topic phrases (validation.ts), which have no lexicon
+ *  backing at all, unlike local WordNet/EFLLex/construction candidates. */
+export const TRAILING_PREPOSITION_POS = new Set(["ADP", "PART", "SCONJ"]);
 
 // ---- Azure Key Phrase Extraction (optional enrichment) ----
 

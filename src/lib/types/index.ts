@@ -182,6 +182,16 @@ export interface VocabHighlightPhrase {
    *  via helpers.ts's substring-search fallback. */
   start?: number;
   end?: number;
+  /** Dictionary/normalized form this exact wording is an instance of, e.g.
+   *  "pair with" for the surface "paired with". Set only when the
+   *  construction-expansion stage produced/extended this highlight.
+   *  Not currently rendered by any UI — reserved for a future vocabulary-
+   *  preview enhancement. */
+  canonicalForm?: string;
+  /** Optional reusable usage pattern, e.g. "go a long way toward(s) +
+   *  noun/V-ing". Same construction-expansion-only, not-yet-rendered status
+   *  as canonicalForm. */
+  learningPattern?: string;
 }
 
 export interface VocabHighlightSegment {
