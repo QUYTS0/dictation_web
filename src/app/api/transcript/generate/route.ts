@@ -16,6 +16,49 @@ import { mergeIntoSentences } from "@/lib/utils/segment";
 const TRANSIENT_RETRY_DELAY_MS = 1000;
 
 /**
+ * youtube-transcript swallows all detail about *why* it failed: its InnerTube
+ * call silently returns undefined on any error, and its webpage-scrape
+ * fallback only ever surfaces one of a few generic exceptions. In particular
+ * "captions disabled" fires whenever the scraped page's player response has
+ * no caption tracks — which is indistinguishable, from the outside, between
+ * a genuinely caption-less video and YouTube serving a bot-limited response
+ * to a suspected datacenter/non-browser IP. This wraps the library's fetch
+ * (it accepts a custom one via TranscriptConfig.fetch) purely to log what
+ * each outbound call actually returned, so a failure is diagnosable from
+ * Vercel logs instead of being a black box.
+ */
+function createDiagnosticFetch(videoId: string): typeof fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    try {
+      if (url.includes("/youtubei/v1/player")) {
+        const json = await response.clone().json();
+        const tracks = json?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        console.log(
+          `[transcript generate] diag innertube ${videoId}: httpStatus=${response.status} ` +
+          `playabilityStatus=${json?.playabilityStatus?.status ?? "?"} ` +
+          `captionTracks=${Array.isArray(tracks) ? tracks.length : "none"}`
+        );
+      } else if (url.includes("youtube.com/watch")) {
+        const text = await response.clone().text();
+        const statusMatch = text.match(/"playabilityStatus":\s*\{\s*"status":\s*"([^"]+)"/);
+        console.log(
+          `[transcript generate] diag webpage ${videoId}: httpStatus=${response.status} bodyLen=${text.length} ` +
+          `recaptcha=${text.includes('class="g-recaptcha"')} ` +
+          `hasPlayability=${text.includes('"playabilityStatus":')} ` +
+          `playabilityStatus=${statusMatch?.[1] ?? "?"} ` +
+          `hasCaptionTracks=${text.includes('"captionTracks"')}`
+        );
+      }
+    } catch (diagErr) {
+      console.log(`[transcript generate] diag fetch logging failed for ${videoId}: ${String(diagErr)}`);
+    }
+    return response;
+  };
+}
+
+/**
  * Retries once on errors that don't definitively mean "this video has no
  * captions" (e.g. YouTube's rate-limit/captcha response, or a network blip) —
  * without this, a single transient hiccup permanently stamps the transcript
@@ -23,8 +66,9 @@ const TRANSIENT_RETRY_DELAY_MS = 1000;
  * "processing", not "failed").
  */
 async function fetchTranscriptWithRetry(videoId: string, language: string) {
+  const config = { lang: language, fetch: createDiagnosticFetch(videoId) };
   try {
-    return await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+    return await YoutubeTranscript.fetchTranscript(videoId, config);
   } catch (err) {
     const isPermanent =
       err instanceof YoutubeTranscriptDisabledError ||
@@ -38,7 +82,7 @@ async function fetchTranscriptWithRetry(videoId: string, language: string) {
       `[transcript generate] transient caption fetch error for ${videoId}, retrying once: ${errMsg}`
     );
     await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
-    return await YoutubeTranscript.fetchTranscript(videoId, { lang: language });
+    return await YoutubeTranscript.fetchTranscript(videoId, config);
   }
 }
 
