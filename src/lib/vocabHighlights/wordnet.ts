@@ -13,7 +13,14 @@ interface RawWordnetFile {
 
 let cached: RawWordnetFile | null = null;
 function loadRaw(): RawWordnetFile {
-  cached ??= JSON.parse(readFileSync(join(__dirname, "data", "wordnetMultiwords.json"), "utf8")) as RawWordnetFile;
+  // __dirname is unreliable here: Turbopack's bundled server output replaces
+  // it with a build-cache placeholder rather than the real source directory,
+  // so a __dirname-relative readFileSync 404s at runtime (ENOENT on
+  // 'C:\ROOT\...'). process.cwd() is the Next.js project root in both dev
+  // and prod and resolves correctly.
+  cached ??= JSON.parse(
+    readFileSync(join(process.cwd(), "src", "lib", "vocabHighlights", "data", "wordnetMultiwords.json"), "utf8"),
+  ) as RawWordnetFile;
   return cached;
 }
 
