@@ -1,4 +1,4 @@
-import { buildScriptRenderItems } from "@/app/dictation/[videoId]/helpers";
+import { buildScriptRenderItems, findHighlightPhrase } from "@/app/dictation/[videoId]/helpers";
 import type { VocabHighlightPhrase } from "@/lib/types";
 
 describe("buildScriptRenderItems with offset-based phrases", () => {
@@ -40,5 +40,54 @@ describe("buildScriptRenderItems with offset-based phrases", () => {
     const text = "short text";
     const phrases: VocabHighlightPhrase[] = [{ phrase: "bogus", translation: null, start: 500, end: 600 }];
     expect(() => buildScriptRenderItems(text, phrases)).not.toThrow();
+  });
+});
+
+// findHighlightPhrase is what the click-to-save popover and the hover/tap
+// tooltip both use to recover a clicked highlight's full metadata (including
+// canonicalForm/learningPattern) from plain selected text — this is the exact
+// lookup that closes the gap between the highlights query (which always has
+// the metadata) and the popover state (which previously discarded it).
+describe("findHighlightPhrase", () => {
+  const phrases: VocabHighlightPhrase[] = [
+    {
+      phrase: "go a long way toward",
+      translation: "góp phần rất lớn vào",
+      start: 0,
+      end: 21,
+      canonicalForm: "go a long way",
+      learningPattern: "go a long way toward(s) + noun/V-ing",
+    },
+    { phrase: "meat-eating", translation: "ăn thịt", start: 30, end: 41 },
+  ];
+
+  it("returns the full highlight object, including canonicalForm/learningPattern, for an exact match", () => {
+    const match = findHighlightPhrase(phrases, "go a long way toward");
+    expect(match?.canonicalForm).toBe("go a long way");
+    expect(match?.learningPattern).toBe("go a long way toward(s) + noun/V-ing");
+    expect(match?.translation).toBe("góp phần rất lớn vào");
+  });
+
+  it("matches case- and whitespace-insensitively, as a real DOM selection would produce", () => {
+    const match = findHighlightPhrase(phrases, "  GO A LONG WAY TOWARD  ");
+    expect(match?.learningPattern).toBe("go a long way toward(s) + noun/V-ing");
+  });
+
+  it("returns undefined (not a placeholder) for a highlight with no learningPattern", () => {
+    const match = findHighlightPhrase(phrases, "meat-eating");
+    expect(match).toBeDefined();
+    expect(match?.learningPattern).toBeUndefined();
+  });
+
+  it("returns undefined for text that matches no highlight (free-form selection)", () => {
+    expect(findHighlightPhrase(phrases, "some unrelated selection")).toBeUndefined();
+  });
+
+  it("returns undefined for an empty/whitespace-only selection", () => {
+    expect(findHighlightPhrase(phrases, "   ")).toBeUndefined();
+  });
+
+  it("returns undefined rather than throwing when no phrases are available for the segment", () => {
+    expect(findHighlightPhrase(undefined, "go a long way toward")).toBeUndefined();
   });
 });

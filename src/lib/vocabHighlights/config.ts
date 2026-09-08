@@ -13,7 +13,7 @@ export { LEARNING_LEVELS, DEFAULT_LEARNING_LEVEL, type LearningLevel } from "./p
  * data/manifest.json is stored for observability only and does not
  * independently invalidate anything.
  */
-export const PIPELINE_VERSION = "vocab-pipeline-v2";
+export const PIPELINE_VERSION = "vocab-pipeline-v3";
 
 /** Legacy Gemini-era rows are backfilled with this value by the migration. */
 export const LEGACY_GEMINI_PIPELINE_VERSION = "gemini-legacy-v1";

@@ -18,6 +18,23 @@ describe("construction expansion — generalizes beyond the reported examples", 
     expect(match!.kind).toBe("phrasal_verb");
   });
 
+  it("attaches a reusable learningPattern for the pair-with construction, across inflections", () => {
+    const expanded = expandFor("Business as usual food systems paired with a growing population push temperatures up.");
+    const match = expanded.find((c) => c.canonicalForm === "pair with");
+    expect(match).toBeDefined();
+    expect(match!.learningPattern).toBe("pair A with B / be paired with something");
+  });
+
+  it("attaches a reusable learningPattern for the thanks-to construction, with and without its infix", () => {
+    const withInfix = expandFor("Crime dropped, thanks in part to better lighting.");
+    const withInfixMatch = withInfix.find((c) => c.canonicalForm === "thanks to");
+    expect(withInfixMatch?.learningPattern).toBe("thanks to + noun");
+
+    const withoutInfix = expandFor("Crime dropped, thanks to better lighting.");
+    const withoutInfixMatch = withoutInfix.find((c) => c.canonicalForm === "thanks to");
+    expect(withoutInfixMatch?.learningPattern).toBe("thanks to + noun");
+  });
+
   it("matches the same verb-complement construction via passive/past-participle inflection (based on)", () => {
     const expanded = expandFor("The decision was based on new evidence.");
     expect(expanded.some((c) => c.originalText.toLowerCase() === "based on")).toBe(true);
@@ -51,10 +68,23 @@ describe("construction expansion — generalizes beyond the reported examples", 
     // the middle is a materially different, harder-to-bound pattern and is
     // intentionally out of scope (see the final report's limitations).
     const withQuantity = expandFor("The new engine produces three times as much as the old one.");
-    expect(withQuantity.some((c) => c.originalText.toLowerCase() === "three times as much as")).toBe(true);
+    const withQuantityMatch = withQuantity.find((c) => c.originalText.toLowerCase() === "three times as much as");
+    expect(withQuantityMatch).toBeDefined();
+    expect(withQuantityMatch!.learningPattern).toBe("N times as much as + uncountable noun");
 
     const bare = expandFor("She earns as much as her brother.");
-    expect(bare.some((c) => c.originalText.toLowerCase() === "as much as")).toBe(true);
+    const bareMatch = bare.find((c) => c.originalText.toLowerCase() === "as much as");
+    expect(bareMatch).toBeDefined();
+    // No preceding quantity — the quantified "N times as much as" pattern
+    // isn't actually instantiated by this span, so no pattern is attached.
+    expect(bareMatch!.learningPattern).toBeUndefined();
+  });
+
+  it("gives the 'many' comparative frame a distinct plural-countable-noun pattern from 'much'", () => {
+    const expanded = expandFor("This team recruited ten times as many as last year.");
+    const match = expanded.find((c) => c.originalText.toLowerCase() === "ten times as many as");
+    expect(match).toBeDefined();
+    expect(match!.learningPattern).toBe("N times as many as + plural countable noun");
   });
 
   it("rejects the bare 'much as' fragment in favor of the full comparative frame span", () => {

@@ -1492,6 +1492,21 @@ export default function DictationPage({ params }: PageProps) {
                     </button>
                   </p>
                 )}
+
+                {/* Deterministic structural metadata from the highlight itself —
+                    independent of the translation fetch above, so it renders even
+                    while that's loading or has failed. Omitted entirely (no empty
+                    placeholder) when this highlight has no reusable pattern. */}
+                {scriptPopover.learningPattern && (
+                  <div className="mt-1.5 border-t border-[var(--border)]/60 pt-1.5">
+                    <div className="text-[9px] font-bold uppercase tracking-widest text-[var(--text-faint)]">
+                      Pattern
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-xs font-medium leading-snug text-[var(--text-muted)]">
+                      {scriptPopover.learningPattern}
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1 rounded-xl bg-[var(--surface-2)] p-1">
                 {scriptPopoverSavedFeedback ? (
@@ -1630,6 +1645,14 @@ export default function DictationPage({ params }: PageProps) {
               {!phraseHoverPreview.loading && phraseHoverPreview.data?.wordDetails?.definition && (
                 <div className="mt-1 line-clamp-2 text-[var(--text-muted)]">
                   {phraseHoverPreview.data.wordDetails.definition}
+                </div>
+              )}
+              {phraseHoverPreview.learningPattern && (
+                <div className="mt-1 border-t border-[var(--border)]/60 pt-1">
+                  <div className="text-[9px] font-bold uppercase tracking-widest text-[var(--text-faint)]">
+                    Pattern
+                  </div>
+                  <div className="break-words text-[var(--text-muted)]">{phraseHoverPreview.learningPattern}</div>
                 </div>
               )}
             </motion.div>

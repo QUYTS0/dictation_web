@@ -53,6 +53,38 @@ describe("readCachedHighlights", () => {
     expect(result.has(0)).toBe(false);
   });
 
+  it("passes canonicalForm/learningPattern through unchanged, and tolerates legacy rows without them", async () => {
+    const supabase = fakeSupabase(
+      selectChain([
+        {
+          segment_index: 0,
+          phrases: [
+            {
+              phrase: "go a long way toward",
+              translation: null,
+              start: 0,
+              end: 21,
+              canonicalForm: "go a long way",
+              learningPattern: "go a long way toward(s) + noun/V-ing",
+            },
+            // Legacy row generated before learningPattern/canonicalForm existed.
+            { phrase: "destined", translation: null, start: 30, end: 38 },
+          ],
+          status: "complete",
+          transcript_text_hash: "hash-0",
+          azure_used: false,
+        },
+      ])
+    );
+
+    const result = await readCachedHighlights(supabase, "t1", "B1", "v1", new Map([[0, "hash-0"]]));
+    const phrases = result.get(0)?.phrases ?? [];
+    expect(phrases[0].canonicalForm).toBe("go a long way");
+    expect(phrases[0].learningPattern).toBe("go a long way toward(s) + noun/V-ing");
+    expect(phrases[1].canonicalForm).toBeUndefined();
+    expect(phrases[1].learningPattern).toBeUndefined();
+  });
+
   it("returns an empty map on a database error rather than throwing", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;

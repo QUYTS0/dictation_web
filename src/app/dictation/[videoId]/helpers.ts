@@ -103,6 +103,23 @@ function getHighlightedPhraseRuns(text: string, phrases: VocabHighlightPhrase[])
   return runs;
 }
 
+/**
+ * Looks up the highlight metadata (translation, canonicalForm,
+ * learningPattern) for an exact phrase-text match within one segment's
+ * highlights — the single source of truth both the click-to-save popover and
+ * the hover/tap preview tooltip read from, so neither ever has to
+ * reconstruct this from plain selected text alone. Case/whitespace-
+ * insensitive, matching how the highlight was originally rendered.
+ */
+export function findHighlightPhrase(
+  phrases: VocabHighlightPhrase[] | undefined,
+  phraseText: string
+): VocabHighlightPhrase | undefined {
+  const key = phraseText.trim().toLowerCase();
+  if (!key) return undefined;
+  return phrases?.find((p) => p.phrase.trim().toLowerCase() === key);
+}
+
 export type ScriptRenderItem =
   | { kind: "space"; key: string; text: string }
   | { kind: "punct"; key: string; text: string }

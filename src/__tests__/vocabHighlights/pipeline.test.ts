@@ -66,6 +66,26 @@ describe("runPipeline (local-only)", () => {
     expect(seg.phrases).toHaveLength(0);
   });
 
+  it("final highlight projection preserves canonicalForm and learningPattern from the construction stage", async () => {
+    const constructionText =
+      "Reducing beef, cheese, and milk consumption could go a long way toward achieving many of the benefits of a meatless world.";
+    const result = await runPipeline([{ segmentIndex: 0, textRaw: constructionText }], "B1");
+    const seg = result.bySegment.get(0)!;
+    const match = seg.phrases.find((p) => p.phrase === "go a long way toward");
+    expect(match).toBeDefined();
+    expect(match!.canonicalForm).toBe("go a long way");
+    expect(match!.learningPattern).toBe("go a long way toward(s) + noun/V-ing");
+  });
+
+  it("omits canonicalForm/learningPattern entirely (no empty-string placeholder) for an ordinary word/phrase", async () => {
+    const result = await runPipeline([{ segmentIndex: 0, textRaw: text }], "B1");
+    const seg = result.bySegment.get(0)!;
+    for (const p of seg.phrases) {
+      expect(p).not.toHaveProperty("canonicalForm", "");
+      expect(p).not.toHaveProperty("learningPattern", "");
+    }
+  });
+
   it("relative difficulty changes with learner level", async () => {
     const text2 = "The proliferation of ubiquitous computing devices continues.";
     const forA1 = await runPipeline([{ segmentIndex: 0, textRaw: text2 }], "A1");

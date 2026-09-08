@@ -14,12 +14,15 @@ const cases: Array<{
   text: string;
   mustInclude: string[];
   mustNotInclude: string[];
+  /** phrase text -> expected learningPattern, for phrases that must carry one. */
+  mustHavePattern?: Record<string, string>;
 }> = [
   {
     name: "idiom + complement marker (go a long way toward)",
     text: "Reducing beef, cheese, and milk consumption could go a long way toward achieving many of the benefits of a meatless world.",
     mustInclude: ["go a long way toward"],
     mustNotInclude: ["go a long way", "long way", "toward"],
+    mustHavePattern: { "go a long way toward": "go a long way toward(s) + noun/V-ing" },
   },
   {
     name: "verb-complement construction + supplementary idiom (paired with / business as usual)",
@@ -27,6 +30,7 @@ const cases: Array<{
       "Even if we suddenly stopped burning fossil fuels, business as usual food systems paired with a growing population would push global temperatures over 1.5°C.",
     mustInclude: ["business as usual", "paired with"],
     mustNotInclude: ["paired", "as usual"],
+    mustHavePattern: { "paired with": "pair A with B / be paired with something" },
   },
   {
     name: "hyphen-compound merging + phrasal-verb false-positive guard (meat-eating, not eating in)",
@@ -39,6 +43,7 @@ const cases: Array<{
     text: "Millions of deaths are avoided every year, thanks in part to lower rates of heart disease.",
     mustInclude: ["thanks in part to"],
     mustNotInclude: ["in part", "thanks"],
+    mustHavePattern: { "thanks in part to": "thanks to + noun" },
   },
   {
     name: "quantifier construction (tens of millions, not bare Tens)",
@@ -57,6 +62,14 @@ const cases: Array<{
     text: "Farmed cattle alone weigh nearly ten times as much as all wild mammals combined.",
     mustInclude: [],
     mustNotInclude: ["much as"],
+    mustHavePattern: { "ten times as much as": "N times as much as + uncountable noun" },
+  },
+  {
+    name: "comparative frame (ten times as many as, not many as)",
+    text: "The new factory hires ten times as many as its smaller predecessor.",
+    mustInclude: [],
+    mustNotInclude: ["many as"],
+    mustHavePattern: { "ten times as many as": "N times as many as + plural countable noun" },
   },
   {
     name: "possessive clitic exclusion (world's)",
@@ -67,7 +80,7 @@ const cases: Array<{
 ];
 
 describe("regression examples", () => {
-  it.each(cases)("$name", async ({ text, mustInclude, mustNotInclude }) => {
+  it.each(cases)("$name", async ({ text, mustInclude, mustNotInclude, mustHavePattern }) => {
     const result = await runPipeline([{ segmentIndex: 0, textRaw: text }], "B1");
     const seg = result.bySegment.get(0);
     expect(seg).toBeDefined();
@@ -78,6 +91,11 @@ describe("regression examples", () => {
     }
     for (const forbidden of mustNotInclude) {
       expect(phraseTexts.map((p) => p.toLowerCase())).not.toContain(forbidden.toLowerCase());
+    }
+    for (const [phrase, pattern] of Object.entries(mustHavePattern ?? {})) {
+      const match = (seg?.phrases ?? []).find((p) => p.phrase === phrase);
+      expect(match).toBeDefined();
+      expect(match!.learningPattern).toBe(pattern);
     }
 
     // Every phrase: exact offsets, no leading/trailing punctuation, no overlaps.

@@ -40,6 +40,13 @@ export interface ScriptSelectionPopoverState {
   sentenceText: string;
   x: number;
   y: number;
+  /** Structural metadata from the highlight the selection exactly matches
+   *  (see findHighlightPhrase in helpers.ts) — undefined for a free-form
+   *  selection that isn't an AI-picked highlight, or for a highlight with no
+   *  reusable pattern. Always sourced from the *current* highlight object,
+   *  never from a previously-saved vocabulary row. */
+  canonicalForm?: string;
+  learningPattern?: string;
 }
 
 export type ComparedTokenStatus = "correct" | "missing" | "wrong" | "extra" | "neutral";

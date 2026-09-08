@@ -8,7 +8,13 @@ import {
   SCRIPT_POPOVER_VERTICAL_OFFSET_PX,
   SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR,
 } from "./constants";
-import { getSelectedType, splitSentenceIntoWords, inferSavedItemType, stripEdgePunctuation } from "./helpers";
+import {
+  getSelectedType,
+  splitSentenceIntoWords,
+  inferSavedItemType,
+  stripEdgePunctuation,
+  findHighlightPhrase,
+} from "./helpers";
 import type { LessonItemType, LessonSavedItem, ScriptSelectionPopoverState } from "./types";
 
 interface UseLessonCaptureOptions {
@@ -72,6 +78,11 @@ export function useLessonCapture({
     y: number;
     data: VocabularyPreviewResponse | null;
     loading: boolean;
+    /** Structural metadata from the matching highlight — see
+     *  findHighlightPhrase in helpers.ts. Independent of `data`/`loading`,
+     *  which only track the translation/dictionary lookup. */
+    canonicalForm?: string;
+    learningPattern?: string;
   } | null>(null);
 
   // Intentionally ref-only: keeps typing smooth without rerendering the
@@ -132,18 +143,23 @@ export function useLessonCapture({
     [segments]
   );
 
+  // Looks up the AI-generated highlight (if any) an exact selection/tap
+  // matches, for its structural metadata (canonicalForm/learningPattern) and
+  // any in-context translation produced during highlighting. The single
+  // lookup both the click-to-save popover and the hover/tap tooltip build
+  // their highlight-derived fields from.
+  const findHighlightPhraseMeta = useCallback(
+    (segmentIndex: number, phraseText: string) => findHighlightPhrase(phrasesBySegmentIndex.get(segmentIndex), phraseText),
+    [phrasesBySegmentIndex]
+  );
+
   // Looks up a known AI translation for an exact highlighted-phrase
   // selection, so the popover/tooltip can skip /api/vocabulary/preview
   // entirely when the phrase was already translated during highlighting.
   const findPhraseTranslation = useCallback(
-    (segmentIndex: number, phraseText: string): string | null => {
-      const key = phraseText.trim().toLowerCase();
-      if (!key) return null;
-      const phrases = phrasesBySegmentIndex.get(segmentIndex);
-      const match = phrases?.find((p) => p.phrase.trim().toLowerCase() === key);
-      return match?.translation ?? null;
-    },
-    [phrasesBySegmentIndex]
+    (segmentIndex: number, phraseText: string): string | null =>
+      findHighlightPhraseMeta(segmentIndex, phraseText)?.translation ?? null,
+    [findHighlightPhraseMeta]
   );
 
   // ---- Load saved vocabulary for this video ----
@@ -561,6 +577,12 @@ export function useLessonCapture({
       setScriptPopoverNoteMode(false);
       clearLearningNoteInputs();
       clearScriptPopoverSavedFeedback();
+      // A selection that exactly matches an AI-picked highlight (the normal
+      // case for clicking/tapping one) carries its structural metadata along
+      // into the popover; a free-form drag-selection that doesn't match any
+      // highlight simply gets none — the popover then just omits the Pattern
+      // section entirely.
+      const highlightMatch = findHighlightPhraseMeta(segmentIndex, selectedText);
       setScriptPopover({
         segmentIndex,
         selectedText,
@@ -568,9 +590,11 @@ export function useLessonCapture({
         sentenceText,
         x,
         y,
+        canonicalForm: highlightMatch?.canonicalForm,
+        learningPattern: highlightMatch?.learningPattern,
       });
     },
-    [clearLearningNoteInputs, clearScriptPopoverSavedFeedback, segmentsByIndex]
+    [clearLearningNoteInputs, clearScriptPopoverSavedFeedback, findHighlightPhraseMeta, segmentsByIndex]
   );
 
   const handleScriptMouseUp = useCallback(() => {
@@ -672,6 +696,13 @@ export function useLessonCapture({
       const key = phraseText.trim().toLowerCase();
       if (!key) return;
 
+      // Structural metadata is independent of the translation lookup below —
+      // it comes straight from the current highlight object and must show up
+      // even if the translation fetch fails or is still loading.
+      const highlightMatch = findHighlightPhraseMeta(segmentIndex, phraseText);
+      const canonicalForm = highlightMatch?.canonicalForm;
+      const learningPattern = highlightMatch?.learningPattern;
+
       const aiTranslation = findPhraseTranslation(segmentIndex, phraseText);
       if (aiTranslation) {
         dismissPhraseHoverPreview();
@@ -682,6 +713,8 @@ export function useLessonCapture({
           y,
           data: { translation: { text: aiTranslation, source: "gemini" }, wordDetails: null, image: null },
           loading: false,
+          canonicalForm,
+          learningPattern,
         });
         return;
       }
@@ -689,12 +722,12 @@ export function useLessonCapture({
       const cached = phrasePreviewCacheRef.current.get(key);
       if (cached) {
         dismissPhraseHoverPreview();
-        setPhraseHoverPreview({ key, text: phraseText, x, y, data: cached, loading: false });
+        setPhraseHoverPreview({ key, text: phraseText, x, y, data: cached, loading: false, canonicalForm, learningPattern });
         return;
       }
 
       dismissPhraseHoverPreview();
-      setPhraseHoverPreview({ key, text: phraseText, x, y, data: null, loading: true });
+      setPhraseHoverPreview({ key, text: phraseText, x, y, data: null, loading: true, canonicalForm, learningPattern });
 
       const controller = new AbortController();
       phraseHoverAbortRef.current = controller;
@@ -716,7 +749,7 @@ export function useLessonCapture({
           });
       }, 200);
     },
-    [dismissPhraseHoverPreview, findPhraseTranslation]
+    [dismissPhraseHoverPreview, findHighlightPhraseMeta, findPhraseTranslation]
   );
 
   /**

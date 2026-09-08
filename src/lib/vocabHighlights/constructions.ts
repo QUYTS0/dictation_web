@@ -42,7 +42,14 @@ interface ComplementConstruction {
 // matching is by LEMMA, not surface form (e.g. "paired"/"pairs"/"pairing"
 // all lemmatize to "pair").
 const COMPLEMENT_CONSTRUCTIONS: ComplementConstruction[] = [
-  { headLemma: "pair", headPos: ["VERB"], complements: ["with"], canonicalForm: "pair with", kind: "phrasal_verb" },
+  {
+    headLemma: "pair",
+    headPos: ["VERB"],
+    complements: ["with"],
+    canonicalForm: "pair with",
+    learningPattern: "pair A with B / be paired with something",
+    kind: "phrasal_verb",
+  },
   { headLemma: "responsible", headPos: ["ADJ"], complements: ["for"], canonicalForm: "responsible for", kind: "phrasal_verb" },
   { headLemma: "base", headPos: ["VERB", "ADJ"], complements: ["on"], canonicalForm: "base on", kind: "phrasal_verb" },
   { headLemma: "relate", headPos: ["VERB", "ADJ"], complements: ["to"], canonicalForm: "relate to", kind: "phrasal_verb" },
@@ -62,6 +69,7 @@ const COMPLEMENT_CONSTRUCTIONS: ComplementConstruction[] = [
     optionalInfixes: ["in no small part", "in large part", "in part"],
     complements: ["to"],
     canonicalForm: "thanks to",
+    learningPattern: "thanks to + noun",
     kind: "phrasal_verb",
   },
 ];
@@ -203,9 +211,13 @@ function generateComparativeFrames(analysis: WinkSegmentAnalysis): HighlightCand
     if (a2.text.toLowerCase() !== "as") continue;
 
     let start = a1.start;
-    // Look for an immediately preceding "<number> times" bigram.
+    // Look for an immediately preceding "<number> times" bigram — only then
+    // is the "N times as much/many as" learning pattern actually instantiated
+    // by this span; a bare "as much/many as" is a different (unquantified)
+    // comparative and gets no pattern.
     const timesIndex = j - 1;
     const numIndex = j - 2;
+    let hasQuantityPrefix = false;
     if (
       timesIndex >= 0 &&
       numIndex >= 0 &&
@@ -215,19 +227,24 @@ function generateComparativeFrames(analysis: WinkSegmentAnalysis): HighlightCand
       isNumberLike(tokens[numIndex])
     ) {
       start = tokens[numIndex].start;
+      hasQuantityPrefix = true;
     }
 
     const end = a2.end;
+    const quantLemma = quant.lemma.toLowerCase();
+    // "much" compares an uncountable noun, "many" a plural countable one —
+    // the two frames take grammatically different complements.
+    const nounType = quantLemma === "much" ? "uncountable noun" : "plural countable noun";
     results.push({
       segmentIndex,
       start,
       end,
       originalText: text.slice(start, end),
-      lemma: `as ${quant.lemma.toLowerCase()} as`,
+      lemma: `as ${quantLemma} as`,
       kind: "idiom",
       sources: ["construction"],
-      canonicalForm: `as ${quant.lemma.toLowerCase()} as`,
-      learningPattern: `[quantity] times as ${quant.lemma.toLowerCase()} as + noun`,
+      canonicalForm: `as ${quantLemma} as`,
+      learningPattern: hasQuantityPrefix ? `N times as ${quantLemma} as + ${nounType}` : undefined,
       score: 0,
       reasons: [],
     });
