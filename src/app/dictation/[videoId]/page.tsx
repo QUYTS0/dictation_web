@@ -58,6 +58,7 @@ import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { usePlaybackToggle } from "@/hooks/usePlaybackToggle";
 import { playCorrectChime, playComboMilestoneChime } from "@/lib/utils/chime";
+import { getTranscriptErrorMessage } from "@/lib/youtubeCaptions/errors";
 import { splitSentenceIntoWords } from "./helpers";
 import { deriveEvaluationUiState, feedbackFor, weakestMetric } from "./evaluationFeedback";
 
@@ -146,6 +147,8 @@ export default function DictationPage({ params }: PageProps) {
     previousReview,
     regenerating,
     regenerateError,
+    autoGenerateErrorCode,
+    nextAutoRetryAt,
     checkAnswerError,
     segments,
     transcriptTitle,
@@ -528,6 +531,14 @@ export default function DictationPage({ params }: PageProps) {
     void handleRegenerateTranscript();
   }, [regenerating, handleRegenerateTranscript]);
 
+  // "Try again" from the transcript_failed screen — unlike the Settings-drawer
+  // regenerate above, there's no working script to lose (that's exactly why
+  // this screen is showing), so it skips the confirmation prompt.
+  const handleTryAgainClick = useCallback(() => {
+    if (regenerating) return;
+    void handleRegenerateTranscript();
+  }, [regenerating, handleRegenerateTranscript]);
+
   const handleWorkspaceCheck = useCallback(() => {
     const trimmed = workspaceInputValue.trim();
     if (!trimmed) return;
@@ -570,8 +581,14 @@ export default function DictationPage({ params }: PageProps) {
     handleManualTranscriptSubmit,
   } = useManualTranscriptPaste({
     videoId,
+    videoDurationSec: playerStore.durationSec,
     onTranscriptSaved: handleManualTranscriptSaved,
   });
+  const manualPasteTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const focusManualPasteTextarea = useCallback(() => {
+    manualPasteTextareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    manualPasteTextareaRef.current?.focus();
+  }, []);
 
   // ---- Load a .srt file — available both from the "transcript failed"
   // fallback screen and from the Script tab so an existing (auto-fetched)
@@ -585,7 +602,7 @@ export default function DictationPage({ params }: PageProps) {
     openSrtFilePicker,
     handleSrtFileInputChange,
   } = useSrtTranscriptUpload({
-    onSegmentsParsed: (parsedSegments) => handleRegenerateTranscript(parsedSegments),
+    onSegmentsParsed: (parsedSegments, importSource) => handleRegenerateTranscript(parsedSegments, importSource),
   });
 
   const handleLoadSrtClick = useCallback(() => {
@@ -835,7 +852,7 @@ export default function DictationPage({ params }: PageProps) {
       <input
         ref={srtFileInputRef}
         type="file"
-        accept=".srt,text/srt,application/x-subrip"
+        accept=".srt,.vtt,text/srt,application/x-subrip,text/vtt"
         onChange={handleSrtFileInputChange}
         className="hidden"
       />
@@ -1077,20 +1094,34 @@ export default function DictationPage({ params }: PageProps) {
               <div role="alert" className="rounded-xl border border-[var(--red)]/40 bg-[var(--red)]/10 backdrop-blur-md p-5 flex flex-col gap-3">
                 <div className="flex flex-col gap-2">
                   <p className="text-2xl" aria-hidden="true">❌</p>
-                  <p className="font-semibold text-[var(--text)]">Transcript failed</p>
-                  <p className="text-sm text-[var(--text-muted)]">
-                    Could not automatically fetch captions for this video. You can paste the
-                    transcript yourself below to continue — sentence timing will be estimated,
-                    so use Replay to resync as needed.
+                  <p className="font-semibold text-[var(--text)]">
+                    {nextAutoRetryAt ? "Automatic transcript access is temporarily unavailable" : "Transcript unavailable"}
                   </p>
+                  <p className="text-sm text-[var(--text-muted)]">{getTranscriptErrorMessage(autoGenerateErrorCode)}</p>
+                  {nextAutoRetryAt && (
+                    <p className="text-xs text-[var(--text-muted)] animate-pulse">Retrying automatically…</p>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleTryAgainClick}
+                    disabled={regenerating}
+                    className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {regenerating ? "Trying…" : "🔁 Try again"}
+                  </button>
+                  <button
+                    onClick={focusManualPasteTextarea}
+                    className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors"
+                  >
+                    📋 Paste transcript
+                  </button>
                   <button
                     onClick={handleLoadSrtClick}
                     disabled={srtParsing}
                     className="px-4 py-1.5 rounded-lg border border-[var(--border)] text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {srtParsing ? "Loading…" : "📄 Load .srt file"}
+                    {srtParsing ? "Loading…" : "📄 Upload SRT or VTT"}
                   </button>
                   <span className="text-xs text-[var(--text-muted)]">Keeps the file&apos;s real timing.</span>
                 </div>
@@ -1134,9 +1165,10 @@ export default function DictationPage({ params }: PageProps) {
                   </div>
                 )}
                 <textarea
+                  ref={manualPasteTextareaRef}
                   value={manualPasteText}
                   onChange={(e) => setManualPasteText(e.target.value)}
-                  placeholder="Paste the video's transcript here, as plain sentences..."
+                  placeholder="Paste the video's transcript here — plain sentences, or YouTube's own timestamped transcript panel (e.g. &quot;0:07 ...&quot;) for real per-sentence timing."
                   rows={6}
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm text-[var(--text)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-soft)]"
                 />

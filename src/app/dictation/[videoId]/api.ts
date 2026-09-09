@@ -14,33 +14,61 @@ export async function fetchTranscript(videoId: string): Promise<TranscriptRespon
   return res.json();
 }
 
-/** Wipes the cached transcript/segments and re-derives them from YouTube's captions. */
-export async function regenerateTranscript(
-  videoId: string
-): Promise<{ transcriptId?: string; status: string; error?: string }> {
+/**
+ * Response fields present on a non-2xx (or "processing"/cooldown) result
+ * from /api/transcript/generate — additive to the plain success shape, so
+ * older callers that only read transcriptId/status still work unchanged.
+ * See src/lib/youtubeCaptions/errors.ts for the TranscriptFetchErrorCode
+ * union `code` is drawn from (plus "GENERATION_IN_PROGRESS"/"FETCH_COOLDOWN",
+ * which aren't per-provider errors but reuse the same field).
+ */
+export interface GenerateTranscriptResult {
+  transcriptId?: string;
+  status: string;
+  error?: string;
+  code?: string;
+  retryAfterMs?: number;
+  retryAt?: string;
+  previousErrorCode?: string;
+}
+
+async function postGenerate(body: Record<string, unknown>): Promise<GenerateTranscriptResult> {
   const res = await fetch("/api/transcript/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ videoId, force: true }),
+    body: JSON.stringify(body),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Failed to regenerate transcript");
+  const data: GenerateTranscriptResult = await res.json();
+  // A contended lock (202) or an active cooldown (503, but with a
+  // still-preserved ready transcript) are expected, non-exceptional
+  // outcomes — callers branch on `status`/`code`, not a thrown error, for
+  // the polling/backoff logic in useDictationSession.ts to work with.
+  if (!res.ok && data.code !== "GENERATION_IN_PROGRESS" && data.code !== "FETCH_COOLDOWN") {
+    throw Object.assign(new Error(data.error ?? "Failed to generate transcript"), { code: data.code, retryAfterMs: data.retryAfterMs });
+  }
   return data;
 }
 
-/** Saves caller-supplied segments (manual paste, .srt upload) as the video's transcript. */
+/** Wipes the cached transcript/segments and re-derives them from YouTube's captions. */
+export async function regenerateTranscript(videoId: string): Promise<GenerateTranscriptResult> {
+  return postGenerate({ videoId, force: true });
+}
+
+/** Saves caller-supplied segments (manual paste, .srt/.vtt upload) as the video's transcript. */
 export async function saveManualTranscript(
   videoId: string,
-  segments: ManualSegmentInput[]
-): Promise<{ transcriptId?: string; status: string; error?: string }> {
-  const res = await fetch("/api/transcript/generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ videoId, segments, force: true }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Failed to save transcript");
-  return data;
+  segments: ManualSegmentInput[],
+  importSource: "manual" | "srt" | "vtt" = "manual"
+): Promise<GenerateTranscriptResult> {
+  return postGenerate({ videoId, segments, force: true, importSource });
+}
+
+/** Quietly checks/kicks off generation without forcing a re-fetch of an
+ *  already-ready transcript — used by the background auto-generate effect
+ *  in useDictationSession.ts (as opposed to the user-triggered "regenerate"
+ *  above, which always forces a fresh fetch and resets session state). */
+export async function requestTranscriptGeneration(videoId: string): Promise<GenerateTranscriptResult> {
+  return postGenerate({ videoId });
 }
 
 export async function checkAnswerApi(

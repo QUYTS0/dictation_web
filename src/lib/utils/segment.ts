@@ -134,8 +134,10 @@ export function overlayTypedOntoMask(mask: string, typed: string): string {
 
 // Average spoken English pace (~150 wpm) used to estimate segment timing
 // when a real transcript can't be fetched (e.g. captions disabled/unavailable).
-const WORDS_PER_SECOND = 2.5;
-const MIN_MANUAL_SEGMENT_SECONDS = 1.5;
+// Exported for reuse by timestampPaste.ts, which needs the same estimate for
+// its final cue's end time when no next-cue start or video duration is known.
+export const WORDS_PER_SECOND = 2.5;
+export const MIN_MANUAL_SEGMENT_SECONDS = 1.5;
 
 export interface ManualSegmentInput {
   segmentIndex: number;

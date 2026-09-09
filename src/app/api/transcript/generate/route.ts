@@ -1,90 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  YoutubeTranscript,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  YoutubeTranscriptTooManyRequestError,
-  YoutubeTranscriptVideoUnavailableError,
-} from "youtube-transcript";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { normalizeText } from "@/lib/utils/text";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
+import { generateEnglishTranscript, toCueItems } from "@/lib/youtubeCaptions/orchestrator";
+import { validateManualSegments, validateMergedSegments } from "@/lib/youtubeCaptions/validation";
+import { httpStatusForCode } from "@/lib/youtubeCaptions/errors";
+import { acquireTranscriptLock } from "@/lib/youtubeCaptions/lock";
+import { getCooldown, setCooldown, clearCooldown, resolveCooldownStatus } from "@/lib/youtubeCaptions/cooldown";
+import { recordTranscriptFetchEvent, hashVideoId, type TranscriptFetchOutcome } from "@/lib/youtubeCaptions/metrics";
+import { LOCK_CONFIG, ROUTE_DEADLINE_MS } from "@/lib/youtubeCaptions/config";
+import type { TranscriptProviderName } from "@/lib/youtubeCaptions/types";
 
-const TRANSIENT_RETRY_DELAY_MS = 1000;
-
-/**
- * youtube-transcript swallows all detail about *why* it failed: its InnerTube
- * call silently returns undefined on any error, and its webpage-scrape
- * fallback only ever surfaces one of a few generic exceptions. In particular
- * "captions disabled" fires whenever the scraped page's player response has
- * no caption tracks — which is indistinguishable, from the outside, between
- * a genuinely caption-less video and YouTube serving a bot-limited response
- * to a suspected datacenter/non-browser IP. This wraps the library's fetch
- * (it accepts a custom one via TranscriptConfig.fetch) purely to log what
- * each outbound call actually returned, so a failure is diagnosable from
- * Vercel logs instead of being a black box.
- */
-function createDiagnosticFetch(videoId: string): typeof fetch {
-  return async (input, init) => {
-    const response = await fetch(input, init);
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    try {
-      if (url.includes("/youtubei/v1/player")) {
-        const json = await response.clone().json();
-        const tracks = json?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        console.log(
-          `[transcript generate] diag innertube ${videoId}: httpStatus=${response.status} ` +
-          `playabilityStatus=${json?.playabilityStatus?.status ?? "?"} ` +
-          `captionTracks=${Array.isArray(tracks) ? tracks.length : "none"}`
-        );
-      } else if (url.includes("youtube.com/watch")) {
-        const text = await response.clone().text();
-        const statusMatch = text.match(/"playabilityStatus":\s*\{\s*"status":\s*"([^"]+)"/);
-        console.log(
-          `[transcript generate] diag webpage ${videoId}: httpStatus=${response.status} bodyLen=${text.length} ` +
-          `recaptcha=${text.includes('class="g-recaptcha"')} ` +
-          `hasPlayability=${text.includes('"playabilityStatus":')} ` +
-          `playabilityStatus=${statusMatch?.[1] ?? "?"} ` +
-          `hasCaptionTracks=${text.includes('"captionTracks"')}`
-        );
-      }
-    } catch (diagErr) {
-      console.log(`[transcript generate] diag fetch logging failed for ${videoId}: ${String(diagErr)}`);
-    }
-    return response;
-  };
-}
-
-/**
- * Retries once on errors that don't definitively mean "this video has no
- * captions" (e.g. YouTube's rate-limit/captcha response, or a network blip) —
- * without this, a single transient hiccup permanently stamps the transcript
- * "failed" and nothing ever retries it (GET only re-triggers generation for
- * "processing", not "failed").
- */
-async function fetchTranscriptWithRetry(videoId: string, language: string) {
-  const config = { lang: language, fetch: createDiagnosticFetch(videoId) };
-  try {
-    return await YoutubeTranscript.fetchTranscript(videoId, config);
-  } catch (err) {
-    const isPermanent =
-      err instanceof YoutubeTranscriptDisabledError ||
-      err instanceof YoutubeTranscriptNotAvailableError ||
-      err instanceof YoutubeTranscriptNotAvailableLanguageError ||
-      err instanceof YoutubeTranscriptVideoUnavailableError;
-    if (isPermanent) throw err;
-
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `[transcript generate] transient caption fetch error for ${videoId}, retrying once: ${errMsg}`
-    );
-    await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAY_MS));
-    return await YoutubeTranscript.fetchTranscript(videoId, config);
-  }
-}
+export const maxDuration = 60;
 
 interface GenerateRequest {
   videoId: string;
@@ -92,16 +21,20 @@ interface GenerateRequest {
   /**
    * When true, mark any existing transcript (including "ready" ones) as failed
    * so a fresh fetch is performed. Use this when the cached transcript has
-   * incorrect timestamps or mismatched text/audio.
+   * incorrect timestamps or mismatched text/audio. Also bypasses an active
+   * fetch cooldown for this video (but never the single-flight lock — a
+   * generation already in progress elsewhere still wins).
    */
   force?: boolean;
-  /** Optional pre-built segments (e.g., from YouTube captions) */
+  /** Optional pre-built segments (e.g., from YouTube captions, manual paste, .srt/.vtt upload) */
   segments?: Array<{
     segmentIndex: number;
     start: number;
     end: number;
     text: string;
   }>;
+  /** Only affects metrics labeling — which manual import path produced `segments`. */
+  importSource?: "manual" | "srt" | "vtt";
 }
 
 interface ResolvedSegment {
@@ -125,16 +58,22 @@ async function reportFetchFailure(
   videoId: string,
   language: string,
   userMessage: string,
-  statusCode = 422
+  statusCode = 422,
+  extra: {
+    code?: string;
+    retryAfterMs?: number;
+    retryAt?: string;
+    previousErrorCode?: string;
+  } = {}
 ) {
   if (hasWorkingTranscriptToPreserve) {
-    return NextResponse.json({ status: "ready", error: userMessage }, { status: statusCode });
+    return NextResponse.json({ status: "ready", error: userMessage, ...extra }, { status: statusCode });
   }
 
   if (canonicalTranscript) {
     await supabase.from("transcripts").update({ status: "failed" }).eq("id", canonicalTranscript.id);
     return NextResponse.json(
-      { transcriptId: canonicalTranscript.id, status: "failed", error: userMessage },
+      { transcriptId: canonicalTranscript.id, status: "failed", error: userMessage, ...extra },
       { status: statusCode }
     );
   }
@@ -146,59 +85,9 @@ async function reportFetchFailure(
     .single();
 
   return NextResponse.json(
-    { transcriptId: failedTranscript?.id, status: "failed", error: userMessage },
+    { transcriptId: failedTranscript?.id, status: "failed", error: userMessage, ...extra },
     { status: statusCode }
   );
-}
-
-/**
- * Classifies a caption-fetch failure into a stable (logTag, userMessage,
- * statusCode) triple using the actual error class thrown by the
- * youtube-transcript library, instead of fragile substring matching on the
- * message text. A rate-limit/CAPTCHA block from YouTube (transient, affects
- * every video) must never be reported to the user identically to a video
- * that genuinely has no captions (permanent, video-specific) — conflating
- * the two hid a systemic scraper block behind a "captions are disabled"
- * message that pointed at the wrong cause.
- */
-function classifyCaptionFetchError(
-  err: unknown,
-  language: string
-): { logTag: string; userMessage: string; statusCode: number } {
-  if (err instanceof YoutubeTranscriptTooManyRequestError) {
-    return {
-      logTag: "rate_limited",
-      userMessage:
-        "YouTube is temporarily blocking automated caption requests from our server. Please try again in a few minutes.",
-      statusCode: 503,
-    };
-  }
-  if (err instanceof YoutubeTranscriptVideoUnavailableError) {
-    return {
-      logTag: "video_unavailable",
-      userMessage: "This video is unavailable (private, deleted, or restricted in some regions).",
-      statusCode: 422,
-    };
-  }
-  if (err instanceof YoutubeTranscriptNotAvailableLanguageError) {
-    return {
-      logTag: "language_unavailable",
-      userMessage: `No ${language} captions available. Try a video with English captions enabled.`,
-      statusCode: 422,
-    };
-  }
-  if (err instanceof YoutubeTranscriptDisabledError || err instanceof YoutubeTranscriptNotAvailableError) {
-    return {
-      logTag: "captions_disabled",
-      userMessage: "Captions are disabled for this video. Please choose a video with captions enabled.",
-      statusCode: 422,
-    };
-  }
-  return {
-    logTag: "unknown",
-    userMessage: "Captions are disabled for this video. Please choose a video with captions enabled.",
-    statusCode: 422,
-  };
 }
 
 export async function POST(request: NextRequest) {
@@ -208,9 +97,11 @@ export async function POST(request: NextRequest) {
   });
   if (rateLimitResponse) return rateLimitResponse;
 
+  const requestStartedAt = Date.now();
+
   try {
     const body: GenerateRequest = await request.json();
-    const { videoId, language = "en", segments: providedSegments, force = false } = body;
+    const { videoId, language = "en", segments: providedSegments, force = false, importSource } = body;
 
     if (!videoId || typeof videoId !== "string") {
       return NextResponse.json({ error: "videoId is required" }, { status: 400 });
@@ -263,6 +154,17 @@ export async function POST(request: NextRequest) {
         console.log(
           `[transcript generate] reusing ready transcript ${canonicalTranscript.id} (segments=${segmentCount})`
         );
+        recordTranscriptFetchEvent({
+          videoIdHash: hashVideoId(videoId),
+          provider: "youtube-transcript",
+          outcome: "success",
+          attemptCount: 0,
+          fallbackUsed: false,
+          durationMs: Date.now() - requestStartedAt,
+          cacheHit: true,
+          lockContended: false,
+          cooldownHit: false,
+        });
         return NextResponse.json({ transcriptId: canonicalTranscript.id, status: canonicalTranscript.status });
       }
     }
@@ -274,70 +176,173 @@ export async function POST(request: NextRequest) {
 
     let resolvedSegments: ResolvedSegment[];
     let source: "manual" | "cache";
+    let metricsProvider: TranscriptProviderName = "manual";
+    let attemptCount = 0;
+    let fallbackUsed = false;
+    let lockContended = false;
+    // Always false by the time the success path's final metrics event is
+    // recorded below — an active cooldown returns a response earlier in
+    // this function and never reaches persistence. Kept as an explicit
+    // field (rather than a literal) so the event shape stays self-describing.
+    const cooldownHit = false;
 
     if (providedSegments && providedSegments.length > 0) {
-      resolvedSegments = providedSegments;
+      metricsProvider = importSource ?? "manual";
+      // Defense in depth — a client-provided segmentIndex isn't trusted;
+      // re-derived from array position before validating/persisting.
+      const reindexed = providedSegments.map((s, i) => ({ ...s, segmentIndex: i }));
+      const manualValidation = validateManualSegments(reindexed);
+      if (!manualValidation.ok) {
+        recordTranscriptFetchEvent({
+          videoIdHash: hashVideoId(videoId),
+          provider: metricsProvider,
+          outcome: "failure",
+          errorCode: manualValidation.failure.code,
+          attemptCount: 1,
+          fallbackUsed: false,
+          durationMs: Date.now() - requestStartedAt,
+          cacheHit: false,
+          lockContended: false,
+          cooldownHit: false,
+        });
+        return NextResponse.json({ error: manualValidation.failure.message, code: manualValidation.failure.code }, { status: 422 });
+      }
+      resolvedSegments = reindexed;
       source = "manual";
+      attemptCount = 1;
     } else {
-      let ytItems;
+      // ---- Automatic path: cooldown -> single-flight lock -> providers ----
+      if (!force) {
+        const cooldownState = await getCooldown(videoId, language);
+        const cooldownStatus = resolveCooldownStatus(cooldownState);
+        if (cooldownStatus.active) {
+          recordTranscriptFetchEvent({
+            videoIdHash: hashVideoId(videoId),
+            provider: "youtube-transcript",
+            outcome: "failure",
+            errorCode: "FETCH_COOLDOWN",
+            attemptCount: 0,
+            fallbackUsed: false,
+            durationMs: Date.now() - requestStartedAt,
+            cacheHit: false,
+            lockContended: false,
+            cooldownHit: true,
+          });
+          return reportFetchFailure(
+            supabase,
+            canonicalTranscript,
+            hasWorkingTranscriptToPreserve,
+            videoId,
+            language,
+            "Automatic transcript access is temporarily unavailable for this video. Please try again shortly, or paste/upload a transcript.",
+            503,
+            {
+              code: "FETCH_COOLDOWN",
+              retryAfterMs: cooldownStatus.retryAfterMs,
+              retryAt: cooldownStatus.retryAt,
+              previousErrorCode: cooldownStatus.previousErrorCode,
+            }
+          );
+        }
+      }
+
+      const lock = await acquireTranscriptLock(videoId, language);
+      if (!lock) {
+        lockContended = true;
+        recordTranscriptFetchEvent({
+          videoIdHash: hashVideoId(videoId),
+          provider: "youtube-transcript",
+          outcome: "failure",
+          errorCode: "GENERATION_IN_PROGRESS",
+          attemptCount: 0,
+          fallbackUsed: false,
+          durationMs: Date.now() - requestStartedAt,
+          cacheHit: false,
+          lockContended: true,
+          cooldownHit: false,
+        });
+        return NextResponse.json(
+          { status: "processing", code: "GENERATION_IN_PROGRESS", retryAfterMs: LOCK_CONFIG.contendedRetryAfterMs },
+          { status: 202 }
+        );
+      }
+
       try {
-        ytItems = await fetchTranscriptWithRetry(videoId, language);
-      } catch (captionErr) {
-        // Expected/handled condition (no captions, or disabled) — the caller
-        // falls back to the manual-paste UI, so this isn't a server error.
-        // Log a concise line instead of the full stack trace.
-        const errMsg = captionErr instanceof Error ? captionErr.message : String(captionErr);
-        const { logTag, userMessage, statusCode } = classifyCaptionFetchError(captionErr, language);
-        console.warn(
-          `[transcript generate] caption fetch unavailable for ${videoId} (${logTag}): ${errMsg}`
-        );
-        return reportFetchFailure(
-          supabase,
-          canonicalTranscript,
-          hasWorkingTranscriptToPreserve,
-          videoId,
-          language,
-          userMessage,
-          statusCode
-        );
+        const deadlineAt = requestStartedAt + ROUTE_DEADLINE_MS;
+        const outcome = await generateEnglishTranscript(videoId, { deadlineAt, language });
+        attemptCount = outcome.attemptCount;
+        fallbackUsed = outcome.fallbackUsed;
+        metricsProvider = outcome.ok ? outcome.result.provider : fallbackUsed ? "innertube-raw" : "youtube-transcript";
+
+        if (!outcome.ok) {
+          await setCooldown(videoId, language, outcome.error.code, outcome.error.retryAfterMs);
+          recordTranscriptFetchEvent({
+            videoIdHash: hashVideoId(videoId),
+            provider: metricsProvider,
+            outcome: "failure",
+            errorCode: outcome.error.code,
+            attemptCount,
+            fallbackUsed,
+            durationMs: Date.now() - requestStartedAt,
+            cacheHit: false,
+            lockContended: false,
+            cooldownHit: false,
+          });
+          console.warn(
+            `[transcript generate] automatic fetch failed for ${videoId} (${outcome.error.code}, fallbackUsed=${fallbackUsed}): ${outcome.error.message}`
+          );
+          return reportFetchFailure(
+            supabase,
+            canonicalTranscript,
+            hasWorkingTranscriptToPreserve,
+            videoId,
+            language,
+            outcome.error.toSafeMessage(),
+            httpStatusForCode(outcome.error.code),
+            { code: outcome.error.code }
+          );
+        }
+
+        const merged = mergeIntoSentences(toCueItems(outcome.result.cues));
+        const mergedForValidation = merged.map((seg, i) => ({
+          segmentIndex: i,
+          start: seg.start,
+          end: seg.start + seg.duration,
+          text: seg.text,
+        }));
+        const mergedValidation = validateMergedSegments(mergedForValidation);
+        if (!mergedValidation.ok) {
+          recordTranscriptFetchEvent({
+            videoIdHash: hashVideoId(videoId),
+            provider: metricsProvider,
+            outcome: "failure",
+            errorCode: mergedValidation.failure.code,
+            attemptCount,
+            fallbackUsed,
+            durationMs: Date.now() - requestStartedAt,
+            cueCount: outcome.result.cues.length,
+            cacheHit: false,
+            lockContended: false,
+            cooldownHit: false,
+          });
+          return reportFetchFailure(
+            supabase,
+            canonicalTranscript,
+            hasWorkingTranscriptToPreserve,
+            videoId,
+            language,
+            "Could not extract usable segments from captions.",
+            422,
+            { code: mergedValidation.failure.code }
+          );
+        }
+
+        resolvedSegments = mergedForValidation;
+        source = "cache";
+        await clearCooldown(videoId, language);
+      } finally {
+        await lock.release();
       }
-
-      if (!ytItems || ytItems.length === 0) {
-        return reportFetchFailure(
-          supabase,
-          canonicalTranscript,
-          hasWorkingTranscriptToPreserve,
-          videoId,
-          language,
-          "No captions found for this video."
-        );
-      }
-
-      // Merge very short cue lines into sentence-level segments
-      const merged = mergeIntoSentences(ytItems);
-
-      if (merged.length === 0) {
-        console.error(
-          `[transcript generate] mergeIntoSentences produced 0 segments from ${ytItems.length} cues` +
-          ` (cue texts may be empty or unit detection may have failed)`
-        );
-        return reportFetchFailure(
-          supabase,
-          canonicalTranscript,
-          hasWorkingTranscriptToPreserve,
-          videoId,
-          language,
-          "Could not extract segments from captions."
-        );
-      }
-
-      resolvedSegments = merged.map((seg, i) => ({
-        segmentIndex: i,
-        start: seg.start,
-        end: seg.start + seg.duration,
-        text: seg.text,
-      }));
-      source = "cache";
     }
 
     // We now have confirmed-good segments — safe to replace whatever existed.
@@ -452,6 +457,21 @@ export async function POST(request: NextRequest) {
     console.log(
       `[transcript generate] stored ${rows.length} segments for transcript ${transcriptId}`
     );
+
+    const outcomeLabel: TranscriptFetchOutcome = fallbackUsed ? "fallback_success" : "success";
+    recordTranscriptFetchEvent({
+      videoIdHash: hashVideoId(videoId),
+      provider: metricsProvider,
+      outcome: outcomeLabel,
+      attemptCount,
+      fallbackUsed,
+      durationMs: Date.now() - requestStartedAt,
+      segmentCount: rows.length,
+      cacheHit: false,
+      lockContended,
+      cooldownHit,
+    });
+
     return NextResponse.json({
       transcriptId,
       status: "ready",

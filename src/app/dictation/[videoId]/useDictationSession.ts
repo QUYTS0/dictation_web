@@ -15,6 +15,7 @@ import {
   restartSession,
   regenerateTranscript,
   saveManualTranscript,
+  requestTranscriptGeneration,
 } from "./api";
 import type { ManualSegmentInput } from "@/lib/utils/segment";
 import type { MistakeRecord, CompletedSentenceReview, ResumeState } from "./types";
@@ -34,6 +35,17 @@ const ACTIVE_SESSION_UX_STATES: UXState[] = [
   "checking_answer",
   "session_completed",
 ];
+
+// Codes worth a bounded, quiet client-side retry of automatic generation:
+// GENERATION_IN_PROGRESS/FETCH_COOLDOWN come with a server-provided
+// retryAfterMs; NETWORK_ERROR/TIMEOUT are transient hiccups on our own
+// request. Anything else (captions disabled, video restricted, language
+// missing, parser errors, ...) is a stable fact this request already
+// resolved — retrying it immediately would just repeat the same result, so
+// those stop polling and surface the specific message instead.
+const AUTO_RETRYABLE_CODES = new Set(["GENERATION_IN_PROGRESS", "FETCH_COOLDOWN", "NETWORK_ERROR", "TIMEOUT"]);
+const AUTO_RETRY_MAX_ATTEMPTS = 3;
+const AUTO_RETRY_DEFAULT_DELAY_MS = 4000;
 
 interface UseDictationSessionOptions {
   videoId: string;
@@ -75,6 +87,14 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  // Typed code behind the current transcript-generation failure/wait state
+  // (e.g. "FETCH_COOLDOWN", "CAPTIONS_DISABLED"), so the UI can show
+  // specific guidance instead of one generic message. Cleared on a new
+  // attempt or a fresh video.
+  const [autoGenerateErrorCode, setAutoGenerateErrorCode] = useState<string | null>(null);
+  // When set, the background auto-generate scheduler has a pending retry —
+  // exposed so the UI can show "retrying shortly" instead of a dead end.
+  const [nextAutoRetryAt, setNextAutoRetryAt] = useState<number | null>(null);
   const [checkAnswerError, setCheckAnswerError] = useState<string | null>(null);
   // Consecutive correct answers — a hint or a retry doesn't break it, only a wrong
   // submit resets it to 0. "Clean" (first-try, no-hint) solves are tracked separately
@@ -118,6 +138,14 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // set by the snapshot restore if the player isn't ready yet at that point.
   const pendingRestoreSeekSecRef = useRef<number | null>(null);
   const playerReadyForRestoreRef = useRef(false);
+  // Guards src/app/dictation/[videoId]/api.ts's requestTranscriptGeneration
+  // call against duplicate concurrent POSTs from React re-renders/StrictMode
+  // double-invocation — the server-side lock (see
+  // src/lib/youtubeCaptions/lock.ts) is the real cross-request guarantee,
+  // this just avoids wasting an obviously-redundant request from this tab.
+  const generateInFlightRef = useRef(false);
+  const autoRetryTimeoutRef = useRef<number | null>(null);
+  const autoRetryCountRef = useRef(0);
 
   useEffect(() => {
     resumeLoadedRef.current = false;
@@ -465,21 +493,98 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     }
   }, [currentSegIdx, triggerAutoSave]);
 
-  // ---- Trigger transcript generation if not ready ----
+  // Live-updated mirror of videoId, read from inside triggerAutoGenerate's
+  // async callbacks to detect a video switch that happened while a request
+  // was in flight — without this, a slow response for a video the user has
+  // since navigated away from could clobber the new video's transcriptId/
+  // error state with stale data.
+  const currentVideoIdRef = useRef(videoId);
+
+  // ---- Reset all background-generation bookkeeping whenever the video
+  // changes (and on unmount) — declared BEFORE triggerAutoGenerate's own
+  // trigger effect below so it always runs first within the same commit if
+  // both fire together (e.g. react-query already has cached "processing"
+  // data for a revisited video on the very render videoId changes). ----
+  useEffect(() => {
+    currentVideoIdRef.current = videoId;
+    autoRetryCountRef.current = 0;
+    generateInFlightRef.current = false;
+    setAutoGenerateErrorCode(null);
+    if (autoRetryTimeoutRef.current !== null) {
+      window.clearTimeout(autoRetryTimeoutRef.current);
+      autoRetryTimeoutRef.current = null;
+    }
+    setNextAutoRetryAt(null);
+
+    return () => {
+      if (autoRetryTimeoutRef.current !== null) {
+        window.clearTimeout(autoRetryTimeoutRef.current);
+        autoRetryTimeoutRef.current = null;
+      }
+    };
+  }, [videoId]);
+
+  // ---- Background transcript generation with a bounded, server-guided
+  // retry — replaces a naive "POST once on mount" that had no way to
+  // recover from a contended lock or an active cooldown (both come back
+  // without a transcriptId and without ever changing the DB row, so nothing
+  // would otherwise prompt a follow-up attempt). See AUTO_RETRYABLE_CODES
+  // above for exactly which outcomes get a quiet retry vs. an immediate
+  // "transcript_failed" with a specific message. ----
+  const triggerAutoGenerate = useCallback(() => {
+    if (generateInFlightRef.current) return;
+    generateInFlightRef.current = true;
+    const requestedForVideoId = videoId;
+
+    const scheduleRetry = (delayMs: number) => {
+      if (currentVideoIdRef.current !== requestedForVideoId) return;
+      autoRetryCountRef.current += 1;
+      setNextAutoRetryAt(Date.now() + delayMs);
+      autoRetryTimeoutRef.current = window.setTimeout(triggerAutoGenerate, delayMs);
+    };
+
+    requestTranscriptGeneration(videoId)
+      .then((result) => {
+        generateInFlightRef.current = false;
+        if (currentVideoIdRef.current !== requestedForVideoId) return;
+
+        if (result.transcriptId) setTranscriptId(result.transcriptId);
+        const code = result.code ?? null;
+        setAutoGenerateErrorCode(code);
+        if (result.status === "ready" || result.transcriptId) setRegenerateError(null);
+
+        if (code && AUTO_RETRYABLE_CODES.has(code) && autoRetryCountRef.current < AUTO_RETRY_MAX_ATTEMPTS) {
+          scheduleRetry(result.retryAfterMs && result.retryAfterMs > 0 ? result.retryAfterMs : AUTO_RETRY_DEFAULT_DELAY_MS);
+        } else {
+          setNextAutoRetryAt(null);
+        }
+      })
+      .catch((err: unknown) => {
+        generateInFlightRef.current = false;
+        if (currentVideoIdRef.current !== requestedForVideoId) return;
+
+        const code = (err as { code?: string } | null)?.code ?? null;
+        setAutoGenerateErrorCode(code);
+
+        if (code && AUTO_RETRYABLE_CODES.has(code) && autoRetryCountRef.current < AUTO_RETRY_MAX_ATTEMPTS) {
+          const retryAfterMs = (err as { retryAfterMs?: number } | null)?.retryAfterMs;
+          scheduleRetry(retryAfterMs && retryAfterMs > 0 ? retryAfterMs : AUTO_RETRY_DEFAULT_DELAY_MS);
+        } else {
+          setNextAutoRetryAt(null);
+        }
+      });
+  }, [videoId]);
+
   useEffect(() => {
     if (transcriptStatus === "processing" && !transcriptId) {
-      fetch("/api/transcript/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId }),
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.transcriptId) setTranscriptId(d.transcriptId);
-        })
-        .catch(() => {});
+      triggerAutoGenerate();
     }
-  }, [transcriptStatus, transcriptId, videoId]);
+    // Only the initial transition into "processing" (or a video change)
+    // should kick this off — triggerAutoGenerate's own retry chain handles
+    // everything after that, and re-running this on every unrelated
+    // re-render would fight with generateInFlightRef's guard for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transcriptStatus === "processing" && !transcriptId, videoId]);
 
   const handleManualTranscriptSaved = useCallback(
     async (id: string) => {
@@ -490,12 +595,23 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   );
 
   // ---- Regenerate transcript, either from YouTube captions (no args) or from
-  // caller-supplied segments (manual paste / .srt upload) — either way the
-  // cached script and any in-progress session state are discarded. ----
-  const handleRegenerateTranscript = useCallback(async (providedSegments?: ManualSegmentInput[]) => {
+  // caller-supplied segments (manual paste / .srt / .vtt upload) — either way
+  // the cached script and any in-progress session state are discarded. This
+  // is the explicit, user-triggered path ("Try again" / "Regenerate script" /
+  // a subtitle upload) — unlike the quiet background auto-retry above, it
+  // always resets session state and always issues a fresh request rather
+  // than waiting on a scheduled retry. ----
+  const handleRegenerateTranscript = useCallback(async (providedSegments?: ManualSegmentInput[], importSource?: "srt" | "vtt") => {
     clearDictationSessionSnapshot(videoId);
     setRegenerating(true);
     setRegenerateError(null);
+    setAutoGenerateErrorCode(null);
+    autoRetryCountRef.current = 0;
+    if (autoRetryTimeoutRef.current !== null) {
+      window.clearTimeout(autoRetryTimeoutRef.current);
+      autoRetryTimeoutRef.current = null;
+    }
+    setNextAutoRetryAt(null);
     ytPlayerRef.current?.pauseVideo();
     setUxState("transcript_processing");
     currentSegIdxRef.current = 0;
@@ -514,11 +630,13 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
 
     try {
       const result = providedSegments
-        ? await saveManualTranscript(videoId, providedSegments)
+        ? await saveManualTranscript(videoId, providedSegments, importSource ?? "manual")
         : await regenerateTranscript(videoId);
       if (result.transcriptId) setTranscriptId(result.transcriptId);
+      setAutoGenerateErrorCode(result.code ?? null);
     } catch (err) {
       setRegenerateError(err instanceof Error ? err.message : "Failed to regenerate transcript.");
+      setAutoGenerateErrorCode((err as { code?: string } | null)?.code ?? null);
     } finally {
       await transcriptQuery.refetch();
       setRegenerating(false);
@@ -779,6 +897,8 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     previousReview,
     regenerating,
     regenerateError,
+    autoGenerateErrorCode,
+    nextAutoRetryAt,
     checkAnswerError,
     segments,
     transcriptStatus,
