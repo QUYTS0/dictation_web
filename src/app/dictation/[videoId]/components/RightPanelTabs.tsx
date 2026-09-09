@@ -1,10 +1,11 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { clsx } from "clsx";
 import { FileText, Type, AlignLeft, ClipboardCheck, type LucideIcon } from "lucide-react";
 import type { Bookmark, TranscriptSegment, VocabHighlightPhrase } from "@/lib/types";
 import type { AudioRecorderStatus, RecordedClip } from "@/hooks/useAudioRecorder";
 import { ScriptTab } from "./ScriptTab";
 import { WordsTab } from "./WordsTab";
+import type { VocabularyTypeFilter } from "../helpers";
 import { SentencesTab } from "./SentencesTab";
 import { EvaluationTab } from "./EvaluationTab";
 import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue, SentenceEvaluation } from "../types";
@@ -28,9 +29,13 @@ const EVALUATION_STATUS_DOT_CLASS: Record<Exclude<EvaluationTabStatus, "idle">, 
   failed: "bg-[var(--red)]",
 };
 
-const TAB_CONFIG: Array<{ id: RightPanelTabValue; label: string; icon: LucideIcon }> = [
+// Exported so tests can assert the user-facing label without rendering the
+// whole tab bar. The internal id stays "words" (routing/props/persisted tab
+// state all key off it) — only the visible label/aria-label/title (all
+// derived from `label` in TabButton) actually say "Vocabulary".
+export const TAB_CONFIG: Array<{ id: RightPanelTabValue; label: string; icon: LucideIcon }> = [
   { id: "script", label: "Script", icon: FileText },
-  { id: "words", label: "Words", icon: Type },
+  { id: "words", label: "Vocabulary", icon: Type },
   { id: "sentences", label: "Sentences", icon: AlignLeft },
   { id: "evaluation", label: "Evaluate", icon: ClipboardCheck },
 ];
@@ -219,6 +224,19 @@ export function RightPanelTabs({
 }) {
   const tabRefs = useRef<Partial<Record<RightPanelTabValue, HTMLButtonElement | null>>>({});
   const visibleTabs = TAB_CONFIG.filter((tab) => tab.id !== "evaluation" || inputMode === "shadowing");
+
+  // Vocabulary panel's search/filter/selected-item state lives here, one
+  // level above WordsTab, because the tab content below is switched by a
+  // ternary (see the render below) that unmounts the inactive tab's
+  // component entirely — state kept inside WordsTab itself would be lost on
+  // every switch away and back. RightPanelTabs itself stays mounted for the
+  // whole practice session, so this survives tab switches.
+  const [vocabQuery, setVocabQuery] = useState("");
+  const [vocabTypeFilter, setVocabTypeFilter] = useState<VocabularyTypeFilter>("all");
+  const [vocabSelectedId, setVocabSelectedId] = useState<string | null>(null);
+  // A ref (not state) so scroll updates never trigger a re-render — only
+  // read back once, when WordsTab remounts after a tab switch.
+  const vocabScrollTopRef = useRef(0);
   const countFor = (id: RightPanelTabValue) => {
     if (id === "words") return wordItems.length;
     if (id === "sentences") return sentenceItems.length + bookmarks.length;
@@ -314,6 +332,16 @@ export function RightPanelTabs({
             onUpdate={onUpdateLearningItem}
             learningError={learningError}
             learningErrorRetry={learningErrorRetry}
+            phrasesBySegmentIndex={phrasesBySegmentIndex}
+            translationBySegmentIndex={translationBySegmentIndex}
+            onSeekToSegment={onSeekToSegment}
+            query={vocabQuery}
+            onQueryChange={setVocabQuery}
+            typeFilter={vocabTypeFilter}
+            onTypeFilterChange={setVocabTypeFilter}
+            selectedId={vocabSelectedId}
+            onSelectedIdChange={setVocabSelectedId}
+            scrollTopRef={vocabScrollTopRef}
           />
         ) : rightPanelTab === "sentences" ? (
           <SentencesTab

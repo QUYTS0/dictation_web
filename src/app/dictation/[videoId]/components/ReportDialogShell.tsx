@@ -42,20 +42,33 @@ const FOCUSABLE_SELECTOR =
 // way it does over ordinary painted content, even when the element's own
 // background-color has alpha=1. The (intentionally translucent) dimming
 // lives on the Backdrop layer below instead.
-const PANEL_SIZE_CLASS =
-  "fixed inset-0 z-[75] flex flex-col overflow-hidden bg-[var(--surface)] text-[var(--text)] sm:inset-0 sm:m-auto sm:h-[min(85vh,850px)] sm:w-[min(900px,calc(100vw-64px))] sm:max-w-[1000px] sm:rounded-3xl sm:border sm:border-[var(--border)] sm:shadow-2xl";
+// Mobile sizing (fixed inset-0, safe-area padding) is identical for every
+// variant — only the desktop (sm:) card dimensions differ. "compact" is
+// sized for the Vocabulary detail dialog (roughly min(600px, 100vw-32px)
+// wide); "default" is the original size used by the two Evaluate-tab report
+// modals and must stay pixel-identical for them.
+const PANEL_SIZE_CLASSES = {
+  default:
+    "fixed inset-0 z-[75] flex flex-col overflow-hidden bg-[var(--surface)] text-[var(--text)] sm:inset-0 sm:m-auto sm:h-[min(85vh,850px)] sm:w-[min(900px,calc(100vw-64px))] sm:max-w-[1000px] sm:rounded-3xl sm:border sm:border-[var(--border)] sm:shadow-2xl",
+  compact:
+    "fixed inset-0 z-[75] flex flex-col overflow-hidden bg-[var(--surface)] text-[var(--text)] sm:inset-0 sm:m-auto sm:max-h-[calc(100dvh-48px)] sm:h-[min(85vh,720px)] sm:w-[min(600px,calc(100vw-32px))] sm:rounded-3xl sm:border sm:border-[var(--border)] sm:shadow-2xl",
+} as const;
 
 export function ReportDialogShell({
   open,
   onClose,
   titleId,
   title,
+  size = "default",
   children,
 }: {
   open: boolean;
   onClose: () => void;
   titleId: string;
   title: string;
+  /** Desktop dialog width/height variant — see PANEL_SIZE_CLASSES. Defaults
+   *  to "default" so existing callers are unaffected. */
+  size?: "default" | "compact";
   children: ReactNode;
 }) {
   const [mounted, setMounted] = useState(false);
@@ -150,7 +163,7 @@ export function ReportDialogShell({
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
               transition={{ type: "tween", ease: "easeOut", duration: 0.2 }}
-              className={PANEL_SIZE_CLASS}
+              className={PANEL_SIZE_CLASSES[size]}
             >
               <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] bg-[var(--surface)] px-5 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-5">
                 <h2 id={titleId} className="text-sm font-semibold text-[var(--text)]">

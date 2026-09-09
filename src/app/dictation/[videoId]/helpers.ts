@@ -1,5 +1,5 @@
 import type { DiffToken, VocabHighlightPhrase, VocabularyItem } from "@/lib/types";
-import type { ComparedToken, LessonItemType } from "./types";
+import type { ComparedToken, LessonItemType, LessonSavedItem } from "./types";
 
 /** Formats a segment's start time (seconds) as a YouTube-style "m:ss" timestamp. */
 export function formatSegmentTimestamp(seconds: number): string {
@@ -218,6 +218,112 @@ export function inferSavedItemType(item: VocabularyItem): LessonItemType {
   const normalizedSentence = normalizeComparableText(item.sentence_context);
   if (normalizedTerm && normalizedTerm === normalizedSentence) return "sentence";
   return splitSentenceIntoWords(item.term).length <= 1 ? "word" : "phrase";
+}
+
+// ---- Vocabulary tab search/filter/detail helpers ----
+
+/**
+ * Lowercases, strips combining diacritics (NFD decomposition covers Latin
+ * accents like ế/ề/ộ), and folds Vietnamese đ/Đ to d — so a search for
+ * "duong" also matches "đường" without a diacritics library. Applied to
+ * both the query and each candidate field, symmetrically.
+ */
+const COMBINING_DIACRITIC_RANGE_START = 0x0300;
+const COMBINING_DIACRITIC_RANGE_END = 0x036f;
+
+/** Strips Unicode combining diacritical marks (the block NFD decomposes
+ *  Latin accents like ế/ề/ộ into) — built from code points rather than a
+ *  \u{...}-range regex literal so the source stays plain ASCII. */
+function stripCombiningDiacritics(text: string): string {
+  return Array.from(text)
+    .filter((char) => {
+      const codePoint = char.codePointAt(0) ?? 0;
+      return codePoint < COMBINING_DIACRITIC_RANGE_START || codePoint > COMBINING_DIACRITIC_RANGE_END;
+    })
+    .join("");
+}
+
+export function normalizeForSearch(text: string): string {
+  return stripCombiningDiacritics(text.toLowerCase().normalize("NFD"))
+    .replace(/đ/g, "d")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+export type VocabularyTypeFilter = "all" | "word" | "phrase";
+
+export interface VocabularyHighlightMeta {
+  canonicalForm?: string;
+  learningPattern?: string;
+}
+
+/**
+ * Client-side search+filter over the already-loaded saved vocabulary list —
+ * never triggers a request. Matches the English term, Vietnamese
+ * translation, source sentence, and (when resolveMeta is given) the
+ * highlight-derived canonical form, all accent/case-insensitively.
+ */
+export function filterVocabularyItems(
+  items: LessonSavedItem[],
+  query: string,
+  typeFilter: VocabularyTypeFilter,
+  resolveMeta?: (item: LessonSavedItem) => VocabularyHighlightMeta
+): LessonSavedItem[] {
+  const typeFiltered = typeFilter === "all" ? items : items.filter((item) => item.type === typeFilter);
+
+  const normalizedQuery = normalizeForSearch(query);
+  if (!normalizedQuery) return typeFiltered;
+
+  return typeFiltered.filter((item) => {
+    const candidates = [item.term, item.translation ?? "", item.sentence_context];
+    const meta = resolveMeta?.(item);
+    if (meta?.canonicalForm) candidates.push(meta.canonicalForm);
+    return candidates.some((candidate) => normalizeForSearch(candidate).includes(normalizedQuery));
+  });
+}
+
+/**
+ * Merges a saved vocabulary item with the *current* transcript-highlight
+ * metadata for its segment (canonicalForm/learningPattern) — these fields
+ * are never persisted on the saved row itself (see VocabularyItem), only on
+ * the shared per-transcript highlight cache. Matched by exact phrase text
+ * within the item's own segment, via the same findHighlightPhrase lookup
+ * the click-to-save popover uses. Returns {} (nothing to show) when the
+ * segment's highlights aren't loaded or don't include this term — legacy
+ * saved rows and freeform (non-highlighted) selections both fall here.
+ */
+export function resolveVocabularyHighlightMeta(
+  item: Pick<LessonSavedItem, "segment_index" | "term">,
+  phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>
+): VocabularyHighlightMeta {
+  const match = findHighlightPhrase(phrasesBySegmentIndex.get(item.segment_index), item.term);
+  if (!match) return {};
+  return { canonicalForm: match.canonicalForm, learningPattern: match.learningPattern };
+}
+
+export interface SentenceHighlightSegment {
+  text: string;
+  matched: boolean;
+}
+
+/**
+ * Splits a source sentence into plain/matched segments around the first
+ * case-insensitive occurrence of `term`, so the detail view can render the
+ * saved term highlighted in context without a full diff/markup pipeline.
+ */
+export function splitSentenceForHighlight(sentence: string, term: string): SentenceHighlightSegment[] {
+  const trimmedTerm = term.trim();
+  if (!trimmedTerm) return [{ text: sentence, matched: false }];
+
+  const index = sentence.toLowerCase().indexOf(trimmedTerm.toLowerCase());
+  if (index === -1) return [{ text: sentence, matched: false }];
+
+  const segments: SentenceHighlightSegment[] = [];
+  if (index > 0) segments.push({ text: sentence.slice(0, index), matched: false });
+  segments.push({ text: sentence.slice(index, index + trimmedTerm.length), matched: true });
+  const rest = sentence.slice(index + trimmedTerm.length);
+  if (rest) segments.push({ text: rest, matched: false });
+  return segments;
 }
 
 export function buildComparedTokens({
