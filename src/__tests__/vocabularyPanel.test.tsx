@@ -14,6 +14,8 @@ function makeItem(overrides: Partial<LessonSavedItem> = {}): LessonSavedItem {
     segment_index: 0,
     term: "reimburse",
     normalized_term: "reimburse",
+    canonical_form: null,
+    learning_pattern: null,
     sentence_context: "The company will reimburse your travel expenses.",
     note: null,
     translation: "hoàn trả",
@@ -204,6 +206,16 @@ describe("WordsTab search and filter", () => {
     fireEvent.click(screen.getByText("Clear search"));
     expect(screen.getByText("reimburse")).toBeInTheDocument();
   });
+
+  it("shows a type-specific empty state (not the search message) when only the type filter excludes everything", () => {
+    render(<Harness items={[REIMBURSE, POSTPONE]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Phrases" }));
+    expect(screen.getByText("No phrases saved yet.")).toBeInTheDocument();
+    expect(screen.queryByText("No vocabulary matches your search.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Show all vocabulary"));
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("reimburse")).toBeInTheDocument();
+  });
 });
 
 describe("WordsTab row interaction", () => {
@@ -231,6 +243,20 @@ describe("VocabularyDetailDialog content", () => {
     expect(within(screen.getByRole("dialog")).getByText("hoàn trả")).toBeInTheDocument();
   });
 
+  it("shows the learning pattern from the persisted item even with no highlight cache loaded", () => {
+    const persisted = makeItem({
+      id: "4",
+      term: "give up",
+      canonical_form: "give up",
+      learning_pattern: "give up + V-ing",
+      sentence_context: "Don't give up on your dreams.",
+      type: "phrase",
+    });
+    render(<Harness items={[persisted]} />);
+    fireEvent.click(screen.getByRole("button", { name: /give up/i }));
+    expect(screen.getByText("give up + V-ing")).toBeInTheDocument();
+  });
+
   it("shows the learning pattern when the highlight cache has a matching phrase", () => {
     const phrasesBySegmentIndex = new Map<number, VocabHighlightPhrase[]>([
       [
@@ -248,6 +274,27 @@ describe("VocabularyDetailDialog content", () => {
     render(<Harness items={[GO_A_LONG_WAY]} phrasesBySegmentIndex={phrasesBySegmentIndex} />);
     fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
     expect(screen.getByText("go a long way toward(s) + noun/V-ing")).toBeInTheDocument();
+  });
+
+  it("shows the canonical form as the dialog title, with the surface term as an 'In this sentence:' line, matching the popover/tooltip convention", () => {
+    const phrasesBySegmentIndex = new Map<number, VocabHighlightPhrase[]>([
+      [
+        3,
+        [
+          {
+            phrase: "go a long way toward",
+            translation: "góp phần đáng kể vào",
+            canonicalForm: "go a long way toward(s)",
+            learningPattern: "go a long way toward(s) + noun/V-ing",
+          },
+        ],
+      ],
+    ]);
+    render(<Harness items={[GO_A_LONG_WAY]} phrasesBySegmentIndex={phrasesBySegmentIndex} />);
+    fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("go a long way toward(s)")).toBeInTheDocument();
+    expect(within(dialog).getByText("In this sentence: go a long way toward")).toBeInTheDocument();
   });
 
   it("hides the Pattern section cleanly when no highlight matches (legacy record)", () => {

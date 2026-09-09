@@ -15,6 +15,8 @@ function makeItem(overrides: Partial<LessonSavedItem> = {}): LessonSavedItem {
     segment_index: 0,
     term: "reimburse",
     normalized_term: "reimburse",
+    canonical_form: null,
+    learning_pattern: null,
     sentence_context: "The company will reimburse your travel expenses.",
     note: null,
     translation: "hoàn trả",
@@ -110,7 +112,33 @@ describe("resolveVocabularyHighlightMeta", () => {
   };
   const phrasesBySegmentIndex = new Map<number, VocabHighlightPhrase[]>([[0, [phrase]]]);
 
-  it("returns the pattern/canonical form for a matching highlight in the same segment", () => {
+  it("prefers the persisted canonical_form/learning_pattern columns over the highlight cache", () => {
+    const item = makeItem({
+      segment_index: 0,
+      term: "go a long way toward",
+      canonical_form: "go a long way toward(s) [persisted]",
+      learning_pattern: "persisted pattern",
+    });
+    expect(resolveVocabularyHighlightMeta(item, phrasesBySegmentIndex)).toEqual({
+      canonicalForm: "go a long way toward(s) [persisted]",
+      learningPattern: "persisted pattern",
+    });
+  });
+
+  it("falls back to the highlight cache, per field, when a persisted field is null (legacy row)", () => {
+    const item = makeItem({
+      segment_index: 0,
+      term: "go a long way toward",
+      canonical_form: "go a long way toward(s) [persisted]",
+      learning_pattern: null,
+    });
+    expect(resolveVocabularyHighlightMeta(item, phrasesBySegmentIndex)).toEqual({
+      canonicalForm: "go a long way toward(s) [persisted]",
+      learningPattern: "go a long way toward(s) + noun/V-ing",
+    });
+  });
+
+  it("uses the highlight cache for a matching highlight in the same segment when nothing is persisted", () => {
     const item = makeItem({ segment_index: 0, term: "go a long way toward" });
     expect(resolveVocabularyHighlightMeta(item, phrasesBySegmentIndex)).toEqual({
       canonicalForm: "go a long way toward(s)",

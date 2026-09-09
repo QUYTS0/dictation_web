@@ -71,7 +71,8 @@ export function WordsTab({
   );
 
   const selectedItem = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId]);
-  const isFiltering = query.trim().length > 0 || typeFilter !== "all";
+  const hasQuery = query.trim().length > 0;
+  const isFiltering = hasQuery || typeFilter !== "all";
 
   const listRefCallback = useCallback(
     (node: HTMLDivElement | null) => {
@@ -161,13 +162,20 @@ export function WordsTab({
       {filteredItems.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
           <Search size={28} className="text-[var(--text-faint)]" />
-          <p className="text-xs font-medium text-[var(--text-muted)]">No vocabulary matches your search.</p>
+          <p className="text-xs font-medium text-[var(--text-muted)]">
+            {hasQuery
+              ? "No vocabulary matches your search."
+              : `No ${typeFilter === "word" ? "words" : "phrases"} saved yet.`}
+          </p>
           <button
             type="button"
-            onClick={() => onQueryChange("")}
+            onClick={() => {
+              onQueryChange("");
+              onTypeFilterChange("all");
+            }}
             className="text-xs font-semibold text-[var(--accent)] underline hover:brightness-110"
           >
-            Clear search
+            {hasQuery ? "Clear search" : "Show all vocabulary"}
           </button>
         </div>
       ) : (

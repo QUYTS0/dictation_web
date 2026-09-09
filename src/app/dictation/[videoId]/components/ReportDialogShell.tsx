@@ -172,7 +172,7 @@ export function ReportDialogShell({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-white/10"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-white/10"
                   aria-label={`Close ${title.toLowerCase()}`}
                 >
                   <X size={16} />

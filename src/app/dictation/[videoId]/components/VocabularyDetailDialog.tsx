@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { ArrowRight, Pencil, Trash2 } from "lucide-react";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
+import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import { ReportDialogShell } from "./ReportDialogShell";
 import { splitSentenceForHighlight, type VocabularyHighlightMeta } from "../helpers";
 import type { LessonSavedItem } from "../types";
@@ -98,11 +99,19 @@ export function VocabularyDetailDialog({
 
   const isSaving = updatingId === displayItem.id;
   const isDeleting = deletingId === displayItem.id;
-  const canonicalForm =
-    highlightMeta.canonicalForm &&
-    highlightMeta.canonicalForm.trim().toLowerCase() !== displayItem.term.trim().toLowerCase()
-      ? highlightMeta.canonicalForm
-      : undefined;
+  // Canonical-form-as-primary-title, surface term as an "In this sentence:"
+  // secondary line, matches the convention already established by the
+  // click-to-save popover, hover tooltip, and the Sentences tab's saved-item
+  // cards (see canonicalFormDiffersFromSurface's other call sites) — kept
+  // consistent here rather than inventing a different "Dictionary form:"
+  // treatment for just this dialog.
+  const hasDifferentCanonicalForm = canonicalFormDiffersFromSurface(highlightMeta.canonicalForm, displayItem.term);
+  // canonicalFormDiffersFromSurface's `canonicalForm is string` predicate
+  // already guarantees this is a string when true — TS just can't narrow
+  // through the boolean alias here since the checked value is a property
+  // access, not a plain local, so the cast is asserting a fact already
+  // proven above rather than sidestepping a real unknown.
+  const dialogTitle = hasDifferentCanonicalForm ? (highlightMeta.canonicalForm as string) : displayItem.term;
 
   const beginEdit = () => {
     setDraft(editValuesFor(displayItem));
@@ -137,27 +146,29 @@ export function VocabularyDetailDialog({
       open={Boolean(item)}
       onClose={onClose}
       titleId="vocabulary-detail-title"
-      title={displayItem.term}
+      title={dialogTitle}
       size="compact"
     >
       <div className="flex flex-col gap-4">
-        {/* Header */}
+        {/* Header — the title itself (canonical form when meaningfully
+            different, else the surface term) is already shown in
+            ReportDialogShell's own sticky header bar (also where its close
+            button and aria-labelledby target live), so this row only adds
+            what that bar doesn't: the surface term when it was swapped out
+            for the canonical form above, type, saved date, edit. */}
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-col gap-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id="vocabulary-detail-title" className="break-words text-lg font-bold text-[var(--text)]">
-                {displayItem.term}
-              </h2>
               <span className="shrink-0 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--accent)]">
                 {displayItem.type === "word" ? "Word" : "Phrase"}
               </span>
+              <span className="text-[11px] text-[var(--text-faint)]">
+                Saved {new Date(displayItem.created_at).toLocaleDateString()}
+              </span>
             </div>
-            {canonicalForm && (
-              <p className="mt-0.5 text-xs text-[var(--text-muted)]">Dictionary form: {canonicalForm}</p>
+            {hasDifferentCanonicalForm && (
+              <p className="text-xs text-[var(--text-faint)]">In this sentence: {displayItem.term}</p>
             )}
-            <p className="mt-0.5 text-[11px] text-[var(--text-faint)]">
-              Saved {new Date(displayItem.created_at).toLocaleDateString()}
-            </p>
           </div>
           {!editing && (
             <button

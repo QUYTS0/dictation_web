@@ -283,22 +283,33 @@ export function filterVocabularyItems(
 }
 
 /**
- * Merges a saved vocabulary item with the *current* transcript-highlight
- * metadata for its segment (canonicalForm/learningPattern) — these fields
- * are never persisted on the saved row itself (see VocabularyItem), only on
- * the shared per-transcript highlight cache. Matched by exact phrase text
- * within the item's own segment, via the same findHighlightPhrase lookup
- * the click-to-save popover uses. Returns {} (nothing to show) when the
- * segment's highlights aren't loaded or don't include this term — legacy
- * saved rows and freeform (non-highlighted) selections both fall here.
+ * Resolves a saved vocabulary item's canonicalForm/learningPattern,
+ * preferring the persisted `canonical_form`/`learning_pattern` columns
+ * (present on anything saved since the canonical-metadata migration —
+ * reliable regardless of whether the transcript's highlight cache happens
+ * to be loaded) and falling back, per field, to the *current*
+ * transcript-highlight cache for older rows saved before that migration
+ * existed. The highlight cache is matched by exact phrase text within the
+ * item's own segment, via the same findHighlightPhrase lookup the
+ * click-to-save popover uses, and is only consulted for whichever field the
+ * persisted row doesn't already have — a persisted value always wins over a
+ * same-session highlight-cache guess, per field independently, so one
+ * missing field on an otherwise-populated row can't blank out the other.
  */
 export function resolveVocabularyHighlightMeta(
-  item: Pick<LessonSavedItem, "segment_index" | "term">,
+  item: Pick<LessonSavedItem, "segment_index" | "term" | "canonical_form" | "learning_pattern">,
   phrasesBySegmentIndex: Map<number, VocabHighlightPhrase[]>
 ): VocabularyHighlightMeta {
-  const match = findHighlightPhrase(phrasesBySegmentIndex.get(item.segment_index), item.term);
-  if (!match) return {};
-  return { canonicalForm: match.canonicalForm, learningPattern: match.learningPattern };
+  const needsCanonicalForm = !item.canonical_form;
+  const needsLearningPattern = !item.learning_pattern;
+  const match =
+    needsCanonicalForm || needsLearningPattern
+      ? findHighlightPhrase(phrasesBySegmentIndex.get(item.segment_index), item.term)
+      : undefined;
+  return {
+    canonicalForm: item.canonical_form ?? match?.canonicalForm,
+    learningPattern: item.learning_pattern ?? match?.learningPattern,
+  };
 }
 
 export interface SentenceHighlightSegment {
