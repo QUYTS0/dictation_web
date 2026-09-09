@@ -1,0 +1,102 @@
+{
+  "_note": "Typed calibration fixture for the deterministic vocab-highlight pipeline. `pass` cases gate CI (calibration.report.test.ts asserts them like any other regression test). `known_limitation` cases are run and reported (see the calibration report's console output) but never asserted correct — they document real, current precision gaps (lexical coverage or sense disambiguation) so a future fix has a measured baseline to improve against, without silently locking in wrong behavior as a passing test.",
+  "cases": [
+    {
+      "text": "He has given up.",
+      "category": "canonicalization",
+      "expectedStatus": "pass",
+      "expectedSurface": "given up",
+      "expectedCanonical": "give up"
+    },
+    {
+      "text": "They went through a difficult period.",
+      "category": "canonicalization",
+      "expectedStatus": "pass",
+      "expectedSurface": "went through",
+      "expectedCanonical": "go through"
+    },
+    {
+      "text": "The company was taken over.",
+      "category": "canonicalization",
+      "expectedStatus": "pass",
+      "expectedSurface": "taken over",
+      "expectedCanonical": "take over"
+    },
+    {
+      "text": "It was brought up.",
+      "category": "canonicalization",
+      "expectedStatus": "pass",
+      "expectedSurface": "brought up",
+      "expectedCanonical": "bring up"
+    },
+    {
+      "text": "The companies were paired with local suppliers.",
+      "category": "canonicalization",
+      "expectedStatus": "pass",
+      "expectedSurface": "paired with",
+      "expectedCanonical": "pair with"
+    },
+    {
+      "text": "“Given up,” she said quietly.",
+      "category": "punctuation",
+      "expectedStatus": "pass",
+      "expectedSurface": "Given up",
+      "expectedCanonical": "give up"
+    },
+    {
+      "text": "HE HAS GIVEN UP.",
+      "category": "punctuation",
+      "expectedStatus": "pass",
+      "expectedSurface": "GIVEN UP",
+      "expectedCanonical": "give up"
+    },
+    {
+      "text": "He has given up—finally.",
+      "category": "punctuation",
+      "expectedStatus": "pass",
+      "expectedSurface": "given up",
+      "expectedCanonical": "give up"
+    },
+    {
+      "text": "Millions of deaths are avoided every year, thanks in part to lower rates of heart disease.",
+      "category": "boundary",
+      "expectedStatus": "pass",
+      "expectedSurface": "thanks in part to",
+      "expectedCanonical": "thanks to"
+    },
+    {
+      "text": "Ultimately, vegetarianism becomes less expensive than meat-eating in most countries.",
+      "category": "boundary",
+      "expectedStatus": "pass",
+      "expectedSurface": "meat-eating"
+    },
+    {
+      "text": "We should remember, at the end of the day, everyone wants the same thing.",
+      "category": "coverage",
+      "expectedStatus": "pass",
+      "expectedSurface": "at the end of the day",
+      "expectedCanonical": "at the end of the day"
+    },
+    {
+      "text": "They jumped at the offer.",
+      "category": "coverage",
+      "expectedStatus": "known_limitation",
+      "expectedSurface": "jumped at",
+      "expectedCanonical": "jump at"
+    },
+    {
+      "text": "She looked up the word.",
+      "category": "sense",
+      "expectedStatus": "pass",
+      "expectedSurface": "looked up",
+      "expectedCanonical": "look up"
+    },
+    {
+      "text": "She looked up at the sky.",
+      "category": "sense",
+      "expectedStatus": "known_limitation",
+      "expectedSurface": "looked up",
+      "expectedCanonical": "look up"
+    }
+  ]
+}

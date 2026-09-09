@@ -35,15 +35,19 @@ export type HighlightCandidate = {
   /** An ESTIMATE derived from learner-corpus frequency evidence, never an
    *  authoritative CEFR label. Never set for azure_key_phrase candidates. */
   estimatedLevel?: LearningLevel;
-  /** Set only by the construction-expansion stage (constructions.ts) — the
-   *  dictionary/normalized form this surface span is an instance of, e.g.
-   *  "pair with" for the surface "paired with". Distinguishes a reusable
-   *  lexical construction from the exact wording that happened to appear in
-   *  this sentence (`originalText`, the surfaceText). */
+  /** The dictionary/normalized form this surface span is an instance of,
+   *  e.g. "pair with" for the surface "paired with", or "give up" for
+   *  "given up". Set by the MWE lemma-match scan (candidates.ts) for any
+   *  WordNet/EFLLex/supplementary match — the matched lemma phrase IS the
+   *  canonical form — and by the construction-expansion stage
+   *  (constructions.ts) for its own curated matches. Distinguishes a
+   *  reusable lexical construction from the exact wording that happened to
+   *  appear in this sentence (`originalText`, the surfaceText). */
   canonicalForm?: string;
   /** Optional reusable explanation of the construction's usage pattern,
    *  e.g. "go a long way toward(s) + noun/V-ing". Construction-expansion
-   *  only; never set by other candidate sources. */
+   *  only — plain lexicon matches don't have reliable pattern data, so this
+   *  stays unset rather than guessing one from the surface text. */
   learningPattern?: string;
   /** Set for a candidate produced by hyphen-compound merging (e.g.
    *  "meat-eating") — used by scoring.ts to apply a dedicated bonus since

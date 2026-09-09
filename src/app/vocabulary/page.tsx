@@ -16,6 +16,7 @@ import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
 import { useAuth } from "@/context/auth";
+import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { VocabularyItem } from "@/lib/types";
 
 export default function VocabularyPage() {
@@ -258,7 +259,7 @@ export default function VocabularyPage() {
                           )}
                           <div>
                             <h3 className="text-xl font-bold text-slate-900 transition-colors group-hover:text-primary-600">
-                              {item.term}
+                              {item.canonical_form ?? item.term}
                             </h3>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             <button
@@ -336,11 +337,20 @@ export default function VocabularyPage() {
                             {item.translation ? (
                               <p className="mt-1 font-medium leading-relaxed text-slate-700">{item.translation}</p>
                             ) : null}
+                            {item.learning_pattern ? (
+                              <div className="mt-1">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Pattern</p>
+                                <p className="text-sm leading-relaxed text-slate-600">{item.learning_pattern}</p>
+                              </div>
+                            ) : null}
                             {item.note ? (
                               <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-500">
                                 📝 {item.note}
                               </p>
                             ) : null}
+                            {canonicalFormDiffersFromSurface(item.canonical_form, item.term) && (
+                              <p className="mt-1 text-xs text-slate-400">In this sentence: {item.term}</p>
+                            )}
                             <div className="mt-3 rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
                               <p className="line-clamp-3 text-sm italic leading-relaxed text-slate-500">
                                 &quot;{item.sentence_context}&quot;

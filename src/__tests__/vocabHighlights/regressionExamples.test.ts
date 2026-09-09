@@ -16,6 +16,8 @@ const cases: Array<{
   mustNotInclude: string[];
   /** phrase text -> expected learningPattern, for phrases that must carry one. */
   mustHavePattern?: Record<string, string>;
+  /** phrase text -> expected canonicalForm, for phrases that must carry one. */
+  mustHaveCanonicalForm?: Record<string, string>;
 }> = [
   {
     name: "idiom + complement marker (go a long way toward)",
@@ -31,6 +33,42 @@ const cases: Array<{
     mustInclude: ["business as usual", "paired with"],
     mustNotInclude: ["paired", "as usual"],
     mustHavePattern: { "paired with": "pair A with B / be paired with something" },
+    mustHaveCanonicalForm: { "paired with": "pair with" },
+  },
+  {
+    name: "conjugated phrasal verb (has given up -> give up), aux naturally excluded from the span",
+    text: "He has given up.",
+    mustInclude: ["given up"],
+    mustNotInclude: ["has given up", "he has given"],
+    mustHaveCanonicalForm: { "given up": "give up" },
+  },
+  {
+    name: "conjugated phrasal verb (went through -> go through)",
+    text: "They went through a difficult period.",
+    mustInclude: ["went through"],
+    mustNotInclude: [],
+    mustHaveCanonicalForm: { "went through": "go through" },
+  },
+  {
+    name: "conjugated phrasal verb, passive (was taken over -> take over), aux excluded",
+    text: "The company was taken over.",
+    mustInclude: ["taken over"],
+    mustNotInclude: ["was taken over"],
+    mustHaveCanonicalForm: { "taken over": "take over" },
+  },
+  {
+    name: "conjugated phrasal verb, passive (was brought up -> bring up)",
+    text: "It was brought up.",
+    mustInclude: ["brought up"],
+    mustNotInclude: ["was brought up"],
+    mustHaveCanonicalForm: { "brought up": "bring up" },
+  },
+  {
+    name: "6-token supplementary idiom now reachable (at the end of the day) — previously dead data under the fixed [4,3,2] window",
+    text: "We should remember, at the end of the day, everyone wants the same thing.",
+    mustInclude: ["at the end of the day"],
+    mustNotInclude: ["the end", "end of the day", "at the end"],
+    mustHaveCanonicalForm: { "at the end of the day": "at the end of the day" },
   },
   {
     name: "hyphen-compound merging + phrasal-verb false-positive guard (meat-eating, not eating in)",
@@ -80,7 +118,7 @@ const cases: Array<{
 ];
 
 describe("regression examples", () => {
-  it.each(cases)("$name", async ({ text, mustInclude, mustNotInclude, mustHavePattern }) => {
+  it.each(cases)("$name", async ({ text, mustInclude, mustNotInclude, mustHavePattern, mustHaveCanonicalForm }) => {
     const result = await runPipeline([{ segmentIndex: 0, textRaw: text }], "B1");
     const seg = result.bySegment.get(0);
     expect(seg).toBeDefined();
@@ -96,6 +134,11 @@ describe("regression examples", () => {
       const match = (seg?.phrases ?? []).find((p) => p.phrase === phrase);
       expect(match).toBeDefined();
       expect(match!.learningPattern).toBe(pattern);
+    }
+    for (const [phrase, canonicalForm] of Object.entries(mustHaveCanonicalForm ?? {})) {
+      const match = (seg?.phrases ?? []).find((p) => p.phrase === phrase);
+      expect(match).toBeDefined();
+      expect(match!.canonicalForm).toBe(canonicalForm);
     }
 
     // Every phrase: exact offsets, no leading/trailing punctuation, no overlaps.

@@ -9,8 +9,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // PIPELINE_VERSION (not a new DB migration) is what invalidates it, since
 // cache reads/writes key on this string — see cache.ts.
 describe("pipeline version bump invalidates old rows", () => {
-  it("PIPELINE_VERSION was bumped for this change (not left equal to the previous release's value)", () => {
+  it("PIPELINE_VERSION was bumped for this change (not left equal to any previous release's value)", () => {
+    // Every version string this pipeline has ever shipped under — a new
+    // release must never reuse one of these, or a stale cache row would be
+    // served as if it were current.
     expect(PIPELINE_VERSION).not.toBe("vocab-pipeline-v1");
+    expect(PIPELINE_VERSION).not.toBe("vocab-pipeline-v2");
+    expect(PIPELINE_VERSION).not.toBe("vocab-pipeline-v3");
     expect(PIPELINE_VERSION).not.toBe(LEGACY_GEMINI_PIPELINE_VERSION);
   });
 

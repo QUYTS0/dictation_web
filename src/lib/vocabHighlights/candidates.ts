@@ -1,13 +1,50 @@
 import type { WinkSegmentAnalysis, WinkToken } from "./winkPipeline";
 import { isConfidentProperNoun } from "./winkPipeline";
-import { lookupEfllexWord, getEfllexMultiwordEntries } from "./efllex";
+import { lookupEfllexWord, getEfllexMultiwordEntries, efllexMaxPhraseLength } from "./efllex";
 import { lookupSubtlex, subtlexUnknownBand } from "./subtlex";
-import { lookupWordnetMultiword } from "./wordnet";
-import { lookupSupplementaryMultiword } from "./supplementaryPhrases";
+import { lookupWordnetMultiword, wordnetMaxPhraseLength } from "./wordnet";
+import { lookupSupplementaryMultiword, supplementaryMaxPhraseLength } from "./supplementaryPhrases";
 import { isPossessiveCliticText } from "./validation";
 import type { HighlightCandidate, CandidateSource } from "./types";
 
-const MWE_WINDOW_LENGTHS = [4, 3, 2] as const;
+/** Hard ceiling on MWE window length regardless of what the lexicons measure
+ *  out to — bounds worst-case per-token lookup cost. Double the longest
+ *  entry measured across all three sources as of this writing (6 tokens,
+ *  "at the end of the day" in supplementaryPhrases.ts), with headroom for
+ *  near-term additions. If a source's longest entry ever exceeds this, that
+ *  entry is silently never matched — same as any fixed cap, just centralized
+ *  and documented instead of an accidental side effect of a stale literal. */
+export const MAX_SAFE_MWE_TOKENS = 8;
+
+/** Pure computation, exported for direct unit testing without touching real
+ *  lexicon data: given each source's measured max phrase length, returns the
+ *  descending window-length sequence (e.g. [6,5,4,3,2]) the MWE scan should
+ *  try, clamped to MAX_SAFE_MWE_TOKENS. */
+export function computeWindowLengths(sourceMaxLengths: number[]): number[] {
+  const max = Math.min(MAX_SAFE_MWE_TOKENS, Math.max(0, ...sourceMaxLengths));
+  const lengths: number[] = [];
+  for (let len = max; len >= 2; len--) lengths.push(len);
+  return lengths;
+}
+
+let cachedWindowLengths: number[] | null = null;
+
+/** Descending window lengths (e.g. [6,5,4,3,2]) for the MWE scan below,
+ *  derived from the longest entry actually present across WordNet/EFLLex/
+ *  supplementary data — not a fixed literal. Replaces the old
+ *  MWE_WINDOW_LENGTHS = [4,3,2] const, which silently made any lexicon entry
+ *  longer than 4 tokens unreachable (verified: "at the end of the day" in
+ *  supplementaryPhrases.ts was dead data under that literal). Computed once
+ *  per warm process from data the lexicon modules already have loaded. */
+function getWindowLengths(): number[] {
+  if (cachedWindowLengths) return cachedWindowLengths;
+  cachedWindowLengths = computeWindowLengths([
+    wordnetMaxPhraseLength(),
+    efllexMaxPhraseLength(),
+    supplementaryMaxPhraseLength(),
+  ]);
+  return cachedWindowLengths;
+}
 
 function isTranscriptArtifact(text: string): boolean {
   if (text.length < 2) return true;
@@ -82,7 +119,7 @@ function generateMultiwordCandidates(analysis: WinkSegmentAnalysis, corroborated
     }
 
     let matched = false;
-    for (const len of MWE_WINDOW_LENGTHS) {
+    for (const len of getWindowLengths()) {
       if (i + len > tokens.length) continue;
       const window = tokens.slice(i, i + len);
       if (window.some((t) => t.isPunctuation)) continue;
@@ -108,6 +145,12 @@ function generateMultiwordCandidates(analysis: WinkSegmentAnalysis, corroborated
         end,
         originalText: text.slice(start, end),
         lemma: lemmaPhrase,
+        // The matched lemma phrase IS the canonical learning form (that's
+        // what lemma-based matching means) — expose it so inflected surface
+        // forms ("gave up", "given up") resolve to the same canonical
+        // identity ("give up") downstream, same as constructions.ts already
+        // does for its own matches.
+        canonicalForm: lemmaPhrase,
         kind: wordnetMatch?.kind ?? supplementaryMatch?.kind ?? "multiword_expression",
         sources,
         score: 0,

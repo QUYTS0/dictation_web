@@ -9,6 +9,30 @@ import type { VocabularyItem, VocabularyRequest, VocabularyUpdateRequest } from 
 
 const VOCABULARY_TRANSLATION_LANGUAGE = "vi";
 
+/** Generous headroom over real values (e.g. "go a long way toward(s) +
+ *  noun/V-ing") — just a defensive bound against malformed/oversized input,
+ *  not a meaningful product constraint. */
+const MAX_METADATA_FIELD_LENGTH = 200;
+
+/** Trims and collapses internal whitespace; empty after trimming becomes
+ *  null (never an empty string) so `canonical_form ?? term` fallbacks work
+ *  correctly downstream. Truncates rather than rejecting an over-long value
+ *  — canonical form/pattern are pipeline-derived, not attacker-controlled
+ *  free text, so truncation is a safe defensive bound. */
+function normalizeOptionalMetadata(value: string): string | null {
+  const collapsed = value.trim().replace(/\s+/g, " ");
+  if (!collapsed) return null;
+  return collapsed.length > MAX_METADATA_FIELD_LENGTH ? collapsed.slice(0, MAX_METADATA_FIELD_LENGTH) : collapsed;
+}
+
+/** true when `value` is present in the body but not a valid optional-string
+ *  field (i.e. neither absent/undefined nor a string) — used to reject
+ *  malformed canonicalForm/learningPattern input (arrays/objects/numbers)
+ *  with a 400 instead of silently coercing or crashing on `.trim()`. */
+function isInvalidOptionalMetadata(value: unknown): boolean {
+  return value !== undefined && typeof value !== "string";
+}
+
 export async function GET(request: NextRequest) {
   try {
     const videoId = request.nextUrl.searchParams.get("videoId");
@@ -59,6 +83,8 @@ export async function POST(request: NextRequest) {
       term,
       sentenceContext,
       note,
+      canonicalForm,
+      learningPattern,
       translation: precomputedTranslation,
       translationSource: precomputedTranslationSource,
       phonetic: precomputedPhonetic,
@@ -76,6 +102,10 @@ export async function POST(request: NextRequest) {
         { error: "videoId, segmentIndex, term and sentenceContext are required" },
         { status: 400 }
       );
+    }
+
+    if (isInvalidOptionalMetadata(canonicalForm) || isInvalidOptionalMetadata(learningPattern)) {
+      return NextResponse.json({ error: "canonicalForm and learningPattern must be strings when provided" }, { status: 400 });
     }
 
     const normalizedTerm = normalizeVocabularyTerm(term);
@@ -137,7 +167,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to save vocabulary item" }, { status: 500 });
     }
 
-    const payload = {
+    const basePayload = {
       ...dedupeFilter,
       term: term.trim(),
       sentence_context: sentenceContext.trim(),
@@ -158,16 +188,33 @@ export async function POST(request: NextRequest) {
     let data;
     let error;
     if (existing) {
+      // Update branch: canonicalForm/learningPattern use preserve-on-omit
+      // semantics, not the insert branch's default-to-null — a note-only
+      // edit, or a re-save from a manual selection with no highlight match,
+      // must never blank out canonical metadata a previous save already
+      // attached to this row. Only add the key to the update payload when
+      // the field was actually present in this request.
+      const updatePayload: Record<string, unknown> = { ...basePayload };
+      if (canonicalForm !== undefined) updatePayload.canonical_form = normalizeOptionalMetadata(canonicalForm);
+      if (learningPattern !== undefined) updatePayload.learning_pattern = normalizeOptionalMetadata(learningPattern);
+
       const result = await supabase
         .from("vocabulary_items")
-        .update(payload)
+        .update(updatePayload)
         .eq("id", existing.id)
         .select("*")
         .single();
       data = result.data;
       error = result.error;
     } else {
-      const result = await supabase.from("vocabulary_items").insert(payload).select("*").single();
+      // Insert branch: no existing value to preserve, so an omitted field
+      // naturally becomes null here.
+      const insertPayload = {
+        ...basePayload,
+        canonical_form: canonicalForm !== undefined ? normalizeOptionalMetadata(canonicalForm) : null,
+        learning_pattern: learningPattern !== undefined ? normalizeOptionalMetadata(learningPattern) : null,
+      };
+      const result = await supabase.from("vocabulary_items").insert(insertPayload).select("*").single();
       data = result.data;
       error = result.error;
     }

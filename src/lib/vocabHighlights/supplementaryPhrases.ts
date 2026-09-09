@@ -29,3 +29,17 @@ export const SUPPLEMENTARY_PHRASES: Record<string, SupplementaryPhraseEntry> = {
 export function lookupSupplementaryMultiword(lemmaPhrase: string): SupplementaryPhraseEntry | null {
   return SUPPLEMENTARY_PHRASES[lemmaPhrase] ?? null;
 }
+
+let cachedMaxPhraseLength: number | null = null;
+
+/** Longest entry (in tokens) in SUPPLEMENTARY_PHRASES — used by candidates.ts
+ *  to size the MWE scan window. This list has no build step, so unlike
+ *  wordnetMaxPhraseLength/efllexMaxPhraseLength this scans a small static
+ *  object rather than a loaded file; still cached since candidates.ts calls
+ *  this once per module-lifetime via getWindowLengths(), not per token. */
+export function supplementaryMaxPhraseLength(): number {
+  if (cachedMaxPhraseLength === null) {
+    cachedMaxPhraseLength = Math.max(0, ...Object.keys(SUPPLEMENTARY_PHRASES).map((k) => k.split(" ").length));
+  }
+  return cachedMaxPhraseLength;
+}

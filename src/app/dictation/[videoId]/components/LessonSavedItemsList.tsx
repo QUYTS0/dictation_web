@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { clsx } from "clsx";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
+import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { LessonSavedItem } from "../types";
 
 export function LessonSavedItemsList({
@@ -89,7 +90,7 @@ export function LessonSavedItemsList({
                 />
               )}
               <span className={clsx("truncate text-sm text-[var(--text)]", compact && "text-xs font-semibold")}>
-                {item.term}
+                {item.canonical_form ?? item.term}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -171,12 +172,25 @@ export function LessonSavedItemsList({
               {item.translation}
             </span>
           )}
+          {canonicalFormDiffersFromSurface(item.canonical_form, item.term) && (
+            <span className={clsx("text-xs text-[var(--text-faint)]", compact && "text-[11px]")}>
+              In this sentence: {item.term}
+            </span>
+          )}
           <span className={clsx("text-xs text-[var(--text-faint)]", compact && "text-[11px]")}>
             Sentence {item.segment_index + 1}
           </span>
           <span className={clsx("text-xs text-[var(--text-muted)]", compact && "text-[11px] line-clamp-2")}>
             {item.sentence_context}
           </span>
+          {item.learning_pattern && (
+            <div>
+              <div className="text-[9px] font-bold uppercase tracking-widest text-[var(--text-faint)]">Pattern</div>
+              <span className={clsx("whitespace-pre-wrap text-xs text-[var(--text-muted)]", compact && "text-[11px]")}>
+                {item.learning_pattern}
+              </span>
+            </div>
+          )}
           {item.note && (
             <span className={clsx("whitespace-pre-wrap text-xs text-[var(--text-muted)]", compact && "text-[11px]")}>
               📝 {item.note}
