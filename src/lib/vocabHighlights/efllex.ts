@@ -129,6 +129,18 @@ export interface EfllexMultiwordEntry {
   pos: string;
 }
 
+let cachedMaxPhraseLength: number | null = null;
+
+/** Longest multi-word entry (in tokens) present in EFLLex — used by
+ *  candidates.ts to size the MWE scan window. Computed once from the
+ *  already-loaded multiword entries, no extra I/O. */
+export function efllexMaxPhraseLength(): number {
+  if (cachedMaxPhraseLength === null) {
+    cachedMaxPhraseLength = Math.max(0, ...getEfllexMultiwordEntries().map((e) => e.wordCount));
+  }
+  return cachedMaxPhraseLength;
+}
+
 let cachedMultiwords: EfllexMultiwordEntry[] | null = null;
 
 /** All EFLLex multi-word entries, for the candidates.ts MWE generation
@@ -154,4 +166,5 @@ export function getEfllexMultiwordEntries(): EfllexMultiwordEntry[] {
 export function __resetEfllexCacheForTests() {
   cached = null;
   cachedMultiwords = null;
+  cachedMaxPhraseLength = null;
 }

@@ -51,6 +51,26 @@ export interface WinkSegmentAnalysis {
  * possessives, hyphenated terms, curly quotes, em dashes, and accented
  * characters against the original text_raw.
  */
+// wink-eng-lite-web-model's lemma dictionary conflates a small number of
+// closed-class words with an informal spelling variant that shares the same
+// lemma entry — verified directly against the installed model (1.8.1):
+// tokenOut(its.lemma) for the surface "through" returns "thru", while every
+// other common particle/preposition tested (up, down, off, along, onto,
+// across, over, into, about, around, forward) round-trips to itself. Left
+// uncorrected, this silently breaks lemma-based MWE matching for any
+// lexicon entry ending in "through" (e.g. WordNet's "go through" would never
+// match the surface "went through"/"goes through"). This is a token-level
+// lemma correction — applies to every occurrence of the word, not a
+// phrase-specific exception — analogous to efllex.ts's existing
+// NLP4J_TO_UNIVERSAL correction table.
+const WINK_LEMMA_CORRECTIONS: Record<string, string> = {
+  thru: "through",
+};
+
+function correctWinkLemma(lemma: string): string {
+  return WINK_LEMMA_CORRECTIONS[lemma] ?? lemma;
+}
+
 function tokenizeWithOffsets(text: string): WinkToken[] {
   const nlp = getWink();
   const its = nlp.its;
@@ -78,7 +98,7 @@ function tokenizeWithOffsets(text: string): WinkToken[] {
       text: surface,
       start,
       end,
-      lemma: tokenOut(its.lemma) || surface,
+      lemma: correctWinkLemma(tokenOut(its.lemma) || surface),
       pos: tokenOut(its.pos) || "X",
       isStopWord: Boolean(tokenOut(its.stopWordFlag)),
       isPunctuation: tokenOut(its.type) === "punctuation",

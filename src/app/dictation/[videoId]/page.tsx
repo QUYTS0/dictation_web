@@ -75,6 +75,7 @@ import {
   SHADOWING_HINT_SEEN_KEY,
 } from "./constants";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
+import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { RightPanelTab } from "./types";
 
 // ---- Page component ----
@@ -1444,6 +1445,20 @@ export default function DictationPage({ params }: PageProps) {
                 </div>
               )}
               <div className="w-full rounded-xl bg-[var(--surface-2)] px-2.5 py-2">
+                {/* Canonical learning form vs. the exact inflected surface
+                    text — deterministic, independent of the translation
+                    fetch below. Only shown when they actually differ (e.g.
+                    "give up" vs. the selected "given up"); a plain word
+                    selection with no canonicalForm renders nothing extra
+                    here. */}
+                {canonicalFormDiffersFromSurface(scriptPopover.canonicalForm, scriptPopover.selectedText) && (
+                  <div className="mb-1.5">
+                    <div className="text-sm font-semibold text-[var(--text)]">{scriptPopover.canonicalForm}</div>
+                    <div className="text-[11px] text-[var(--text-faint)]">
+                      In this sentence: {scriptPopover.selectedText}
+                    </div>
+                  </div>
+                )}
                 {scriptPopoverPreviewLoading ? (
                   <div className="h-3.5 w-24 animate-pulse rounded bg-white/10" />
                 ) : scriptPopoverPreview?.wordDetails ? (
@@ -1662,7 +1677,14 @@ export default function DictationPage({ params }: PageProps) {
               style={{ left: phraseHoverPreview.x, top: phraseHoverPreview.y - 8 }}
               role="tooltip"
             >
-              <div className="font-semibold text-[var(--text)]">{phraseHoverPreview.text}</div>
+              {canonicalFormDiffersFromSurface(phraseHoverPreview.canonicalForm, phraseHoverPreview.text) ? (
+                <>
+                  <div className="font-semibold text-[var(--text)]">{phraseHoverPreview.canonicalForm}</div>
+                  <div className="text-[10px] text-[var(--text-faint)]">In this sentence: {phraseHoverPreview.text}</div>
+                </>
+              ) : (
+                <div className="font-semibold text-[var(--text)]">{phraseHoverPreview.text}</div>
+              )}
               {phraseHoverPreview.loading ? (
                 <div className="mt-1 h-3 w-24 animate-pulse rounded bg-white/10" />
               ) : phraseHoverPreview.data?.translation ? (

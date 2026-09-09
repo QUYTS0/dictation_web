@@ -29,13 +29,27 @@ export function wordnetVersion(): string {
 }
 
 /** Looks up a lowercased, whitespace-joined candidate phrase (e.g.
- *  "give up", "make sense of"). Candidate window generation (4-word down to
- *  2-word) lives in candidates.ts, which owns the token stream. */
+ *  "give up", "make sense of"). Candidate window generation (sized by
+ *  wordnetMaxPhraseLength() down to 2-word) lives in candidates.ts, which
+ *  owns the token stream. */
 export function lookupWordnetMultiword(phraseLowercase: string): WordnetMultiwordEntry | null {
   return loadRaw().multiwords[phraseLowercase] ?? null;
+}
+
+let cachedMaxPhraseLength: number | null = null;
+
+/** Longest entry (in tokens) present in the derived WordNet multiword index —
+ *  used by candidates.ts to size the MWE scan window instead of a fixed
+ *  literal. Computed once from data already loaded by loadRaw(), no extra I/O. */
+export function wordnetMaxPhraseLength(): number {
+  if (cachedMaxPhraseLength === null) {
+    cachedMaxPhraseLength = Math.max(0, ...Object.values(loadRaw().multiwords).map((v) => v.wordCount));
+  }
+  return cachedMaxPhraseLength;
 }
 
 /** Test-only cache reset. */
 export function __resetWordnetCacheForTests() {
   cached = null;
+  cachedMaxPhraseLength = null;
 }

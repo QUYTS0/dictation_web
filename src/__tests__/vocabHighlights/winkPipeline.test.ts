@@ -35,6 +35,13 @@ describe("winkPipeline offsets", () => {
     expect(tokens.find((t) => t.text === "emissions")?.lemma).toBe("emission");
   });
 
+  it("corrects wink's lemma quirk for 'through' (dictionary maps it to 'thru') so WordNet-lemma MWE matching stays reliable", () => {
+    const text = "They went through a difficult period.";
+    const { bySegment } = analyzeTranscript([{ segmentIndex: 0, text }]);
+    const tokens = bySegment.get(0)!.tokens;
+    expect(tokens.find((t) => t.text === "through")?.lemma).toBe("through");
+  });
+
   it("does not automatically treat every sentence-initial capitalized word as a confident proper noun", () => {
     const text = "Farm animals destined for food vanish.";
     const { bySegment, corroboratedPropnLemmas } = analyzeTranscript([{ segmentIndex: 0, text }]);

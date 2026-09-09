@@ -183,14 +183,17 @@ export interface VocabHighlightPhrase {
   start?: number;
   end?: number;
   /** Dictionary/normalized form this exact wording is an instance of, e.g.
-   *  "pair with" for the surface "paired with". Set only when the
-   *  construction-expansion stage produced/extended this highlight.
-   *  Not currently rendered by any UI — reserved for a future vocabulary-
-   *  preview enhancement. */
+   *  "pair with" for the surface "paired with" or "give up" for "given up".
+   *  Set by lemma-based lexicon matching (candidates.ts) for any recognized
+   *  WordNet/EFLLex/supplementary MWE, and by the construction-expansion
+   *  stage for its own curated matches — not construction-only. Rendered as
+   *  the primary learning title (selection popover, saved-vocabulary lists)
+   *  when it differs from the surface phrase. */
   canonicalForm?: string;
   /** Optional reusable usage pattern, e.g. "go a long way toward(s) +
-   *  noun/V-ing". Same construction-expansion-only, not-yet-rendered status
-   *  as canonicalForm. */
+   *  noun/V-ing" — construction-expansion only (plain lexicon matches don't
+   *  have reliable pattern data). Rendered in the selection popover/hover
+   *  tooltip and, once persisted, in saved-vocabulary lists. */
   learningPattern?: string;
 }
 
@@ -395,6 +398,18 @@ export interface VocabularyItem {
   segment_index: number;
   term: string;
   normalized_term: string;
+  /** Dictionary/normalized learning form, e.g. "give up" for a saved term
+   *  of "given up" — set only when the item was captured from a recognized
+   *  highlight (see VocabHighlightPhrase.canonicalForm). Null for manual
+   *  selections and for every row saved before this column existed;
+   *  rendering must fall back to `term` (`canonical_form ?? term`), never
+   *  assume it's present. */
+  canonical_form: string | null;
+  /** Reusable usage pattern, e.g. "go a long way toward(s) + noun/V-ing" —
+   *  same optional, construction-expansion-only origin as
+   *  VocabHighlightPhrase.learningPattern. Null unless the source highlight
+   *  had one; never displayed as an empty heading when absent. */
+  learning_pattern: string | null;
   sentence_context: string;
   note: string | null;
   translation: string | null;
@@ -422,6 +437,13 @@ export interface VocabularyRequest {
   term: string;
   sentenceContext: string;
   note?: string;
+  /** From the current highlight's canonicalForm/learningPattern, when the
+   *  saved text was a recognized highlight — omitted (not sent) for a
+   *  manual selection with no match. Omitted means "unknown", never treated
+   *  as "clear this field": see the route's update-preserves-on-omit
+   *  semantics, which matters when re-saving over an existing row. */
+  canonicalForm?: string;
+  learningPattern?: string;
   /** Pre-computed by the popover's live preview, to skip a duplicate lookup on save. */
   translation?: string;
   translationSource?: "azure" | "free_library" | "gemini";

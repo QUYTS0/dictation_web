@@ -13,7 +13,7 @@ export { LEARNING_LEVELS, DEFAULT_LEARNING_LEVEL, type LearningLevel } from "./p
  * data/manifest.json is stored for observability only and does not
  * independently invalidate anything.
  */
-export const PIPELINE_VERSION = "vocab-pipeline-v3";
+export const PIPELINE_VERSION = "vocab-pipeline-v4";
 
 /** Legacy Gemini-era rows are backfilled with this value by the migration. */
 export const LEGACY_GEMINI_PIPELINE_VERSION = "gemini-legacy-v1";
@@ -29,8 +29,9 @@ export const LEGACY_GEMINI_PIPELINE_VERSION = "gemini-legacy-v1";
  * single noisy level no longer flips the estimate.
  *
  * This value is a starting point pending calibration against the fixture in
- * __fixtures__/calibration-sentences.json (see the plan's §8/rollout
- * Phase 3) — not asserted as final/authoritative.
+ * src/__tests__/vocabHighlights/__fixtures__/calibration-sentences.json
+ * (run via `npm run test:vocab-calibration`) — not asserted as
+ * final/authoritative.
  */
 export const EFLLEX_LEVEL_THRESHOLD_PMW = 0.5;
 

@@ -47,8 +47,12 @@ export function scoreCandidate(candidate: HighlightCandidate, learningLevel: Lea
 
   // Extra credit for a verified, complete construction (constructions.ts)
   // over an arbitrary same-tier n-gram — on top of, not instead of, the
-  // kind-based bonus above.
-  if (candidate.canonicalForm) {
+  // kind-based bonus above. Gated on provenance (sources), not on
+  // canonicalForm's mere presence: canonicalForm now also appears on plain
+  // WordNet/EFLLex/supplementary MWE matches (candidates.ts), which are
+  // already tier-scored via PHRASAL_VERB_BONUS/MULTIWORD_BONUS above and
+  // must not additionally collect this construction-specific bonus.
+  if (candidate.sources.includes("construction")) {
     score += SCORING.CONSTRUCTION_BONUS;
     reasons.push("construction-bonus");
   }

@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
+    "test:vocab-calibration": "jest calibration.report",
     "build:vocab-datasets": "node scripts/build-vocab-datasets/build-efllex.js && node scripts/build-vocab-datasets/build-wordnet.js && node scripts/build-vocab-datasets/build-manifest.js"
   },
   "dependencies": {

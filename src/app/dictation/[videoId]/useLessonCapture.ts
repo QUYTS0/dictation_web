@@ -118,7 +118,9 @@ export function useLessonCapture({
       type: LessonItemType,
       segmentIndex: number,
       sentenceContext: string,
-      preview?: VocabularyPreviewResponse | null
+      preview?: VocabularyPreviewResponse | null,
+      canonicalForm?: string,
+      learningPattern?: string
     ) => void
   >(() => {});
   const deleteLessonCaptureRef = useRef<(itemId: string) => void>(() => {});
@@ -282,7 +284,9 @@ export function useLessonCapture({
       type: LessonItemType,
       segmentIndex: number,
       sentenceContext: string,
-      preview?: VocabularyPreviewResponse | null
+      preview?: VocabularyPreviewResponse | null,
+      canonicalForm?: string,
+      learningPattern?: string
     ) => {
       const trimmedText = text.trim();
       if (!trimmedText) return;
@@ -301,6 +305,8 @@ export function useLessonCapture({
             term: trimmedText,
             sentenceContext,
             note: saveNote || undefined,
+            canonicalForm,
+            learningPattern,
             translation: preview?.translation?.text,
             translationSource: preview?.translation?.source,
             phonetic: preview?.wordDetails?.phonetic ?? undefined,
@@ -355,7 +361,15 @@ export function useLessonCapture({
             setLearningError(message);
             setLearningErrorRetry(
               () => () =>
-                saveLessonCaptureAtSegmentRef.current(text, type, segmentIndex, sentenceContext, preview)
+                saveLessonCaptureAtSegmentRef.current(
+                  text,
+                  type,
+                  segmentIndex,
+                  sentenceContext,
+                  preview,
+                  canonicalForm,
+                  learningPattern
+                )
             );
           })
           .finally(() => {
@@ -897,7 +911,13 @@ export function useLessonCapture({
         type,
         segment.segmentIndex,
         segment.text,
-        previewMatchesSave ? scriptPopoverPreview : null
+        previewMatchesSave ? scriptPopoverPreview : null,
+        // canonicalForm/learningPattern describe the highlight matched to
+        // scriptPopover.selectedText — only attach them when the text being
+        // saved is that exact selection (never for a "sentence" save, which
+        // saves the whole segment instead).
+        previewMatchesSave ? scriptPopover.canonicalForm : undefined,
+        previewMatchesSave ? scriptPopover.learningPattern : undefined
       );
     },
     [saveLessonCaptureAtSegment, scriptPopover, scriptPopoverPreview, segmentsByIndex]
