@@ -28,6 +28,52 @@ export function splitSentenceIntoWords(sentence: string) {
 }
 
 /**
+ * Data attribute for interface elements that live inside the selectable
+ * transcript but aren't part of its actual text — e.g. the mobile "ⓘ" show-
+ * meaning button rendered next to a highlighted phrase (see ScriptTab.tsx).
+ * getSelectedTranscriptText below excludes any text node under an element
+ * carrying this attribute, so dragging/long-pressing a selection across one
+ * of these controls can never pull its glyph into the extracted text.
+ */
+export const SELECTION_IGNORE_ATTR = "data-selection-ignore";
+const SELECTION_IGNORE_SELECTOR = `[${SELECTION_IGNORE_ATTR}]`;
+
+/**
+ * Reads the text a Range actually spans, excluding any subtree marked with
+ * SELECTION_IGNORE_ATTR. Deliberately not `Range.toString()`/
+ * `Selection.toString()`: those concatenate every text node in document
+ * order regardless of markup, including elements that are only
+ * `display:none` on desktop but real, visible DOM nodes on mobile (like the
+ * phone-only info button). CSS alone (`user-select: none`) isn't a reliable
+ * substitute either — WebKit has a long-standing quirk where user-select:
+ * none text still ends up in Selection.toString() even though the user
+ * could never visually select it. Walking the range's own text nodes and
+ * skipping marked ones keeps every other character — spaces, punctuation,
+ * apostrophes, hyphens — exactly as authored, since it never touches
+ * anything but the literal transcript text nodes already in the DOM.
+ */
+export function getSelectedTranscriptText(range: Range): string {
+  const container =
+    range.commonAncestorContainer instanceof Element
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+  if (!container) return range.toString();
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let text = "";
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (!range.intersectsNode(node)) continue;
+    if (node.parentElement?.closest(SELECTION_IGNORE_SELECTOR)) continue;
+    const content = node.textContent ?? "";
+    const start = node === range.startContainer ? range.startOffset : 0;
+    const end = node === range.endContainer ? range.endOffset : content.length;
+    if (end > start) text += content.slice(start, end);
+  }
+  return text;
+}
+
+/**
  * Splits a sentence into alternating word/whitespace tokens (unlike
  * splitSentenceIntoWords, whitespace is preserved) so each word can be
  * rendered as its own clickable span while reproducing the original text.

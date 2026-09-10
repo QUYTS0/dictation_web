@@ -236,6 +236,67 @@ describe("WordsTab row interaction", () => {
   });
 });
 
+describe("WordsTab row thumbnail sizing", () => {
+  // Regression coverage for the row-overflow fix: a reserved-but-empty
+  // thumbnail slot used to sit in every row regardless of whether the item
+  // had an image, and a broken image URL rendered as a blank box with no
+  // indication anything was wrong. Both now collapse/fall back instead.
+  it("does not reserve a thumbnail column for an item with no image", () => {
+    render(<Harness items={[REIMBURSE]} />);
+    const row = screen.getByRole("button", { name: /reimburse/i });
+    expect(row.querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("swaps a broken thumbnail image for a fallback icon instead of a blank box", () => {
+    const withImage = makeItem({
+      id: "5",
+      term: "lighthouse",
+      translation: "hải đăng",
+      image_thumbnail_url: "https://example.com/broken.jpg",
+    });
+    render(<Harness items={[withImage]} />);
+    const row = screen.getByRole("button", { name: /lighthouse/i });
+    const img = row.querySelector("img");
+    expect(img).toBeInTheDocument();
+    fireEvent.error(img as HTMLImageElement);
+    expect(row.querySelector("img")).not.toBeInTheDocument();
+    expect(row.querySelector("svg")).toBeInTheDocument();
+  });
+});
+
+describe("WordsTab row text wrapping", () => {
+  // Regression coverage for the overflow fix: the term/translation used to
+  // be hard-truncated to a single line (`truncate`), which the fix relaxes
+  // to a two-line clamp. Confirm both the full multi-line text is present in
+  // the DOM (so it isn't silently cut down to one line's worth of content)
+  // and that an unbroken run with no natural break points doesn't throw or
+  // get dropped either.
+  it("keeps the full multi-line translation text in the DOM rather than a single-line-truncated fragment", () => {
+    const longTranslation = makeItem({
+      id: "6",
+      term: "reconcile",
+      translation:
+        "làm cho phù hợp trở lại, giải quyết một cách ổn thỏa những khác biệt hoặc mâu thuẫn giữa hai bên",
+    });
+    render(<Harness items={[longTranslation]} />);
+    expect(
+      screen.getByText(
+        "làm cho phù hợp trở lại, giải quyết một cách ổn thỏa những khác biệt hoặc mâu thuẫn giữa hai bên"
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("renders a long unbroken term without throwing", () => {
+    const unbroken = makeItem({
+      id: "7",
+      term: "a".repeat(120),
+      translation: "b".repeat(120),
+    });
+    render(<Harness items={[unbroken]} />);
+    expect(screen.getByText("a".repeat(120))).toBeInTheDocument();
+  });
+});
+
 describe("VocabularyDetailDialog content", () => {
   it("shows the main translation", () => {
     render(<Harness items={[REIMBURSE]} />);
@@ -317,6 +378,117 @@ describe("VocabularyDetailDialog content", () => {
     expect(dialog.textContent).not.toMatch(/undefined/i);
     expect(dialog.textContent).not.toContain(" - ");
     expect(screen.queryByText("More details")).not.toBeInTheDocument();
+  });
+});
+
+describe("VocabularyDetailDialog image", () => {
+  it("shows the item's image, starting in a loading state and swapping to loaded once it fires", () => {
+    const withImage = makeItem({
+      id: "10",
+      term: "lighthouse",
+      image_url: "https://example.com/lighthouse-full.jpg",
+      image_thumbnail_url: "https://example.com/lighthouse-thumb.jpg",
+    });
+    render(<Harness items={[withImage]} />);
+    fireEvent.click(screen.getByRole("button", { name: /lighthouse/i }));
+    const dialog = screen.getByRole("dialog");
+    const img = dialog.querySelector("img") as HTMLImageElement;
+    expect(img).toBeInTheDocument();
+    // Prefers the full image over the thumbnail when both are present.
+    expect(img).toHaveAttribute("src", "https://example.com/lighthouse-full.jpg");
+    expect(img).toHaveClass("hidden"); // loading: image hidden behind the spinner
+    fireEvent.load(img);
+    expect(img).not.toHaveClass("hidden");
+  });
+
+  it("falls back to the thumbnail URL when only that field is populated", () => {
+    const thumbOnly = makeItem({
+      id: "11",
+      term: "meadow",
+      image_url: null,
+      image_thumbnail_url: "https://example.com/meadow-thumb.jpg",
+    });
+    render(<Harness items={[thumbOnly]} />);
+    fireEvent.click(screen.getByRole("button", { name: /meadow/i }));
+    expect(screen.getByRole("dialog").querySelector("img")).toHaveAttribute(
+      "src",
+      "https://example.com/meadow-thumb.jpg"
+    );
+  });
+
+  it("shows no image section for an item without one", () => {
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    expect(screen.getByRole("dialog").querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("shows a broken-image fallback with a working retry after the image fails to load", () => {
+    const withImage = makeItem({ id: "12", term: "harbor", image_url: "https://example.com/broken.jpg" });
+    render(<Harness items={[withImage]} />);
+    fireEvent.click(screen.getByRole("button", { name: /harbor/i }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.error(dialog.querySelector("img") as HTMLImageElement);
+
+    expect(dialog.querySelector("img")).not.toBeInTheDocument();
+    expect(screen.getByText("Image failed to load.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(screen.queryByText("Image failed to load.")).not.toBeInTheDocument();
+    expect(dialog.querySelector("img")).toBeInTheDocument();
+  });
+
+  it("keeps showing the image across an unrelated field update on the same item", () => {
+    const withImage = makeItem({
+      id: "13",
+      term: "orchard",
+      translation: "vườn cây ăn quả",
+      image_url: "https://example.com/orchard.jpg",
+    });
+    const { rerender } = render(<Harness items={[withImage]} />);
+    fireEvent.click(screen.getByRole("button", { name: /orchard/i }));
+    expect(screen.getByRole("dialog").querySelector("img")).toHaveAttribute(
+      "src",
+      "https://example.com/orchard.jpg"
+    );
+
+    const updated = makeItem({ ...withImage, translation: "khu vườn" });
+    rerender(<Harness items={[updated]} />);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("khu vườn")).toBeInTheDocument();
+    expect(dialog.querySelector("img")).toHaveAttribute("src", "https://example.com/orchard.jpg");
+  });
+
+  it("respects an explicit image removal instead of preserving the old one indefinitely", () => {
+    const withImage = makeItem({
+      id: "14",
+      term: "trail",
+      image_url: "https://example.com/trail.jpg",
+      image_thumbnail_url: "https://example.com/trail-thumb.jpg",
+    });
+    const { rerender } = render(<Harness items={[withImage]} />);
+    fireEvent.click(screen.getByRole("button", { name: /trail/i }));
+    expect(screen.getByRole("dialog").querySelector("img")).toBeInTheDocument();
+
+    const cleared = makeItem({ ...withImage, image_url: null, image_thumbnail_url: null });
+    rerender(<Harness items={[cleared]} />);
+    expect(screen.getByRole("dialog").querySelector("img")).not.toBeInTheDocument();
+  });
+
+  it("resets image load state when switching directly from a broken-image item to a working one", () => {
+    const broken = makeItem({ id: "15", term: "cliffside", image_url: "https://example.com/broken2.jpg" });
+    const working = makeItem({ id: "16", term: "riverdelta", image_url: "https://example.com/working.jpg" });
+    render(<Harness items={[broken, working]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /cliffside/i }));
+    fireEvent.error(screen.getByRole("dialog").querySelector("img") as HTMLImageElement);
+    expect(screen.getByText("Image failed to load.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /riverdelta/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(screen.queryByText("Image failed to load.")).not.toBeInTheDocument();
+    const img = dialog.querySelector("img") as HTMLImageElement;
+    expect(img).toHaveAttribute("src", "https://example.com/working.jpg");
+    expect(img).toHaveClass("hidden"); // fresh item starts loading again, not stuck on the previous item's error
   });
 });
 

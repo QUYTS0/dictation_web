@@ -1,11 +1,23 @@
 import { useState, type ReactNode } from "react";
 import { clsx } from "clsx";
-import { ArrowRight, Pencil, Trash2 } from "lucide-react";
+import { ArrowRight, ImageOff, Pencil, Trash2 } from "lucide-react";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import { ReportDialogShell } from "./ReportDialogShell";
 import { splitSentenceForHighlight, type VocabularyHighlightMeta } from "../helpers";
 import type { LessonSavedItem } from "../types";
+
+type ImageLoadState = "loading" | "loaded" | "error";
+
+/** Prefers the full-size image over the list's compact thumbnail — the
+ *  detail window has room to show it larger — but falls back to the
+ *  thumbnail for any row that somehow only has one of the two (both are
+ *  normally saved together, see lookupWordImage in src/lib/image.ts, but
+ *  nothing in the schema *guarantees* it for older/edited rows). Returns
+ *  null only when neither field has anything to show. */
+function resolveVocabularyImageSrc(item: Pick<LessonSavedItem, "image_url" | "image_thumbnail_url">): string | null {
+  return item.image_url ?? item.image_thumbnail_url ?? null;
+}
 
 type EditValues = {
   term: string;
@@ -84,6 +96,17 @@ export function VocabularyDetailDialog({
   // would re-fire on every subsequent render forever (an infinite loop).
   const [lastItem, setLastItem] = useState<LessonSavedItem | null>(null);
   const [trackedItemId, setTrackedItemId] = useState<string | null>(null);
+  // Keyed to item identity, not to the image URL string, so switching to a
+  // different item always resets to "loading" even if (edge case) it
+  // happens to share the exact same image URL as the previous one — and so
+  // a broken-image fallback shown for one item can never "stick" and
+  // silently apply to the next item opened before its own <img> has fired
+  // onLoad/onError.
+  const [imageState, setImageState] = useState<ImageLoadState>("loading");
+  // Bumped by the retry button to force the <img> to remount (a fresh
+  // element re-issues the request even if the previous one's onerror had
+  // already fired) without needing to mutate the URL itself.
+  const [imageAttempt, setImageAttempt] = useState(0);
   if (item && item !== lastItem) {
     setLastItem(item);
   }
@@ -92,6 +115,8 @@ export function VocabularyDetailDialog({
     setTrackedItemId(currentItemId);
     setEditing(false);
     setDraft(null);
+    setImageState("loading");
+    setImageAttempt(0);
   }
   const displayItem = item ?? lastItem;
 
@@ -139,7 +164,8 @@ export function VocabularyDetailDialog({
     displayItem.definition && { label: "Definition", value: displayItem.definition },
     displayItem.note && { label: "Note", value: displayItem.note },
   ].filter((entry): entry is { label: string; value: string } => Boolean(entry));
-  const hasMoreDetails = moreDetails.length > 0 || Boolean(displayItem.image_url);
+  const hasMoreDetails = moreDetails.length > 0;
+  const imageSrc = resolveVocabularyImageSrc(displayItem);
 
   return (
     <ReportDialogShell
@@ -219,6 +245,50 @@ export function VocabularyDetailDialog({
           />
         ) : (
           <>
+            {/* Image — first-class (not tucked into the collapsed "More
+                details" disclosure the list-visible thumbnail used to be
+                hidden behind), with distinct loading/error/retry states.
+                Keyed by displayItem.id + imageAttempt so switching items or
+                hitting retry always mounts a fresh <img> that re-fires
+                onLoad/onError rather than reusing stale load state. */}
+            {imageSrc && (
+              <div className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-2)]">
+                {imageState === "error" ? (
+                  <div className="flex flex-col items-center justify-center gap-2 px-3 py-6 text-center">
+                    <ImageOff size={20} className="text-[var(--text-faint)]" aria-hidden="true" />
+                    <p className="text-xs text-[var(--text-muted)]">Image failed to load.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImageState("loading");
+                        setImageAttempt((n) => n + 1);
+                      }}
+                      className="text-xs font-semibold text-[var(--accent)] underline hover:brightness-110"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {imageState === "loading" && (
+                      <div className="flex h-40 w-full items-center justify-center" aria-hidden="true">
+                        <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--border)] border-t-[var(--accent)]" />
+                      </div>
+                    )}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      key={`${displayItem.id}-${imageAttempt}`}
+                      src={imageSrc}
+                      alt=""
+                      className={clsx("max-h-48 w-full object-contain", imageState === "loading" && "hidden")}
+                      onLoad={() => setImageState("loaded")}
+                      onError={() => setImageState("error")}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
             {/* Main meaning */}
             {displayItem.translation && (
               <div>
@@ -268,29 +338,18 @@ export function VocabularyDetailDialog({
               </div>
             )}
 
-            {/* More details */}
+            {/* Additional details — shown directly rather than tucked behind
+                a collapsed disclosure, so part of speech/pronunciation/
+                definition/note are all visible without an extra click. */}
             {hasMoreDetails && (
-              <details className="group rounded-lg border border-[var(--border)] px-3 py-2">
-                <summary className="cursor-pointer list-none text-xs font-semibold text-[var(--text-muted)] marker:content-none">
-                  More details
-                </summary>
-                <div className="mt-2 flex flex-col gap-2">
-                  {displayItem.image_url && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={displayItem.image_url}
-                      alt=""
-                      className="max-h-40 w-full rounded-lg object-cover"
-                    />
-                  )}
-                  {moreDetails.map((entry) => (
-                    <div key={entry.label}>
-                      <SectionLabel>{entry.label}</SectionLabel>
-                      <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--text)]">{entry.value}</p>
-                    </div>
-                  ))}
-                </div>
-              </details>
+              <div className="flex flex-col gap-2 rounded-lg border border-[var(--border)] px-3 py-2">
+                {moreDetails.map((entry) => (
+                  <div key={entry.label}>
+                    <SectionLabel>{entry.label}</SectionLabel>
+                    <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--text)]">{entry.value}</p>
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* Delete */}

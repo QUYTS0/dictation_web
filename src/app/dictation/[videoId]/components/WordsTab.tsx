@@ -184,7 +184,7 @@ export function WordsTab({
           onScroll={(event) => {
             scrollTopRef.current = event.currentTarget.scrollTop;
           }}
-          className="momentum-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pb-1"
+          className="momentum-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pb-3"
         >
           {filteredItems.map((item) => (
             <VocabularyListItem

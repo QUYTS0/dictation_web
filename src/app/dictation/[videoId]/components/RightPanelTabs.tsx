@@ -95,7 +95,10 @@ function TabButton({
       onClick={onSelect}
       onKeyDown={onKeyDown}
       className={clsx(
-        "relative flex min-h-[44px] w-full min-w-0 items-center justify-center rounded-lg px-1.5 text-sm font-bold outline-none",
+        // @container: the button's own width is set externally by the
+        // tablist's grid track, so its rendered width is a stable thing for
+        // its content (below) to query — not circular.
+        "@container relative flex min-h-[44px] w-full min-w-0 items-center justify-center rounded-lg px-1.5 text-sm font-bold outline-none",
         "transition-[background-color,color,border-color] duration-200 ease-out",
         "focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-1",
         isActive
@@ -105,7 +108,12 @@ function TabButton({
     >
       <span className="flex min-w-0 max-w-full items-center justify-center gap-1.5">
         <Icon size={21} strokeWidth={1.8} className="shrink-0" />
-        {isActive && <span className="min-w-0 truncate">{label}</span>}
+        {/* Below ~8.5rem of rendered button width there isn't room for the
+            full word next to the icon and count badge — rather than let it
+            ellipsis into an accidental fragment ("Voc..."), drop the label
+            entirely and fall back to icon-only (the button's aria-label/
+            title below still carry the full accessible name). */}
+        {isActive && <span className="hidden min-w-0 truncate @[8.5rem]:inline">{label}</span>}
         {count > 0 && <CountBadge count={count} />}
       </span>
       {hasUnread && (
@@ -301,7 +309,17 @@ export function RightPanelTabs({
         role="tabpanel"
         aria-labelledby={`rightpanel-tab-${rightPanelTab}`}
         tabIndex={-1}
-        className="momentum-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden overscroll-contain px-2 pb-2 pt-0.5 outline-none"
+        className={clsx(
+          "flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden px-2 pb-2 pt-0.5 outline-none",
+          // The Vocabulary tab owns its own internal scroll region (search/
+          // filters stay fixed, only the list scrolls) — letting this outer
+          // panel scroll too would nest two scrollbars over the same list.
+          // Every other tab has no scroll region of its own, so this stays
+          // the one that scrolls for them.
+          rightPanelTab === "words"
+            ? "overflow-y-hidden"
+            : "momentum-scroll overflow-y-auto overscroll-contain"
+        )}
       >
         {rightPanelTab === "script" ? (
           <ScriptTab

@@ -14,6 +14,7 @@ import {
   inferSavedItemType,
   stripEdgePunctuation,
   findHighlightPhrase,
+  getSelectedTranscriptText,
 } from "./helpers";
 import type { LessonItemType, LessonSavedItem, ScriptSelectionPopoverState } from "./types";
 
@@ -549,16 +550,20 @@ export function useLessonCapture({
         return;
       }
 
-      const selectedText = stripEdgePunctuation(selection.toString().replace(/\s+/g, " ").trim());
+      const range = selection.getRangeAt(0);
+      if (!container.contains(range.commonAncestorContainer)) {
+        return;
+      }
+
+      // getSelectedTranscriptText (not selection.toString()) so decorative
+      // interface elements inside the transcript — e.g. the mobile "ⓘ" show-
+      // meaning button rendered next to a highlighted phrase — never leak
+      // into the extracted text. See its doc comment in helpers.ts.
+      const selectedText = stripEdgePunctuation(getSelectedTranscriptText(range).replace(/\s+/g, " ").trim());
       if (!selectedText) {
         setScriptPopover(null);
         clearLearningNoteInputs();
         clearScriptPopoverSavedFeedback();
-        return;
-      }
-
-      const range = selection.getRangeAt(0);
-      if (!container.contains(range.commonAncestorContainer)) {
         return;
       }
 

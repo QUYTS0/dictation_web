@@ -233,7 +233,17 @@ export function ScriptTab({
                                 handlePhraseTap(event, segment.segmentIndex, item.text);
                               }}
                               aria-label={`Show meaning of "${item.text}"`}
-                              className="sm:hidden ml-0.5 inline-flex h-4 w-4 items-center justify-center align-super text-[10px] leading-none text-[var(--accent)]"
+                              // Real, visible DOM node on phone (only hidden
+                              // at sm: and up) — data-selection-ignore keeps
+                              // its "ⓘ" glyph out of any transcript selection
+                              // that drags/long-presses across it (see
+                              // getSelectedTranscriptText in helpers.ts).
+                              // select-none is a belt-and-suspenders CSS hint
+                              // only — WebKit still includes user-select:none
+                              // text in Selection.toString(), so it can't be
+                              // relied on alone.
+                              data-selection-ignore="true"
+                              className="sm:hidden ml-0.5 inline-flex h-4 w-4 select-none items-center justify-center align-super text-[10px] leading-none text-[var(--accent)] [-webkit-touch-callout:none]"
                             >
                               ⓘ
                             </button>
