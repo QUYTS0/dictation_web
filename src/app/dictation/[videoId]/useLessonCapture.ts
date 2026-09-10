@@ -314,6 +314,7 @@ export function useLessonCapture({
             partOfSpeech: preview?.wordDetails?.partOfSpeech ?? undefined,
             definition: preview?.wordDetails?.definition ?? undefined,
             definitionSource: preview?.wordDetails?.source,
+            audioUrl: preview?.wordDetails?.audioUrl ?? undefined,
             imageUrl: preview?.image?.url,
             imageThumbnailUrl: preview?.image?.thumbnailUrl,
             imageAttribution: preview?.image?.attribution,

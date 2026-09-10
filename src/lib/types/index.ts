@@ -419,6 +419,12 @@ export interface VocabularyItem {
   part_of_speech: string | null;
   definition: string | null;
   definition_source: "free_dictionary" | "gemini" | null;
+  /** Pronunciation-audio URL from the free dictionary API's phonetics[].audio
+   *  field (see lookupWordDetails, src/lib/dictionary.ts) — single words
+   *  only, since that lookup never runs for multi-word phrases. Null for
+   *  every row saved before this column existed and for any word the
+   *  dictionary had no audio for. */
+  audio_url: string | null;
   image_url: string | null;
   image_thumbnail_url: string | null;
   image_attribution: string | null;
@@ -451,6 +457,7 @@ export interface VocabularyRequest {
   partOfSpeech?: string;
   definition?: string;
   definitionSource?: "free_dictionary" | "gemini";
+  audioUrl?: string;
   imageUrl?: string;
   imageThumbnailUrl?: string;
   imageAttribution?: string;

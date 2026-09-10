@@ -103,4 +103,48 @@ describe("POST /api/vocabulary (save)", () => {
 
     expect(body.item.translation_source).toBe("azure");
   });
+
+  it("persists a freshly-looked-up pronunciation audio URL from the dictionary lookup", async () => {
+    mockLookupWordDetails.mockResolvedValue({
+      phonetic: "/rʌn/",
+      partOfSpeech: "verb",
+      definition: "to move at a speed faster than a walk",
+      audioUrl: "https://api.dictionaryapi.dev/media/pronunciations/en/run-us.mp3",
+      source: "free_dictionary",
+    });
+
+    const res = await POST(makeRequest(baseBody));
+    const body = await res.json();
+
+    expect(body.item.audio_url).toBe("https://api.dictionaryapi.dev/media/pronunciations/en/run-us.mp3");
+  });
+
+  it("persists a precomputed pronunciation audio URL from the popover preview instead of looking it up again", async () => {
+    const res = await POST(
+      makeRequest({
+        ...baseBody,
+        definition: "to move at a speed faster than a walk",
+        audioUrl: "https://api.dictionaryapi.dev/media/pronunciations/en/run-us.mp3",
+      })
+    );
+    const body = await res.json();
+
+    expect(mockLookupWordDetails).not.toHaveBeenCalled();
+    expect(body.item.audio_url).toBe("https://api.dictionaryapi.dev/media/pronunciations/en/run-us.mp3");
+  });
+
+  it("saves audio_url as null when the dictionary has no pronunciation audio", async () => {
+    mockLookupWordDetails.mockResolvedValue({
+      phonetic: null,
+      partOfSpeech: null,
+      definition: null,
+      audioUrl: null,
+      source: "free_dictionary",
+    });
+
+    const res = await POST(makeRequest(baseBody));
+    const body = await res.json();
+
+    expect(body.item.audio_url).toBeNull();
+  });
 });

@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
       partOfSpeech: precomputedPartOfSpeech,
       definition: precomputedDefinition,
       definitionSource: precomputedDefinitionSource,
+      audioUrl: precomputedAudioUrl,
       imageUrl: precomputedImageUrl,
       imageThumbnailUrl: precomputedImageThumbnailUrl,
       imageAttribution: precomputedImageAttribution,
@@ -135,6 +136,7 @@ export async function POST(request: NextRequest) {
           phonetic: precomputedPhonetic ?? null,
           partOfSpeech: precomputedPartOfSpeech ?? null,
           definition: precomputedDefinition,
+          audioUrl: precomputedAudioUrl ?? null,
           source: precomputedDefinitionSource ?? "free_dictionary",
         }
       : await lookupWordDetails(term.trim()).catch(() => null);
@@ -179,6 +181,7 @@ export async function POST(request: NextRequest) {
       part_of_speech: wordDetails?.partOfSpeech ?? null,
       definition: wordDetails?.definition ?? null,
       definition_source: wordDetails?.source ?? null,
+      audio_url: wordDetails?.audioUrl ?? null,
       image_url: image?.url ?? null,
       image_thumbnail_url: image?.thumbnailUrl ?? null,
       image_attribution: image?.attribution ?? null,

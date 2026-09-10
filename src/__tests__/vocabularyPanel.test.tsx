@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { fireEvent, render, screen, waitForElementToBeRemoved, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitForElementToBeRemoved, within } from "@testing-library/react";
 import { TAB_CONFIG } from "@/app/dictation/[videoId]/components/RightPanelTabs";
 import { WordsTab } from "@/app/dictation/[videoId]/components/WordsTab";
 import type { VocabularyTypeFilter } from "@/app/dictation/[videoId]/helpers";
@@ -25,6 +25,7 @@ function makeItem(overrides: Partial<LessonSavedItem> = {}): LessonSavedItem {
     part_of_speech: null,
     definition: null,
     definition_source: null,
+    audio_url: null,
     image_url: null,
     image_thumbnail_url: null,
     image_attribution: null,
@@ -227,11 +228,12 @@ describe("WordsTab row interaction", () => {
     expect(onSeekToSegment).not.toHaveBeenCalled();
   });
 
-  it("only seeks when 'Jump to sentence' is explicitly clicked", () => {
+  it("only seeks when 'View in video' is explicitly clicked", () => {
     const onSeekToSegment = jest.fn();
     render(<Harness items={[GO_A_LONG_WAY]} onSeekToSegment={onSeekToSegment} />);
     fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
-    fireEvent.click(screen.getByRole("button", { name: /jump to sentence/i }));
+    expect(screen.getByText("Sentence 4")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /view in video/i }));
     expect(onSeekToSegment).toHaveBeenCalledWith(3);
   });
 });
@@ -354,7 +356,9 @@ describe("VocabularyDetailDialog content", () => {
     render(<Harness items={[GO_A_LONG_WAY]} phrasesBySegmentIndex={phrasesBySegmentIndex} />);
     fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText("go a long way toward(s)")).toBeInTheDocument();
+    // Appears twice: once as ReportDialogShell's small accessible <h2>
+    // title, once as the large, prominent heading in the dialog body.
+    expect(within(dialog).getAllByText("go a long way toward(s)").length).toBeGreaterThanOrEqual(2);
     expect(within(dialog).getByText("In this sentence: go a long way toward")).toBeInTheDocument();
   });
 
@@ -377,7 +381,13 @@ describe("VocabularyDetailDialog content", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).not.toMatch(/undefined/i);
     expect(dialog.textContent).not.toContain(" - ");
-    expect(screen.queryByText("More details")).not.toBeInTheDocument();
+    // The collapsed Details section always has the saved date, but must not
+    // show empty Definition/Note/Pronunciation rows for fields this legacy
+    // item never had.
+    expect(screen.getByText("Details")).toBeInTheDocument();
+    expect(screen.queryByText("Definition")).not.toBeInTheDocument();
+    expect(screen.queryByText("Note")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pronunciation")).not.toBeInTheDocument();
   });
 });
 
@@ -490,6 +500,124 @@ describe("VocabularyDetailDialog image", () => {
     expect(img).toHaveAttribute("src", "https://example.com/working.jpg");
     expect(img).toHaveClass("hidden"); // fresh item starts loading again, not stuck on the previous item's error
   });
+
+  it("opens an enlarged view on click, closes on Escape without closing the vocabulary dialog, and returns focus to the trigger", () => {
+    const withImage = makeItem({ id: "17", term: "canyon", image_url: "https://example.com/canyon.jpg" });
+    render(<Harness items={[withImage]} />);
+    fireEvent.click(screen.getByRole("button", { name: /canyon/i }));
+
+    const trigger = screen.getByRole("button", { name: /enlarge image/i });
+    fireEvent.load(trigger.querySelector("img") as HTMLImageElement);
+    fireEvent.click(trigger);
+
+    // Both the vocab dialog and the lightbox are named "canyon" (the term),
+    // but only the lightbox lacks aria-labelledby (it uses a plain
+    // aria-label) — that's how we tell them apart here.
+    const dialogsWhileOpen = screen.getAllByRole("dialog");
+    expect(dialogsWhileOpen).toHaveLength(2); // vocab dialog still open underneath
+    const lightbox = dialogsWhileOpen.find((el) => !el.hasAttribute("aria-labelledby"));
+    expect(lightbox).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    const dialogsAfterEscape = screen.getAllByRole("dialog");
+    expect(dialogsAfterEscape).toHaveLength(1); // only the vocab dialog survived
+    expect(dialogsAfterEscape[0]).toHaveAttribute("aria-labelledby");
+    expect(trigger).toHaveFocus();
+  });
+});
+
+describe("VocabularyDetailDialog part of speech / phonetic / pronunciation", () => {
+  it("shows the dictionary part of speech instead of the generic 'Word' badge when available", () => {
+    const withPos = makeItem({ id: "18", term: "orbit", part_of_speech: "noun" });
+    render(<Harness items={[withPos]} />);
+    fireEvent.click(screen.getByRole("button", { name: /orbit/i }));
+    expect(within(screen.getByRole("dialog")).getByText("Noun")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).queryByText("Word")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the generic 'Word' badge when no part of speech is known", () => {
+    render(<Harness items={[REIMBURSE]} />); // part_of_speech: null
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    expect(within(screen.getByRole("dialog")).getByText("Word")).toBeInTheDocument();
+  });
+
+  it("never invents a grammatical classification for a phrase — shows the plain 'Phrase' badge", () => {
+    render(<Harness items={[GO_A_LONG_WAY]} />);
+    fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
+    expect(within(screen.getByRole("dialog")).getByText("Phrase")).toBeInTheDocument();
+  });
+
+  it("shows the phonetic transcription below the heading when available", () => {
+    const withPhonetic = makeItem({ id: "19", term: "orbit", phonetic: "/ˈɔːbɪt/" });
+    render(<Harness items={[withPhonetic]} />);
+    fireEvent.click(screen.getByRole("button", { name: /orbit/i }));
+    expect(within(screen.getByRole("dialog")).getByText("/ˈɔːbɪt/")).toBeInTheDocument();
+  });
+
+  it("shows no pronunciation control when the item has no audio_url", () => {
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    expect(screen.queryByRole("button", { name: /pronunciation/i })).not.toBeInTheDocument();
+  });
+
+  it("plays pronunciation audio on click and stops it when the dialog closes", async () => {
+    const playSpy = jest.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pauseSpy = jest.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const withAudio = makeItem({ id: "20", term: "orbit", audio_url: "https://example.com/orbit.mp3" });
+    render(<Harness items={[withAudio]} />);
+    fireEvent.click(screen.getByRole("button", { name: /orbit/i }));
+
+    const playButton = screen.getByRole("button", { name: /play pronunciation of "orbit"/i });
+    fireEvent.click(playButton);
+    expect(playSpy).toHaveBeenCalledTimes(1);
+    // Let the mocked play() promise (and its .then() state update) resolve.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitForElementToBeRemoved(() => screen.queryByRole("dialog"));
+    expect(pauseSpy).toHaveBeenCalled();
+
+    playSpy.mockRestore();
+    pauseSpy.mockRestore();
+  });
+});
+
+describe("VocabularyDetailDialog overflow menu", () => {
+  it("keeps Delete out of the way behind a labeled 'More vocabulary actions' menu, and Escape closes only the menu", () => {
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+
+    expect(screen.queryByRole("menuitem", { name: /delete from vocabulary/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /more vocabulary actions/i }));
+    expect(screen.getByRole("menuitem", { name: /delete from vocabulary/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menuitem", { name: /delete from vocabulary/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument(); // the vocab dialog itself is unaffected
+  });
+});
+
+describe("VocabularyDetailDialog secondary metadata", () => {
+  it("moves the saved date into the collapsed Details section instead of showing it prominently", () => {
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    const dialog = screen.getByRole("dialog");
+    const details = within(dialog).getByText("Details").closest("details") as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    expect(within(details).getByText("1/1/2026")).toBeInTheDocument();
+  });
+});
+
+describe("VocabularyDetailDialog heading", () => {
+  it("shows the full term text, unmodified, for a long phrase", () => {
+    render(<Harness items={[GO_A_LONG_WAY]} />);
+    fireEvent.click(screen.getByRole("button", { name: /go a long way toward/i }));
+    const headings = within(screen.getByRole("dialog")).getAllByText("go a long way toward");
+    expect(headings.length).toBeGreaterThan(0);
+    headings.forEach((el) => expect(el.className).not.toMatch(/truncate/));
+  });
 });
 
 describe("VocabularyDetailDialog edit", () => {
@@ -516,12 +644,13 @@ describe("VocabularyDetailDialog edit", () => {
 });
 
 describe("VocabularyDetailDialog delete", () => {
-  it("requires confirmation before deleting", () => {
+  it("requires confirmation before deleting, reached via the overflow menu", () => {
     const onDelete = jest.fn();
     const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
     render(<Harness items={[REIMBURSE]} onDelete={onDelete} />);
     fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
-    fireEvent.click(screen.getByRole("button", { name: /delete from vocabulary/i }));
+    fireEvent.click(screen.getByRole("button", { name: /more vocabulary actions/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /delete from vocabulary/i }));
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("reimburse"));
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -533,7 +662,8 @@ describe("VocabularyDetailDialog delete", () => {
     const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
     render(<Harness items={[REIMBURSE]} onDelete={onDelete} />);
     fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
-    fireEvent.click(screen.getByRole("button", { name: /delete from vocabulary/i }));
+    fireEvent.click(screen.getByRole("button", { name: /more vocabulary actions/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /delete from vocabulary/i }));
     expect(onDelete).toHaveBeenCalledWith("1");
     // The dialog's exit animation (Framer Motion, via ReportDialogShell)
     // keeps it mounted briefly after `open` flips to false.
