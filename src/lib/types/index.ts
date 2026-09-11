@@ -425,6 +425,15 @@ export interface VocabularyItem {
    *  every row saved before this column existed and for any word the
    *  dictionary had no audio for. */
   audio_url: string | null;
+  /** FK into vocabulary_audio_assets — an on-demand Azure TTS clip resolved
+   *  by POST /api/vocabulary/pronounce for a word with no dictionary audio,
+   *  or for any phrase (dictionary lookup never applies to phrases). Null
+   *  until the first successful pronunciation tap for this item; nulled
+   *  again by PATCH whenever `term` changes (see the route's
+   *  invalidation-on-term-change rule). The client never reads
+   *  storage_path directly from this id — resolving it to a playable URL
+   *  always goes through the pronounce route. */
+  pronunciation_audio_asset_id: string | null;
   image_url: string | null;
   image_thumbnail_url: string | null;
   image_attribution: string | null;
@@ -473,6 +482,16 @@ export interface VocabularyUpdateRequest {
   phonetic?: string | null;
   partOfSpeech?: string | null;
   definition?: string | null;
+  /** Backfill-only, not a general edit field: applied server-side ONLY when
+   *  `term` is not changing in this same request AND the item's persisted
+   *  canonical_form/learning_pattern is currently null — never overwrites
+   *  an existing verified value. Lets the client silently persist a
+   *  canonical form it already resolved from the live highlight cache for
+   *  a legacy row (see resolveVocabularyHighlightMeta in helpers.ts), so
+   *  future reads — and pronunciation, which only ever trusts the
+   *  persisted column — resolve identically without needing that cache. */
+  canonicalForm?: string;
+  learningPattern?: string;
 }
 
 export interface VocabularyPreviewRequest {
@@ -552,4 +571,35 @@ export interface VocabularyReviewSubmitRequest {
 
 export interface VocabularyReviewSubmitResponse {
   item: VocabularyItem;
+}
+
+// ---- Vocabulary pronunciation (Azure TTS on-demand synthesis) ----
+
+export type VocabularyAudioSource = "dictionary" | "cached" | "synthesized";
+
+export type TtsErrorCode =
+  | "TTS_NOT_CONFIGURED"
+  | "TTS_RATE_LIMITED"
+  | "TTS_QUOTA_EXCEEDED"
+  | "TTS_UPSTREAM_ERROR"
+  | "TTS_STORAGE_ERROR"
+  | "NOT_FOUND";
+
+export interface VocabularyPronounceRequest {
+  itemId: string;
+  /** Explicit, user-initiated recovery only (see the "Use generated
+   *  pronunciation" action) — skips the dictionary-audio shortcut for this
+   *  one request so the server resolves/synthesizes an Azure alternative
+   *  instead. Never set automatically by a normal tap. */
+  preferGenerated?: boolean;
+}
+
+export interface VocabularyPronounceResponse {
+  audioUrl: string;
+  source: VocabularyAudioSource;
+}
+
+export interface VocabularyPronounceErrorResponse {
+  error: string;
+  code: TtsErrorCode;
 }

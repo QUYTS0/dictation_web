@@ -170,6 +170,65 @@ export async function checkAzureKeyPhraseQuota(
   return { allowed: result.allowed, retryAfterSec: result.allowed ? undefined : result.retryAfterSec };
 }
 
+// Azure Speech F0's TTS allowance (0.5M characters/month for neural voices)
+// is a pool separate from the F0 STT allowance, on the same resource — this
+// counter is a conservative internal application budget only, NOT an
+// authoritative mirror of Azure Portal's own usage metering. Mirrors
+// checkAzureKeyPhraseQuota's shape (variable-amount monthly counter) since a
+// single synthesis request costs more than one "unit" (its character count).
+const AZURE_TTS_MONTH_KEY = "azure-tts-quota:month";
+const AZURE_TTS_MONTH_SECONDS = 31 * 24 * 60 * 60;
+
+/**
+ * Call before sending an Azure TTS synthesis request, with the request's
+ * character count. Returns allowed:false once the conservative monthly
+ * character budget is reached.
+ */
+export async function checkAzureTtsQuota(
+  charCount: number,
+  monthlyBudget: number
+): Promise<{ allowed: boolean; retryAfterSec?: number }> {
+  const result = await incrementWindowBy(AZURE_TTS_MONTH_KEY, charCount, monthlyBudget, AZURE_TTS_MONTH_SECONDS);
+  return { allowed: result.allowed, retryAfterSec: result.allowed ? undefined : result.retryAfterSec };
+}
+
+// Azure's F0 real-time TTS rate ceiling (20 transactions/60s) is
+// resource-wide, not per-user/per-IP — like GEMINI_RPM_LIMIT, this counter
+// is intentionally global so every caller draws from one real, shared
+// budget, kept conservatively under Azure's own limit to leave headroom.
+const AZURE_TTS_RPM_LIMIT = Number(process.env.AZURE_TTS_RPM_LIMIT ?? 15);
+const AZURE_TTS_RPM_KEY = "azure-tts-quota:rpm";
+
+/** Call immediately before an actual Azure TTS synthesis call — after the
+ *  cache check, only on the branch that's really about to spend a call. */
+export async function checkAzureTtsRate(): Promise<{ allowed: boolean; retryAfterSec?: number }> {
+  const result = await incrementWindow(AZURE_TTS_RPM_KEY, AZURE_TTS_RPM_LIMIT, 60);
+  return { allowed: result.allowed, retryAfterSec: result.allowed ? undefined : result.retryAfterSec };
+}
+
+/**
+ * Whether the quota backend is even configured — every other quota check in
+ * this file fails OPEN (unenforced) when it isn't, which is the right
+ * default for local dev/tests but is NOT safe for a route that spends money
+ * on every call it lets through. New TTS synthesis specifically must fail
+ * CLOSED instead when this is false in production (see the pronounce
+ * route) — dictionary audio and already-cached assets never reach this
+ * check at all, so they keep working regardless.
+ */
+export function isQuotaBackendConfigured(): boolean {
+  return getRedis() !== null;
+}
+
+/** Separated into its own function (rather than inlining
+ *  `process.env.NODE_ENV === "production"` at the call site) purely so
+ *  tests can mock it directly — reassigning `process.env.NODE_ENV` at test
+ *  time doesn't reliably propagate to already-imported modules in this
+ *  project's Next.js/ts-jest setup. In a real deployment this simply
+ *  reflects the actual runtime environment. */
+export function isProductionEnvironment(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
 export interface GeminiQuotaStatus {
   /** False when Upstash isn't configured — usage isn't actually tracked. */
   configured: boolean;

@@ -27,6 +27,7 @@ function makeItem(overrides: Partial<LessonSavedItem> = {}): LessonSavedItem {
     definition: null,
     definition_source: null,
     audio_url: null,
+    pronunciation_audio_asset_id: null,
     image_url: null,
     image_thumbnail_url: null,
     image_attribution: null,

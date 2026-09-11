@@ -276,10 +276,14 @@ export async function DELETE(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body: VocabularyUpdateRequest = await request.json();
-    const { id, term, sentenceContext, note, translation, phonetic, partOfSpeech, definition } = body;
+    const { id, term, sentenceContext, note, translation, phonetic, partOfSpeech, definition, canonicalForm, learningPattern } = body;
 
     if (!id) {
       return NextResponse.json({ error: "id is required" }, { status: 400 });
+    }
+
+    if (isInvalidOptionalMetadata(canonicalForm) || isInvalidOptionalMetadata(learningPattern)) {
+      return NextResponse.json({ error: "canonicalForm and learningPattern must be strings when provided" }, { status: 400 });
     }
 
     const supabase = await createClient();
@@ -317,6 +321,16 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "sentenceContext cannot be empty" }, { status: 400 });
     }
 
+    // Term-derived metadata (dictionary lookup results, canonical/learning
+    // metadata, and any resolved pronunciation audio) was all resolved
+    // against the OLD term. When the term actually changes, null all of it
+    // out unconditionally rather than trying to reconcile it with whatever
+    // the request body also happens to carry — this forces a fresh lookup
+    // next time instead of silently keeping stale audio/definitions
+    // attached to unrelated text. Non-term edits keep the existing
+    // preserve-on-omit / explicit-value-wins behavior untouched.
+    const termChanged = normalizedTerm !== existing.normalized_term;
+
     const payload = {
       term: nextTerm,
       normalized_term: normalizedTerm,
@@ -333,20 +347,50 @@ export async function PATCH(request: NextRequest) {
           : typeof translation === "string"
           ? translation.trim() || null
           : null,
-      phonetic:
-        phonetic === undefined ? existing.phonetic : typeof phonetic === "string" ? phonetic.trim() || null : null,
-      part_of_speech:
-        partOfSpeech === undefined
-          ? existing.part_of_speech
-          : typeof partOfSpeech === "string"
-          ? partOfSpeech.trim() || null
-          : null,
-      definition:
-        definition === undefined
-          ? existing.definition
-          : typeof definition === "string"
-          ? definition.trim() || null
-          : null,
+      phonetic: termChanged
+        ? null
+        : phonetic === undefined
+        ? existing.phonetic
+        : typeof phonetic === "string"
+        ? phonetic.trim() || null
+        : null,
+      part_of_speech: termChanged
+        ? null
+        : partOfSpeech === undefined
+        ? existing.part_of_speech
+        : typeof partOfSpeech === "string"
+        ? partOfSpeech.trim() || null
+        : null,
+      definition: termChanged
+        ? null
+        : definition === undefined
+        ? existing.definition
+        : typeof definition === "string"
+        ? definition.trim() || null
+        : null,
+      definition_source: termChanged ? null : existing.definition_source,
+      // Backfill-only exception to "leave untouched otherwise": when the
+      // term isn't changing and the persisted column is currently null, an
+      // explicitly supplied canonicalForm/learningPattern is allowed to
+      // fill it in — this is how the client catches up a legacy row's
+      // server-side truth to match what it's already resolving via the
+      // live highlight-cache fallback (see resolveVocabularyHighlightMeta),
+      // so pronunciation (which only ever reads the persisted column) stops
+      // disagreeing with the displayed heading. Never overwrites an
+      // existing non-null value — that would risk silently discarding a
+      // verified normalization for a heuristic one.
+      canonical_form: termChanged
+        ? null
+        : canonicalForm !== undefined && existing.canonical_form == null
+        ? normalizeOptionalMetadata(canonicalForm)
+        : existing.canonical_form,
+      learning_pattern: termChanged
+        ? null
+        : learningPattern !== undefined && existing.learning_pattern == null
+        ? normalizeOptionalMetadata(learningPattern)
+        : existing.learning_pattern,
+      audio_url: termChanged ? null : existing.audio_url,
+      pronunciation_audio_asset_id: termChanged ? null : existing.pronunciation_audio_asset_id,
     };
 
     const { data, error } = await supabase

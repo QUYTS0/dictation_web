@@ -2,14 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { Ellipsis, ImageOff, Pencil, Trash2, Volume2 } from "lucide-react";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
+import { usePronunciationPlayback } from "@/hooks/usePronunciationPlayback";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
+import type { VocabularyAudioSource } from "@/lib/types";
 import { ReportDialogShell } from "./ReportDialogShell";
 import { VocabularyImageLightbox } from "./VocabularyImageLightbox";
 import { splitSentenceForHighlight, type VocabularyHighlightMeta } from "../helpers";
 import type { LessonSavedItem } from "../types";
 
 type ImageLoadState = "loading" | "loaded" | "error";
-type AudioStatus = "idle" | "loading" | "playing" | "error";
 
 /** Prefers the full-size image over the list's compact thumbnail — the
  *  detail window has room to show it larger — but falls back to the
@@ -125,74 +126,62 @@ function MoreActionsMenu({
   );
 }
 
-/** Speaker button near the heading that plays a dictionary-sourced
- *  pronunciation clip (item.audio_url — see lookupWordDetails in
- *  src/lib/dictionary.ts). Only ever present for single-word items: that
- *  lookup never runs for multi-word phrases, so there is no risk of this
- *  ever playing just one component word of a saved phrase. Never autoplays
- *  — `play()` only ever runs inside this button's own click handler, which
- *  also satisfies iOS's requirement that playback start synchronously
- *  within a user gesture. */
-function PronunciationButton({ audioUrl, term, active }: { audioUrl: string; term: string; active: boolean }) {
-  const [status, setStatus] = useState<AudioStatus>("idle");
-  // Lazy ref initialization, set synchronously during render rather than
-  // from the click handler or an effect — the React-documented pattern for
-  // a mutable, non-reactive object that must exist before any effect runs
-  // (this component is remounted per item anyway, via `key={displayItem.id}`
-  // at its call site, so this only ever constructs one Audio per mount).
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  if (audioRef.current === null) {
-    audioRef.current = new Audio(audioUrl);
-  }
+/** Speaker button near the heading that plays a pronunciation clip — either
+ *  the dictionary-sourced audio for a single word with one (item.audio_url,
+ *  see lookupWordDetails in src/lib/dictionary.ts) or, for anything else
+ *  (a word with no dictionary audio, or any phrase — dictionary lookup
+ *  never applies to phrases), an on-demand Azure TTS clip resolved via
+ *  POST /api/vocabulary/pronounce on first tap. Always rendered now: every
+ *  saved item is a pronunciation candidate. Never autoplays — `play()` only
+ *  ever runs inside a click handler, satisfying iOS's synchronous-gesture
+ *  requirement; a freshly-resolved (not-yet-played) clip surfaces a
+ *  distinct "ready" affordance instead of playing itself, since the
+ *  `await fetch` that resolved it already broke that gesture chain. */
+function PronunciationButton({
+  itemId,
+  audioUrl,
+  term,
+  canonicalForm,
+  active,
+  onSourceResolved,
+}: {
+  itemId: string;
+  audioUrl: string | null;
+  term: string;
+  /** The item's currently-resolved canonical form (persisted or, for a
+   *  legacy row, the live highlight-cache fallback) — passed through so the
+   *  hook can detect an in-place edit (same itemId, different text) and
+   *  discard any stale resolved/in-flight audio for the old text. Never
+   *  sent to the server. */
+  canonicalForm?: string | null;
+  active: boolean;
+  onSourceResolved?: (source: VocabularyAudioSource) => void;
+}) {
+  const { status, errorMessage, toggle, canRecoverWithGenerated, requestGeneratedAlternative } = usePronunciationPlayback({
+    itemId,
+    knownAudioUrl: audioUrl,
+    term,
+    canonicalForm,
+    active,
+    onResolved: onSourceResolved,
+  });
 
-  // audioRef.current is only ever read inside effects/handlers below (never
-  // stored in a render-time variable) — refs are meant to be read outside
-  // of render.
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.onended = () => setStatus("idle");
-    audio.onerror = () => setStatus("error");
-    return () => {
-      audio.pause();
-    };
-  }, []);
-
-  // Stops playback the instant the dialog starts closing (item -> null)
-  // rather than waiting for this component to actually unmount at the end
-  // of ReportDialogShell's ~200ms close animation — "active" is false as
-  // soon as closing begins, well before that.
-  useEffect(() => {
-    if (active) return;
-    audioRef.current?.pause();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setStatus("idle");
-  }, [active]);
-
-  const handleClick = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (status === "playing") {
-      audio.pause();
-      setStatus("idle");
-      return;
-    }
-    setStatus("loading");
-    audio
-      .play()
-      .then(() => setStatus("playing"))
-      .catch(() => setStatus("error"));
-  };
+  const label =
+    status === "playing"
+      ? `Stop pronunciation of "${term}"`
+      : status === "ready"
+      ? `Tap to play pronunciation of "${term}"`
+      : `Play pronunciation of "${term}"`;
 
   return (
     <span className="inline-flex items-center gap-1">
       <button
         type="button"
-        onClick={handleClick}
-        aria-label={status === "playing" ? `Stop pronunciation of "${term}"` : `Play pronunciation of "${term}"`}
+        onClick={toggle}
+        aria-label={label}
         className={clsx(
           "flex h-7 w-7 items-center justify-center rounded-full border transition-colors",
-          status === "playing"
+          status === "playing" || status === "ready"
             ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
             : "border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--accent)]"
         )}
@@ -203,9 +192,19 @@ function PronunciationButton({ audioUrl, term, active }: { audioUrl: string; ter
           <Volume2 size={14} />
         )}
       </button>
+      {status === "ready" && <span className="text-[11px] text-[var(--accent)]">Tap to play</span>}
       {status === "error" && (
-        <span role="status" className="text-[11px] text-[var(--red)]">
-          Couldn&apos;t play pronunciation.
+        <span role="status" className="flex items-center gap-1.5 text-[11px] text-[var(--red)]">
+          {errorMessage ?? "Couldn't play pronunciation."}
+          {canRecoverWithGenerated && (
+            <button
+              type="button"
+              onClick={requestGeneratedAlternative}
+              className="font-semibold text-[var(--accent)] underline hover:brightness-110"
+            >
+              Use generated pronunciation
+            </button>
+          )}
         </span>
       )}
     </span>
@@ -307,7 +306,16 @@ export function VocabularyDetailDialog({
   // already fired) without needing to mutate the URL itself.
   const [imageAttempt, setImageAttempt] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Set only when this item's pronunciation button actually resolves
+  // through the Azure path (the dictionary-audio case never calls
+  // onSourceResolved, since it plays directly with no network round trip)
+  // — drives the "Synthesized voice" Details line below.
+  const [audioSource, setAudioSource] = useState<VocabularyAudioSource | null>(null);
   const imageTriggerRef = useRef<HTMLButtonElement>(null);
+  // Per-mount dedupe for the canonical-form backfill effect below — keyed
+  // by item id + resolved values, not persisted, so a failed backfill is
+  // simply re-attempted the next time this item is opened in a fresh mount.
+  const backfilledKeysRef = useRef<Set<string>>(new Set());
   if (item && item !== lastItem) {
     setLastItem(item);
   }
@@ -319,8 +327,46 @@ export function VocabularyDetailDialog({
     setImageState("loading");
     setImageAttempt(0);
     setLightboxOpen(false);
+    setAudioSource(null);
   }
   const displayItem = item ?? lastItem;
+
+  // Best-effort backfill: a legacy row (canonical_form persisted null) can
+  // still resolve a canonicalForm/learningPattern via the live
+  // highlight-cache fallback (see resolveVocabularyHighlightMeta in
+  // helpers.ts) — that fallback is what the heading below already renders.
+  // Left unpersisted, though, the server's pronunciation resolution (which
+  // only ever trusts the persisted column, and deliberately never
+  // re-derives from the client's session-local highlight cache) would
+  // disagree with what's displayed. Silently catching the server up the
+  // moment such a fallback is resolved keeps both in sync going forward,
+  // without trusting any NEW client-supplied text — this is the exact same
+  // pipeline-derived value the original save-time flow already trusts (see
+  // previewMatchesSave in useLessonCapture.ts), just persisted late
+  // instead of at save time. Backfill-only: the PATCH route applies it
+  // only when canonical_form is still null, never overwriting a verified
+  // value, so a redundant or failed call here is harmless.
+  useEffect(() => {
+    if (!item) return; // only the actually-open item, not the lingering lastItem during close
+    if (item.canonical_form) return;
+    if (!highlightMeta.canonicalForm && !highlightMeta.learningPattern) return;
+    const key = `${item.id}::${highlightMeta.canonicalForm ?? ""}::${highlightMeta.learningPattern ?? ""}`;
+    if (backfilledKeysRef.current.has(key)) return;
+    backfilledKeysRef.current.add(key);
+    void fetch("/api/vocabulary", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: item.id,
+        canonicalForm: highlightMeta.canonicalForm,
+        learningPattern: highlightMeta.learningPattern,
+      }),
+    }).catch(() => {
+      // Best-effort — a failed backfill just means the fallback keeps
+      // being used this session; retried the next time this item is
+      // opened in a fresh mount (backfilledKeysRef isn't persisted).
+    });
+  }, [item, highlightMeta.canonicalForm, highlightMeta.learningPattern]);
 
   if (!displayItem) return null;
 
@@ -420,18 +466,22 @@ export function VocabularyDetailDialog({
                 {displayItem.phonetic && (
                   <span className="font-mono text-sm text-[var(--text-muted)]">{displayItem.phonetic}</span>
                 )}
-                {displayItem.audio_url && (
-                  // Keyed by item id so switching items always unmounts the
-                  // previous button (stopping any in-flight playback via its
-                  // own cleanup effect) instead of reusing the same instance
-                  // with a stale "playing" status pointed at the old audio.
-                  <PronunciationButton
-                    key={displayItem.id}
-                    audioUrl={displayItem.audio_url}
-                    term={displayItem.term}
-                    active={Boolean(item)}
-                  />
-                )}
+                {/* Always rendered now — every saved item (word or phrase)
+                    is a pronunciation candidate, via dictionary audio when
+                    known or on-demand Azure synthesis otherwise. Keyed by
+                    item id so switching items always unmounts the previous
+                    button (stopping any in-flight playback/fetch via its
+                    own cleanup effect) instead of reusing the same instance
+                    with stale state pointed at the old item. */}
+                <PronunciationButton
+                  key={displayItem.id}
+                  itemId={displayItem.id}
+                  audioUrl={displayItem.audio_url}
+                  term={displayItem.term}
+                  canonicalForm={highlightMeta.canonicalForm}
+                  active={Boolean(item)}
+                  onSourceResolved={setAudioSource}
+                />
               </div>
             </div>
             {!editing && (
@@ -620,6 +670,15 @@ export function VocabularyDetailDialog({
                     <div>
                       <SectionLabel>Note</SectionLabel>
                       <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--text)]">{noteValue}</p>
+                    </div>
+                  )}
+                  {(audioSource === "cached" || audioSource === "synthesized") && (
+                    // No dialect claim beyond "generic US English" unless
+                    // explicitly known — the default voice is a generic US
+                    // English neural voice, never an invented "UK"/"AU" label.
+                    <div>
+                      <SectionLabel>Pronunciation</SectionLabel>
+                      <p className="mt-0.5 text-sm text-[var(--text)]">Synthesized voice</p>
                     </div>
                   )}
                 </div>

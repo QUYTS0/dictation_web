@@ -61,8 +61,15 @@ async function lookupFreeDictionary(word: string): Promise<WordDetails | null> {
     const definition = meaning?.definitions?.[0];
     if (!definition?.definition) return null;
 
-    const phoneticEntry = entry.phonetics?.find((p) => p.text) ?? entry.phonetics?.[0];
-    const audioEntry = entry.phonetics?.find((p) => p.audio);
+    // Prefer a single phonetics[] element that carries both `text` and
+    // `audio` — dictionaryapi.dev commonly returns several regional
+    // variants, and picking text/audio independently risks pairing one
+    // dialect's spelling with another's audio with no visible indication.
+    // Only fall back to independent selection when no element has both.
+    const phonetics = entry.phonetics ?? [];
+    const pairedEntry = phonetics.find((p) => p.text && p.audio);
+    const phoneticEntry = pairedEntry ?? phonetics.find((p) => p.text) ?? phonetics[0];
+    const audioEntry = pairedEntry ?? phonetics.find((p) => p.audio);
 
     return {
       phonetic: phoneticEntry?.text || entry.phonetic || null,

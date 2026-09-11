@@ -26,6 +26,7 @@ function makeItem(overrides: Partial<LessonSavedItem> = {}): LessonSavedItem {
     definition: null,
     definition_source: null,
     audio_url: null,
+    pronunciation_audio_asset_id: null,
     image_url: null,
     image_thumbnail_url: null,
     image_attribution: null,
@@ -132,6 +133,22 @@ const POSTPONE = makeItem({
   translation: "trì hoãn",
   sentence_context: "We had to postpone the meeting.",
   type: "word",
+});
+
+// Safe default for every test: VocabularyDetailDialog's canonical-form
+// backfill effect (see its useEffect calling PATCH /api/vocabulary) can
+// fire for any legacy item (canonical_form null) opened alongside a
+// matching highlight-cache phrase, regardless of what a given test is
+// actually exercising. Individual tests that care about specific fetch
+// behavior (the pronunciation tests below) still assign their own
+// global.fetch mock for the duration of the test; this only provides a
+// harmless fallback so unrelated tests never hit a real/undefined fetch.
+const realFetch = global.fetch;
+beforeEach(() => {
+  global.fetch = jest.fn(() => Promise.resolve({ ok: true, json: async () => ({}) })) as unknown as typeof fetch;
+});
+afterEach(() => {
+  global.fetch = realFetch;
 });
 
 describe("Vocabulary tab label", () => {
@@ -554,10 +571,127 @@ describe("VocabularyDetailDialog part of speech / phonetic / pronunciation", () 
     expect(within(screen.getByRole("dialog")).getByText("/ˈɔːbɪt/")).toBeInTheDocument();
   });
 
-  it("shows no pronunciation control when the item has no audio_url", () => {
+  it("still shows a pronunciation control (idle, eligible for on-demand synthesis) when the item has no audio_url", () => {
     render(<Harness items={[REIMBURSE]} />);
     fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
-    expect(screen.queryByRole("button", { name: /pronunciation/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /play pronunciation of "reimburse"/i })).toBeInTheDocument();
+  });
+
+  it("resolves pronunciation on demand via the pronounce route and shows a 'ready to play' state instead of auto-playing", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ audioUrl: "https://cdn.example.com/azure/abc.mp3", source: "synthesized" }),
+    });
+    const originalFetch = global.fetch;
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    const button = screen.getByRole("button", { name: /play pronunciation of "reimburse"/i });
+
+    fireEvent.click(button);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/vocabulary/pronounce",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ itemId: "1" }) })
+    );
+    expect(screen.getByRole("button", { name: /tap to play pronunciation of "reimburse"/i })).toBeInTheDocument();
+    expect(screen.getByText("Tap to play")).toBeInTheDocument();
+
+    global.fetch = originalFetch;
+  });
+
+  it("backfills canonical_form/learning_pattern via PATCH when a legacy item resolves them only from the live highlight cache", async () => {
+    const patchCalls: unknown[] = [];
+    const fetchMock = jest.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/vocabulary" && init?.method === "PATCH") {
+        patchCalls.push(JSON.parse(init.body as string));
+        return Promise.resolve({ ok: true, json: async () => ({ item: {} }) });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const originalFetch = global.fetch;
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const legacyItem = makeItem({
+      id: "21",
+      term: "jumped at",
+      canonical_form: null,
+      learning_pattern: null,
+      segment_index: 5,
+    });
+    const phrasesBySegmentIndex = new Map([
+      [
+        5,
+        [
+          {
+            phrase: "jumped at",
+            translation: null,
+            canonicalForm: "jump at",
+            learningPattern: "jump at + object",
+          },
+        ],
+      ],
+    ]);
+
+    render(<Harness items={[legacyItem]} phrasesBySegmentIndex={phrasesBySegmentIndex} />);
+    fireEvent.click(screen.getByRole("button", { name: /jumped at/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(patchCalls).toEqual([{ id: "21", canonicalForm: "jump at", learningPattern: "jump at + object" }]);
+
+    global.fetch = originalFetch;
+  });
+
+  it("does not backfill (never calls PATCH) when the persisted canonical_form is already set", async () => {
+    const fetchSpy = jest.fn(() => {
+      throw new Error("fetch should not be called");
+    });
+    const originalFetch = global.fetch;
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const persisted = makeItem({ id: "22", term: "given up", canonical_form: "give up", segment_index: 5 });
+    const phrasesBySegmentIndex = new Map([
+      [5, [{ phrase: "given up", translation: null, canonicalForm: "give up", learningPattern: "give up + x" }]],
+    ]);
+
+    render(<Harness items={[persisted]} phrasesBySegmentIndex={phrasesBySegmentIndex} />);
+    fireEvent.click(screen.getByRole("button", { name: /given up/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    global.fetch = originalFetch;
+  });
+
+  it("shows an error state and does not retry the network when the pronounce route fails", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: "no budget", code: "TTS_QUOTA_EXCEEDED" }),
+    });
+    const originalFetch = global.fetch;
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<Harness items={[REIMBURSE]} />);
+    fireEvent.click(screen.getByRole("button", { name: /reimburse/i }));
+    fireEvent.click(screen.getByRole("button", { name: /play pronunciation of "reimburse"/i }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Pronunciation is temporarily unavailable.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    global.fetch = originalFetch;
   });
 
   it("plays pronunciation audio on click and stops it when the dialog closes", async () => {

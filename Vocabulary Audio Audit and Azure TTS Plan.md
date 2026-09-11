@@ -1,8 +1,8 @@
 # Vocabulary Canonical-Form / Pronunciation Audit and Azure TTS Integration Plan
 
-Status: **audit + plan only — nothing in this document has been implemented.** No application code, migrations, or dependencies were changed to produce it; no paid API was called (Azure documentation was fetched read-only, no Azure Speech key was used).
+Status: **implemented, then post-implementation-audited and corrected (2026-09-11).** The original plan below (§1-§15) was fully implemented in an earlier pass: prerequisite fixes, migration 018, `azureTts.ts`, `vocabularyAudioCache.ts`, `POST /api/vocabulary/pronounce`, the extended `PronunciationButton`, and the accompanying test suite. A second, focused audit pass then reviewed the *implemented code* (not this document) against the original design intent, found and fixed several confirmed defects, and added regression coverage for each. See "Post-implementation audit addendum" at the end of this document for what changed, why, and what remains unverified/deferred. Treat the numbered sections below as the original design record — where the addendum says a section's behavior was corrected, the addendum is authoritative, not the prose below it.
 
-Repo state audited: working tree on `main`, including the uncommitted changes to `VocabularyDetailDialog.tsx`, `useLessonCapture.ts`, `src/lib/types/index.ts`, `src/app/api/vocabulary/route.ts`, and the new `supabase/migrations/017_vocabulary_audio.sql`.
+Repo state originally audited: working tree on `main`, including the uncommitted changes to `VocabularyDetailDialog.tsx`, `useLessonCapture.ts`, `src/lib/types/index.ts`, `src/app/api/vocabulary/route.ts`, and the new `supabase/migrations/017_vocabulary_audio.sql`.
 
 ---
 
@@ -324,3 +324,97 @@ Conservative, matching the house style in `scripts/repair-info-icon-vocab.mjs`:
 - [Speech Services pricing (F0/S0 tiers)](https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/)
 - [Text to speech REST API reference](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech)
 - [Quotas and limits for Azure Speech](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits)
+
+---
+
+## Post-implementation audit addendum (2026-09-11)
+
+A focused review of the **implemented code** (not this document) against nine correctness/security concerns. All fixes below are additive/corrective to the already-shipped feature — no restart, no new flashcard/admin surface. `npm run lint`, `npm run build`, and `npm test` all pass (756/756) after these changes.
+
+### 1. Concern-by-concern
+
+| # | Concern | Evidence in implemented code | Status | Action taken |
+|---|---|---|---|---|
+| 1 | Heading vs. pronunciation can disagree for a legacy row | `resolveVocabularyHighlightMeta` (client, falls back to live highlight cache) vs. the pronounce route's `item.canonical_form ?? item.term` (server, persisted-only) — for `canonical_form: null` + a live-cache match, these genuinely differed | **Confirmed** | Client-side backfill: `VocabularyDetailDialog` now PATCHes the resolved `canonicalForm`/`learningPattern` back onto the item the moment a legacy fallback resolves one, so the server's source of truth catches up instead of permanently diverging. Backfill-only (fills null, never overwrites a verified value) — see §2 below. |
+| 1b | Same-item-id edit could play the OLD term's audio under the NEW heading | `PronunciationButton` was `key={displayItem.id}` only; `usePronunciationPlayback` seeded `resolvedUrlRef` from `knownAudioUrl` **once**, on mount, via `useRef`'s initial value — never resynced | **Confirmed, most severe finding** | Hook now takes `term`/`canonicalForm` and resets all playback state (resolved URL, status, in-flight generation) whenever that identity changes, even with `itemId` unchanged. |
+| 2 | `pronunciation_audio_asset_id` trusted on ID alone | Old code: `getAudioAssetById(id)` → play, no check that the asset's voice/locale/format/`synthesis_version`/text still matches | **Confirmed** | Added `assetMatchesKey()`; the route now validates full identity before trusting a linked asset, falling through to a fresh lookup/synthesis on mismatch (e.g. after a `TTS_SYNTHESIS_VERSION` bump). |
+| 2b | A cached asset's Storage object could be missing with no recovery | `publicUrlFor` never checked existence; a missing object would 404 forever once resolved | **Confirmed** | Storage access moved to signed URLs (see #7); a `null` resolution (object gone) is now treated as a miss and falls through to re-synthesis, which `upsert`s onto the same row and self-heals the shared cache. |
+| 3 | Slow synthesis finishing after an edit could re-attach stale audio | `linkAssetToItem` was an unconditional `UPDATE ... WHERE id = itemId` | **Confirmed** | `linkAssetToItem` now carries a guard (`normalized_term` + `canonical_form` snapshot from request start); a 0-row no-op update is the correct outcome if the item changed mid-flight. Client discards stale in-flight responses via a generation counter (see #1b). |
+| 4 | Dictionary phonetic/audio pairing | Prior session's fix (`pairedEntry = phonetics.find(p => p.text && p.audio)`) | Already resolved | No change; regression tests already existed. Confirmed synthesis always targets `canonical_form ?? term`, never `learning_pattern`'s notation. |
+| 5 | Quota fails open even when Redis is unreachable, for a route that spends real money | Every quota check in `rateLimit.ts` fails open when unconfigured — correct for Gemini/Key-Phrase, not safe for paid, user-triggered TTS | **Confirmed** | New synthesis (only) now fails closed when the quota backend is unconfigured or throws, **in production only** (`isProductionEnvironment()`); dev/test keep the existing fail-open convenience. Dictionary/cached paths never reach this check. |
+| 6 | Broken dictionary `audio_url` traps retries forever | `toggle()` always retried the same `resolvedUrlRef` with no path off it | **Confirmed** | Bounded, explicit "Use generated pronunciation" recovery action (never automatic); route reordered so a previously-linked generated asset is preferred over dictionary audio on later opens. |
+| 7 | Public RLS on `vocabulary_audio_assets` + public Storage bucket | Migration 018 modeled both on `vocabulary_translation_cache`'s public-read pattern; nothing in the app ever reads either via the client | **Confirmed** | New migration `019_vocabulary_audio_private.sql`: table SELECT restricted to service-role; bucket flipped to private; `resolvePlaybackUrl` uses `createSignedUrl` (1h TTL) instead of `getPublicUrl`. |
+| 8a | "At most one extra Azure call" under concurrency | No code claimed this, but nothing prevented/documented it either | Clarified, not changed | Added a test proving N concurrent misses → N Azure calls (not deduplicated); documented as an accepted, quantified MVP trade-off — the unique-constraint upsert still prevents duplicate **storage/rows**, just not duplicate **Azure spend**. |
+| 8b | Two vocabulary cards could play audio simultaneously | Each `usePronunciationPlayback` instance owned its own `<audio>` with no cross-instance coordination | **Confirmed** | Added a lightweight module-level playback-slot coordinator inside the hook; claiming playback on one instance stops any other. |
+
+### 2. Root causes of the confirmed defects
+
+- **#1/#1b/#3 all trace to one design gap**: the pronunciation button was keyed and seeded only by `itemId`, treating "edit this item's text" as a no-op for playback state, when it's exactly the case that most needs invalidation. The server-side counterpart (unconditional `UPDATE`) had the same blind spot.
+- **#2**: an asset *id* was conflated with an asset's *validity* — nothing re-checked that the identity the id was resolved under (voice/locale/format/version/text) still matched the current configuration.
+- **#5**: a fail-open convention correct for a free-tier, best-effort feature (Gemini explanations, Key Phrase enrichment) was copied verbatim onto a feature that spends metered Azure quota on every miss.
+- **#7**: the public-read RLS pattern from `vocabulary_translation_cache` was reused by structural analogy without re-examining whether *this* table's content (a user's own saved text) belongs in that trust tier.
+
+### 3. Files changed in this pass
+
+**Modified:**
+
+- `src/hooks/usePronunciationPlayback.ts` — identity-aware reset, stale-response discard, playback-slot coordinator, bounded dictionary-audio recovery, self-healing retry-then-reclear for broken server-resolved assets.
+- `src/app/api/vocabulary/pronounce/route.ts` — asset-identity validation, reordered resolution (linked asset → dictionary → shared cache → synthesize), conditional/guarded link, production-only fail-closed quota gate, `preferGenerated` flag, signed URLs.
+- `src/lib/vocabularyAudioCache.ts` — `CachedAudioAsset` now carries full identity; new `assetMatchesKey`; `publicUrlFor` replaced by async `resolvePlaybackUrl` (signed URL).
+- `src/lib/rateLimit.ts` — new `isQuotaBackendConfigured()`, `isProductionEnvironment()`.
+- `src/app/api/vocabulary/route.ts` (PATCH) — accepts backfill-only `canonicalForm`/`learningPattern`.
+- `src/lib/types/index.ts` — `VocabularyUpdateRequest.canonicalForm/learningPattern`, `VocabularyPronounceRequest.preferGenerated`.
+- `src/app/dictation/[videoId]/components/VocabularyDetailDialog.tsx` — passes `canonicalForm` to the hook, adds the legacy-backfill effect, renders the recovery action.
+- `src/app/vocabulary/page.tsx` — card button passes `term`/`canonicalForm`, renders the recovery action.
+- Test files: `vocabulary-pronounce-route.test.ts`, `vocabularyAudioCache.test.ts`, `vocabulary-canonical-metadata-route.test.ts`, `vocabularyPanel.test.tsx` — updated/extended.
+
+**Added:**
+
+- `supabase/migrations/019_vocabulary_audio_private.sql`.
+- `src/__tests__/usePronunciationPlayback.test.tsx` — dedicated hook regression suite (identity reset, stale-response discard, cross-instance exclusivity, recovery action, self-healing retry).
+
+### 4. Migrations and deployment order
+
+1. `018_vocabulary_audio_assets.sql` (from the original implementation pass — **not yet applied to any database**, per the prior session's report).
+2. `019_vocabulary_audio_private.sql` (this pass) — apply immediately after 018, in numeric order. It is idempotent (`drop policy if exists`) and safe to apply whether or not 018 has already run elsewhere.
+3. Neither migration has been applied to any real Supabase project by this assistant — both still need `supabase db push` (or your usual flow) run by you.
+4. If 018 was *already* deployed with real traffic before 019 lands: any public URL a client currently holds in an open tab will start 403ing the instant 019 applies. This is expected and self-resolving — this app never persists a resolved `audioUrl` beyond one button's in-memory lifetime, so the next tap (or a reload) gets a fresh signed URL. No data is lost or needs migrating.
+
+### 5. Resulting canonical/pronunciation rules
+
+- **Server is always the source of truth for what gets spoken**: `item.canonical_form ?? item.term`, read fresh from the DB per request — never the client's live highlight cache, never client-supplied text.
+- **The client's displayed heading now converges onto the same value**: a legacy row's live-cache-derived canonical form is opportunistically persisted (backfill-only, never overwriting a verified value) the moment it's resolved, so heading and pronunciation read the same persisted field going forward. A narrow, self-resolving window remains if a user taps pronounce before the backfill PATCH lands (see §6 Limitations).
+- **Editing a saved item's term** (same `itemId`) resets all client-side playback state immediately (no stale audio, no stale in-flight response applied) and nulls all term-derived server columns unconditionally (unchanged from the original implementation).
+
+### 6. Cache, quota, access, and recovery behavior (as corrected)
+
+- **Cache reuse**: a linked or shared-cache asset is only served after its full identity (voice/locale/format/`synthesis_version`/normalized text) matches the current configuration; otherwise it's treated as stale and a fresh lookup/synthesis runs.
+- **Resolution order**: linked generated asset (if identity-valid) → dictionary audio (skipped if `preferGenerated`) → shared cache → synthesize. This order (asset before dictionary) is what makes the recovery action in §item 6 durable across future opens.
+- **Quota**: character-budget and rate checks are atomic (Redis `INCRBY`), global (not per-IP), and now fail closed for **new synthesis only** when the backend is unreachable/unconfigured **in production**; dictionary audio and any valid cached asset are unaffected regardless. Quota is spent on a failed Azure call too (no refund logic) — deliberate, matches this codebase's existing conservative-accounting convention.
+- **Access**: `vocabulary_audio_assets` and the `vocabulary-audio` bucket are service-role-only; every resolution goes through the authenticated, ownership-checked pronounce route, which returns a short-lived signed URL, never a permanent public one.
+- **Recovery**: unusable dictionary audio surfaces an explicit "Use generated pronunciation" action (never automatic); a broken server-resolved asset self-heals after one same-source retry fails twice, without any user action.
+- **Concurrency**: concurrent duplicate requests for the same not-yet-cached text each call Azure (not deduplicated — documented, quantified limitation, not a queue); the DB `upsert` still guarantees only one surviving row/object. Playback itself is exclusive across all buttons on the page.
+
+### 7. Test commands and results
+
+- `npm run lint` — 0 errors (3 pre-existing warnings, unrelated to this work).
+- `npm run build` — compiles and type-checks cleanly; `/api/vocabulary/pronounce` present in the route manifest.
+- `npm test` — **64 suites / 756 tests passing**, including the new `usePronunciationPlayback.test.tsx` and the extended pronounce-route/cache/PATCH suites.
+- All of the above are **unit/component tests against mocked Supabase and Azure clients** — no real Azure quota was consumed, and no real database was touched.
+- **Not covered by this pass** (explicitly out of scope for a code-only review):
+  - Database integration tests against a real/local Supabase instance (RLS policies, the `normalized_term`/`canonical_form` conditional-update guard under real concurrent writes, the unique constraint under a real race) — the mocked tests exercise the *code's* logic, not the deployed database's actual behavior.
+  - Real browser testing.
+  - Real iPhone Safari/PWA testing.
+
+### 8. Remaining limitations and manual checks
+
+- **Concurrent-miss Azure calls are not deduplicated** (§8a) — accepted MVP trade-off, quantified above; revisit only if usage volume makes it a real cost concern.
+- **Legacy-row backfill has a narrow timing window**: if a user taps pronounce within the same request round-trip as the dialog opening (before the backfill PATCH commits), that one tap may still speak the un-canonicalized term. Self-resolves on the very next tap.
+- **Phase 0 items from the original plan remain unverified by this assistant** (no Azure Portal access): the deployed `AZURE_SPEECH_KEY` resource's actual pricing tier, and whether `AZURE_SPEECH_REGION` has healthy Neural-voice backend capacity.
+- **Manual acceptance checklist** (do before/after deploying, since none of this can be verified from jsdom):
+  1. Apply migrations 018 then 019 to a real Supabase project.
+  2. Desktop Chrome/Firefox: tap-to-play on a word with dictionary audio, a word without, and a phrase; confirm the "ready — tap to play" second-tap flow for on-demand synthesis.
+  3. Open two different vocabulary cards' pronunciation buttons in sequence — confirm the first stops when the second starts (no overlap).
+  4. Edit a saved item's term while its detail dialog is open and its pronunciation button already shows "ready" or has played — confirm the button resets and the next tap resolves the NEW text, not the old audio.
+  5. Real iPhone Safari/PWA: first-synthesis flow, offline behavior, backgrounding mid-playback — none of this is verifiable via jsdom.
+  6. Manually break a cached asset's Storage object (delete it in Supabase Storage) and confirm playback fails once, then self-heals on a later tap instead of failing forever.
