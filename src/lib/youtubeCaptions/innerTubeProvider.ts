@@ -9,7 +9,7 @@
 // innerTubeClient/parseTimedText modules.
 // =====================================================
 
-import { fetchCaptionTracks, fetchTimedText } from "./innerTubeClient";
+import { fetchCaptionTracks, fetchTimedText, PLAYABILITY_BOT_BLOCK_STATUSES } from "./innerTubeClient";
 import { selectEnglishTrack } from "./trackSelection";
 import { parseTimedTextXml } from "./parseTimedText";
 import { validateHttpPayload } from "./validation";
@@ -36,6 +36,14 @@ export async function fetchViaInnerTube(videoId: string): Promise<TranscriptProv
     throw new TranscriptFetchError("NETWORK_ERROR", "InnerTube returned a server error.", {
       safeContext: { httpStatus: diagnostics.httpStatus },
     });
+  }
+
+  if (diagnostics.playabilityStatus && PLAYABILITY_BOT_BLOCK_STATUSES.has(diagnostics.playabilityStatus)) {
+    throw new TranscriptFetchError(
+      "YOUTUBE_BOT_BLOCKED",
+      "InnerTube returned a login-required playability status for an unauthenticated request.",
+      { safeContext: { playabilityStatus: diagnostics.playabilityStatus } }
+    );
   }
 
   if (!tracks || tracks.length === 0) {

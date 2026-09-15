@@ -27,6 +27,20 @@ const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION}
 /** Standard 11-character YouTube video ID shape — letters, digits, `-`, `_`. */
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
+/**
+ * `playabilityStatus` values InnerTube/the webpage's inline player response
+ * return when it refuses to hand back player data (captions included) to
+ * this specific unauthenticated, cookie-less, spoofed-client request.
+ * Overwhelmingly this is YouTube's datacenter-IP/bot soft-block — not
+ * evidence the video itself requires sign-in for a real viewer — since a
+ * genuinely private/members-only video wouldn't have been playable in a
+ * normal browser either. Treated as bot-block evidence (terminal for this
+ * request, no further-provider fallback, short cooldown) rather than
+ * "captions disabled" (which implies a stable per-video fact worth a long
+ * cooldown and "pick a different video" messaging).
+ */
+export const PLAYABILITY_BOT_BLOCK_STATUSES = new Set(["LOGIN_REQUIRED", "CONTENT_CHECK_REQUIRED"]);
+
 export function isValidYoutubeVideoId(videoId: string): boolean {
   return VIDEO_ID_RE.test(videoId);
 }

@@ -21,8 +21,18 @@ import {
 import { normalizeCues } from "@/lib/utils/segment";
 import type { CaptionCue, TranscriptProviderResult } from "./types";
 import { TranscriptFetchError } from "./errors";
+import { PLAYABILITY_BOT_BLOCK_STATUSES } from "./innerTubeClient";
 
-function createDiagnosticFetch(videoId: string): typeof fetch {
+interface DiagnosticCapture {
+  /** First playabilityStatus seen across either the InnerTube or webpage
+   *  request this call makes — read by fetchViaPackage after the package
+   *  call settles, so a LOGIN_REQUIRED-style response (bot-block evidence,
+   *  not "no captions") can be reclassified before the fallback matrix
+   *  decides whether to try the second provider. */
+  playabilityStatus?: string;
+}
+
+function createDiagnosticFetch(videoId: string, capture: DiagnosticCapture): typeof fetch {
   return async (input, init) => {
     const response = await fetch(input, init);
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -30,9 +40,11 @@ function createDiagnosticFetch(videoId: string): typeof fetch {
       if (url.includes("/youtubei/v1/player")) {
         const json = await response.clone().json();
         const tracks = json?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        const playabilityStatus: string | undefined = json?.playabilityStatus?.status;
+        capture.playabilityStatus ??= playabilityStatus;
         console.log(
           `[packageProvider] innertube videoId=${videoId} httpStatus=${response.status} ` +
-            `playabilityStatus=${json?.playabilityStatus?.status ?? "?"} ` +
+            `playabilityStatus=${playabilityStatus ?? "?"} ` +
             `captionTrackCount=${Array.isArray(tracks) ? tracks.length : 0}`
         );
       } else if (url.includes("youtube.com/watch")) {
@@ -41,6 +53,7 @@ function createDiagnosticFetch(videoId: string): typeof fetch {
         // is never logged.
         const text = await response.clone().text();
         const statusMatch = text.match(/"playabilityStatus":\s*\{\s*"status":\s*"([^"]+)"/);
+        capture.playabilityStatus ??= statusMatch?.[1];
         console.log(
           `[packageProvider] webpage videoId=${videoId} httpStatus=${response.status} bodyLength=${text.length} ` +
             `looksLikeChallenge=${text.includes('class="g-recaptcha"')} ` +
@@ -54,6 +67,23 @@ function createDiagnosticFetch(videoId: string): typeof fetch {
     }
     return response;
   };
+}
+
+/** A LOGIN_REQUIRED/CONTENT_CHECK_REQUIRED playabilityStatus from either
+ *  underlying request overrides whatever the package itself concluded —
+ *  see PLAYABILITY_BOT_BLOCK_STATUSES for why this is bot-block evidence,
+ *  not "no captions". Classifying it correctly here (before the fallback
+ *  matrix runs) avoids wastefully repeating the same blocked request via
+ *  the InnerTube-raw fallback, which is terminalForAllProviders anyway. */
+function reclassifyForPlayabilityStatus(capture: DiagnosticCapture, cause: unknown): TranscriptFetchError | null {
+  if (capture.playabilityStatus && PLAYABILITY_BOT_BLOCK_STATUSES.has(capture.playabilityStatus)) {
+    return new TranscriptFetchError(
+      "YOUTUBE_BOT_BLOCKED",
+      "YouTube returned a login-required playability status for an unauthenticated request.",
+      { cause, safeContext: { playabilityStatus: capture.playabilityStatus } }
+    );
+  }
+  return null;
 }
 
 function classifyPackageError(err: unknown): TranscriptFetchError {
@@ -112,20 +142,24 @@ function toCaptionCues(items: PackageCue[]): CaptionCue[] {
  */
 export async function fetchViaPackage(videoId: string, language: string): Promise<TranscriptProviderResult> {
   const startedAt = Date.now();
+  const capture: DiagnosticCapture = {};
   let items: PackageCue[] | undefined;
   try {
     items = await YoutubeTranscript.fetchTranscript(videoId, {
       lang: language,
-      fetch: createDiagnosticFetch(videoId),
+      fetch: createDiagnosticFetch(videoId, capture),
     });
   } catch (err) {
-    throw classifyPackageError(err);
+    throw reclassifyForPlayabilityStatus(capture, err) ?? classifyPackageError(err);
   }
 
   if (!items || items.length === 0) {
-    throw new TranscriptFetchError("INVALID_PROVIDER_RESPONSE", "Package returned no cues.", {
-      safeContext: { cueCount: 0 },
-    });
+    throw (
+      reclassifyForPlayabilityStatus(capture, undefined) ??
+      new TranscriptFetchError("INVALID_PROVIDER_RESPONSE", "Package returned no cues.", {
+        safeContext: { cueCount: 0 },
+      })
+    );
   }
 
   return {
