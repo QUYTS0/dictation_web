@@ -418,3 +418,48 @@ A focused review of the **implemented code** (not this document) against nine co
   4. Edit a saved item's term while its detail dialog is open and its pronunciation button already shows "ready" or has played — confirm the button resets and the next tap resolves the NEW text, not the old audio.
   5. Real iPhone Safari/PWA: first-synthesis flow, offline behavior, backgrounding mid-playback — none of this is verifiable via jsdom.
   6. Manually break a cached asset's Storage object (delete it in Supabase Storage) and confirm playback fails once, then self-heals on a later tap instead of failing forever.
+
+---
+
+## Second post-implementation fix: the backfill race that caused real duplicate synthesis (2026-09-16)
+
+A user report ("audio sometimes appears to be generated again after it was already played") led to a focused re-investigation of the implemented persistence/reuse path. This is a genuine, confirmed defect distinct from everything in the addendum above — that pass hardened the *resolution* logic (asset-identity validation, error handling); this one closes a gap in *when a resolved audio link gets invalidated*.
+
+### Confirmed root cause
+
+`POST /api/vocabulary/pronounce` always resolves `textToSpeak = item.canonical_form ?? item.term`, read fresh from the DB (`src/app/api/vocabulary/pronounce/route.ts`). For a legacy row, `canonical_form` starts `null`, so its first-ever pronunciation is necessarily synthesized and linked (`pronunciation_audio_asset_id`) under an identity keyed on `term`.
+
+`VocabularyDetailDialog.tsx`'s legacy-backfill effect (added in the first addendum) later PATCHes that same row's `canonical_form` in, once the client resolves it from the live highlight cache. `PATCH /api/vocabulary`'s backfill branch (`src/app/api/vocabulary/route.ts`, the `canonical_form: termChanged ? null : canonicalForm !== undefined && existing.canonical_form == null ? ... : existing.canonical_form` line) correctly filled in the column — but its `audio_url`/`pronunciation_audio_asset_id` fields were **only ever nulled when `termChanged`**, never when this backfill branch itself flips the item's *effective* pronunciation identity from `term` to `canonical_form`. The stale link survived, now pointing at an asset whose `normalized_text` no longer matches what the pronounce route computes — so the very next tap missed the linked-asset check (`assetMatchesKey`) *and* the shared cache (nothing had ever been synthesized under the new, canonical-form-keyed identity yet), and paid for a real, avoidable Azure synthesis call for text the user had just heard moments earlier under the old identity.
+
+Verified end-to-end in `src/__tests__/vocabulary-pronunciation-persistence.test.ts` (real `vocabularyAudioCache.ts`, only Azure/Storage/DB clients faked) — before the fix, that suite's first scenario required **two** `synthesizeSpeech` calls where the fixed code needs exactly one extra (the second is legitimate: "give up" genuinely differs from "given up") and zero further calls on every later request.
+
+A second, independently confirmed issue surfaced while re-reading the resolution path per the investigation brief's explicit instruction not to conflate errors with misses: `getAudioAssetById`, `getCachedAudioAsset`, and `resolvePlaybackUrl` all previously collapsed "row/object doesn't exist" (a confirmed, safe-to-resynthesize miss) and "the read itself failed" (DB/Storage error — proves nothing) into the same `null` return. A transient Supabase hiccup during a cache lookup would have silently looked identical to "nothing cached yet" and triggered an unnecessary (paid) synthesis call.
+
+### Files changed
+
+- `src/app/api/vocabulary/route.ts` (`PATCH`) — added `canonicalFormNewlySet` and `pronunciationIdentityChanged`; `audio_url`/`pronunciation_audio_asset_id` are now nulled whenever the backfill branch actually sets a canonical form, not only on a term change.
+- `src/lib/vocabularyAudioCache.ts` — `getAudioAssetById`/`getCachedAudioAsset` now return `AssetLookupResult` (`hit` / `miss` / `error`); `resolvePlaybackUrl` now returns `PlaybackUrlResult` (`ok` / `missing` / `error`), distinguishing a confirmed-missing Storage object (statusCode `404` / "not found" message) from any other signing failure.
+- `src/app/api/vocabulary/pronounce/route.ts` — updated to the new tri-state results: an `"error"` from any lookup now aborts the request with `TTS_UPSTREAM_ERROR` (503, retryable) instead of falling through to synthesis; only a confirmed `"miss"`/`"missing"` falls through.
+- Tests updated for the new return shapes: `src/__tests__/vocabularyAudioCache.test.ts`, `src/__tests__/vocabulary-pronounce-route.test.ts` (plus new cases for the four error-vs-miss paths).
+- Tests added: `src/__tests__/vocabulary-canonical-metadata-route.test.ts` (three new cases in the backfill describe block — invalidation on identity flip, no-op when nothing changes, no-op when canonical_form was already persisted); `src/__tests__/vocabulary-pronunciation-persistence.test.ts` (new file — end-to-end regression against a real in-memory fake of the DB/Storage layer, not a mock of the cache module itself).
+
+### Behavior after this fix
+
+- Once pronunciation audio is successfully generated and linked, that link survives close/reopen, reload, sign-out/in, and a different device/session — every one of those paths is just a fresh `POST /api/vocabulary/pronounce` call that re-reads the same persisted `pronunciation_audio_asset_id`/`canonical_form ?? term` from the DB.
+- The *only* things that ever invalidate a resolved link are the two genuinely identity-changing events: an actual term edit, and the one-time legacy backfill that finalizes a previously-null `canonical_form`. Both are real, deliberate identity changes — not incidental churn — so this is at most one extra synthesis in an item's entire lifetime, not a recurring one.
+- A DB or Storage read failure during resolution now surfaces a clear, retryable `TTS_UPSTREAM_ERROR` and never causes a paid Azure call to compensate for a lookup that merely failed to answer.
+
+### Test results
+
+- `npm run lint` — 0 errors (same 3 pre-existing, unrelated warnings).
+- `npm run build` — compiles and type-checks cleanly.
+- `npm test` — **66 suites / 771 tests passing**, all against mocked Supabase/Azure/Storage clients (the new end-to-end file uses an in-memory fake, not a real database) — no real Azure quota consumed, no real database touched.
+- Not re-verified by this pass (same limitations as the first addendum): a real Postgres instance under the exact unique constraints/RLS, and real browser/iPhone playback.
+
+### Manual verification (desktop and iPhone)
+
+1. Open a legacy saved phrase (`canonical_form` null in the DB) whose heading differs from its saved surface term. Tap pronounce — it plays (first synthesis).
+2. Reload the page (or close and reopen the dialog) and tap pronounce again on the same item — it should play with no visible extra delay beyond the signed-URL fetch, and should **not** show the loading spinner for a full fresh synthesis a second time in a row once the backfill has had a moment to land.
+3. Open the same item on the Vocabulary Bank page (`/vocabulary`) — tapping its pronunciation button there reuses the same generated audio, not a fresh one.
+4. On a second device or an incognito/second-account-free session (same user, signed in fresh), open the item and tap pronounce — should resolve immediately from the shared cache.
+5. iPhone Safari/PWA: confirm the above still requires only the expected single extra tap for "ready → play" on first synthesis, and that replays after that don't re-show the "ready" intermediate state.

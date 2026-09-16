@@ -86,7 +86,7 @@ describe("assetMatchesKey", () => {
 });
 
 describe("getCachedAudioAsset", () => {
-  it("returns the full cached asset identity when one exists", async () => {
+  it("returns a hit with the full cached asset identity when one exists", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;
     builder.select = jest.fn(chain);
@@ -95,11 +95,11 @@ describe("getCachedAudioAsset", () => {
     fromMock.mockReturnValue(builder);
 
     const result = await getCachedAudioAsset(key);
-    expect(result).toEqual(asset);
+    expect(result).toEqual({ status: "hit", asset });
     expect(fromMock).toHaveBeenCalledWith("vocabulary_audio_assets");
   });
 
-  it("returns null when nothing is cached", async () => {
+  it("returns a confirmed miss when nothing is cached", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;
     builder.select = jest.fn(chain);
@@ -107,10 +107,10 @@ describe("getCachedAudioAsset", () => {
     builder.maybeSingle = jest.fn(() => Promise.resolve({ data: null, error: null }));
     fromMock.mockReturnValue(builder);
 
-    expect(await getCachedAudioAsset(key)).toBeNull();
+    expect(await getCachedAudioAsset(key)).toEqual({ status: "miss" });
   });
 
-  it("returns null (not a throw) on a database error", async () => {
+  it("returns an error result (not a confirmed miss) on a database error", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;
     builder.select = jest.fn(chain);
@@ -118,12 +118,20 @@ describe("getCachedAudioAsset", () => {
     builder.maybeSingle = jest.fn(() => Promise.resolve({ data: null, error: { message: "db down" } }));
     fromMock.mockReturnValue(builder);
 
-    expect(await getCachedAudioAsset(key)).toBeNull();
+    expect(await getCachedAudioAsset(key)).toEqual({ status: "error", message: "db down" });
+  });
+
+  it("returns an error result (not a throw) when the Supabase client itself throws", async () => {
+    fromMock.mockImplementation(() => {
+      throw new Error("Missing Supabase environment variables.");
+    });
+
+    expect(await getCachedAudioAsset(key)).toEqual({ status: "error", message: "Missing Supabase environment variables." });
   });
 });
 
 describe("getAudioAssetById", () => {
-  it("returns the full asset identity for a matching id", async () => {
+  it("returns a hit with the full asset identity for a matching id", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;
     builder.select = jest.fn(chain);
@@ -131,10 +139,10 @@ describe("getAudioAssetById", () => {
     builder.maybeSingle = jest.fn(() => Promise.resolve({ data: assetRow, error: null }));
     fromMock.mockReturnValue(builder);
 
-    expect(await getAudioAssetById("asset-1")).toEqual(asset);
+    expect(await getAudioAssetById("asset-1")).toEqual({ status: "hit", asset });
   });
 
-  it("returns null when the id doesn't exist", async () => {
+  it("returns a confirmed miss when the id doesn't exist", async () => {
     const builder: Record<string, jest.Mock> = {};
     const chain = () => builder;
     builder.select = jest.fn(chain);
@@ -142,7 +150,18 @@ describe("getAudioAssetById", () => {
     builder.maybeSingle = jest.fn(() => Promise.resolve({ data: null, error: null }));
     fromMock.mockReturnValue(builder);
 
-    expect(await getAudioAssetById("missing")).toBeNull();
+    expect(await getAudioAssetById("missing")).toEqual({ status: "miss" });
+  });
+
+  it("returns an error result (not a confirmed miss) on a database error", async () => {
+    const builder: Record<string, jest.Mock> = {};
+    const chain = () => builder;
+    builder.select = jest.fn(chain);
+    builder.eq = jest.fn(chain);
+    builder.maybeSingle = jest.fn(() => Promise.resolve({ data: null, error: { message: "db down" } }));
+    fromMock.mockReturnValue(builder);
+
+    expect(await getAudioAssetById("asset-1")).toEqual({ status: "error", message: "db down" });
   });
 });
 
@@ -160,7 +179,7 @@ describe("touchAudioAsset", () => {
 });
 
 describe("resolvePlaybackUrl", () => {
-  it("returns a signed, time-limited URL from private storage (not a public one)", async () => {
+  it("returns an ok result with a signed, time-limited URL from private storage (not a public one)", async () => {
     const createSignedUrl = jest.fn(() =>
       Promise.resolve({ data: { signedUrl: "https://cdn.example.com/azure/abc.mp3?token=xyz" }, error: null })
     );
@@ -168,25 +187,36 @@ describe("resolvePlaybackUrl", () => {
 
     const result = await resolvePlaybackUrl("azure/abc.mp3");
 
-    expect(result).toBe("https://cdn.example.com/azure/abc.mp3?token=xyz");
+    expect(result).toEqual({ status: "ok", url: "https://cdn.example.com/azure/abc.mp3?token=xyz" });
     expect(storageFromMock).toHaveBeenCalledWith("vocabulary-audio");
     expect(createSignedUrl).toHaveBeenCalledWith("azure/abc.mp3", expect.any(Number));
   });
 
-  it("returns null (not a throw) when the object is missing / signing fails", async () => {
+  it("returns a confirmed 'missing' result (not an error) when Storage reports the object doesn't exist", async () => {
     storageFromMock.mockReturnValue({
-      createSignedUrl: jest.fn(() => Promise.resolve({ data: null, error: { message: "Object not found" } })),
+      createSignedUrl: jest.fn(() => Promise.resolve({ data: null, error: { message: "Object not found", statusCode: "404" } })),
     });
 
-    expect(await resolvePlaybackUrl("azure/missing.mp3")).toBeNull();
+    expect(await resolvePlaybackUrl("azure/missing.mp3")).toEqual({ status: "missing" });
   });
 
-  it("returns null (not a throw) when the Supabase client itself throws", async () => {
+  it("returns an error result (NOT a confirmed miss) when signing fails for a reason other than a missing object", async () => {
+    storageFromMock.mockReturnValue({
+      createSignedUrl: jest.fn(() => Promise.resolve({ data: null, error: { message: "service unavailable", statusCode: "503" } })),
+    });
+
+    expect(await resolvePlaybackUrl("azure/abc.mp3")).toEqual({ status: "error", message: "service unavailable" });
+  });
+
+  it("returns an error result (not a throw) when the Supabase client itself throws", async () => {
     storageFromMock.mockImplementation(() => {
       throw new Error("Missing Supabase environment variables.");
     });
 
-    expect(await resolvePlaybackUrl("azure/abc.mp3")).toBeNull();
+    expect(await resolvePlaybackUrl("azure/abc.mp3")).toEqual({
+      status: "error",
+      message: "Missing Supabase environment variables.",
+    });
   });
 });
 

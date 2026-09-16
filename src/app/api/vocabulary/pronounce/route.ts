@@ -146,21 +146,38 @@ export async function POST(request: NextRequest) {
     // longer matches the current voice/locale/format/synthesis_version/
     // text (e.g. left over from before TTS_SYNTHESIS_VERSION was bumped)
     // is treated as stale and falls through instead of being served.
+    //
+    // A "error" outcome from either lookup below is NOT a confirmed miss —
+    // it means the DB/Storage read itself failed (unreachable, permission
+    // error, outage), which proves nothing about whether a valid asset
+    // exists. Falling through to synthesis on it would risk paying for a
+    // real Azure call for audio that may already be sitting there perfectly
+    // playable — so it aborts with a retryable error instead. Only a
+    // confirmed "miss" (row/object genuinely gone) or an identity mismatch
+    // falls through.
     if (item.pronunciation_audio_asset_id) {
-      const asset = await getAudioAssetById(item.pronunciation_audio_asset_id);
-      if (asset && assetMatchesKey(asset, cacheKey)) {
-        const url = await resolvePlaybackUrl(asset.storagePath);
-        if (url) {
-          void touchAudioAsset(asset.id);
-          return NextResponse.json({ audioUrl: url, source: "cached" });
-        }
-        // Identity matched but Storage couldn't resolve a URL (e.g. the
-        // object itself has gone missing) — falls through below rather
-        // than trapping playback on a permanently unusable reference.
+      const lookup = await getAudioAssetById(item.pronunciation_audio_asset_id);
+      if (lookup.status === "error") {
+        console.error("[vocabulary/pronounce] linked-asset lookup failed:", lookup.message);
+        return errorResponse("TTS_UPSTREAM_ERROR", "Couldn't resolve pronunciation. Please try again.", 503);
       }
-      // Stale identity, or unreadable — falls through to a fresh cache
-      // lookup/synthesis; the guarded link below will correct the FK once
-      // a current asset is resolved.
+      if (lookup.status === "hit" && assetMatchesKey(lookup.asset, cacheKey)) {
+        const playback = await resolvePlaybackUrl(lookup.asset.storagePath);
+        if (playback.status === "ok") {
+          void touchAudioAsset(lookup.asset.id);
+          return NextResponse.json({ audioUrl: playback.url, source: "cached" });
+        }
+        if (playback.status === "error") {
+          console.error("[vocabulary/pronounce] linked-asset playback resolution failed:", playback.message);
+          return errorResponse("TTS_UPSTREAM_ERROR", "Couldn't resolve pronunciation. Please try again.", 503);
+        }
+        // playback.status === "missing" — the object is CONFIRMED gone
+        // (not just unreachable) — falls through below rather than
+        // trapping playback on a permanently unusable reference.
+      }
+      // Confirmed miss (row deleted) or a stale identity — falls through
+      // to a fresh cache lookup/synthesis; the guarded link below will
+      // correct the FK once a current asset is resolved.
     }
 
     // 2. Dictionary audio, single words only — never calls Azure. Skipped
@@ -172,17 +189,30 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Shared cache hit — any item, any user, same normalized text/voice/version.
-    const cached = await getCachedAudioAsset(cacheKey);
-    if (cached) {
-      const url = await resolvePlaybackUrl(cached.storagePath);
-      if (url) {
-        void linkAssetToItem(supabase, itemId, cached.id, linkGuard);
-        void touchAudioAsset(cached.id);
-        return NextResponse.json({ audioUrl: url, source: "cached" });
+    // Same error-vs-miss distinction as step 1: a lookup/signing FAILURE
+    // must never be treated as "nothing cached" — only a confirmed miss (no
+    // row) or a confirmed-missing Storage object may fall through to
+    // synthesis.
+    const cachedLookup = await getCachedAudioAsset(cacheKey);
+    if (cachedLookup.status === "error") {
+      console.error("[vocabulary/pronounce] shared cache lookup failed:", cachedLookup.message);
+      return errorResponse("TTS_UPSTREAM_ERROR", "Couldn't resolve pronunciation. Please try again.", 503);
+    }
+    if (cachedLookup.status === "hit") {
+      const playback = await resolvePlaybackUrl(cachedLookup.asset.storagePath);
+      if (playback.status === "ok") {
+        void linkAssetToItem(supabase, itemId, cachedLookup.asset.id, linkGuard);
+        void touchAudioAsset(cachedLookup.asset.id);
+        return NextResponse.json({ audioUrl: playback.url, source: "cached" });
       }
-      // Row exists but its Storage object is unreadable — treated as a
-      // miss below; re-synthesizing will `upsert` onto the same row,
-      // self-healing the shared cache for every item that needs this text.
+      if (playback.status === "error") {
+        console.error("[vocabulary/pronounce] shared-cache playback resolution failed:", playback.message);
+        return errorResponse("TTS_UPSTREAM_ERROR", "Couldn't resolve pronunciation. Please try again.", 503);
+      }
+      // playback.status === "missing" — row exists but its Storage object
+      // is CONFIRMED gone — falls through below; re-synthesizing will
+      // `upsert` onto the same row, self-healing the shared cache for
+      // every item that needs this text.
     }
 
     // 4. Miss — synthesize on demand.
@@ -258,14 +288,19 @@ export async function POST(request: NextRequest) {
       return errorResponse("TTS_STORAGE_ERROR", "Couldn't save the generated pronunciation. Please try again.", 502);
     }
 
-    const url = await resolvePlaybackUrl(asset.storagePath);
-    if (!url) {
+    const playback = await resolvePlaybackUrl(asset.storagePath);
+    if (playback.status !== "ok") {
+      // Whether "missing" (read-after-write race) or "error" (signing
+      // failed), the object was just uploaded above — either way this is
+      // a fresh-write problem, not a confirmed-stale-cache one, so both map
+      // to the same retryable storage error rather than trying to
+      // distinguish them further here.
       return errorResponse("TTS_STORAGE_ERROR", "Couldn't save the generated pronunciation. Please try again.", 502);
     }
 
     void linkAssetToItem(supabase, itemId, asset.id, linkGuard);
 
-    return NextResponse.json({ audioUrl: url, source: "synthesized" });
+    return NextResponse.json({ audioUrl: playback.url, source: "synthesized" });
   } catch (err) {
     console.error("[vocabulary/pronounce] unexpected error:", err);
     return errorResponse("TTS_UPSTREAM_ERROR", "Internal server error", 500);
