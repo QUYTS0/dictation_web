@@ -27,7 +27,7 @@ jest.mock("@/lib/vocabularyAudioCache", () => {
     getCachedAudioAsset: jest.fn(),
     getAudioAssetById: jest.fn(),
     cacheAudioAsset: jest.fn(),
-    resolvePlaybackUrl: jest.fn((path: string) => Promise.resolve(`https://cdn.example.com/${path}`)),
+    resolvePlaybackUrl: jest.fn((path: string) => Promise.resolve({ status: "ok", url: `https://cdn.example.com/${path}` })),
     touchAudioAsset: jest.fn(),
   };
 });
@@ -73,6 +73,24 @@ const CURRENT_IDENTITY = {
 
 function currentAsset(id: string, storagePath: string, normalizedText: string, overrides: Record<string, unknown> = {}) {
   return { id, storagePath, normalizedText, ...CURRENT_IDENTITY, ...overrides };
+}
+
+/** Wraps a plain asset object as a confirmed cache "hit" — the shape
+ *  getCachedAudioAsset/getAudioAssetById actually resolve to now that they
+ *  distinguish a confirmed hit/miss from a lookup error (see
+ *  vocabularyAudioCache.ts's AssetLookupResult). */
+function hit(asset: Record<string, unknown>) {
+  return { status: "hit" as const, asset };
+}
+const miss = { status: "miss" as const };
+function lookupError(message: string) {
+  return { status: "error" as const, message };
+}
+function playbackMissing() {
+  return { status: "missing" as const };
+}
+function playbackError(message: string) {
+  return { status: "error" as const, message };
 }
 
 function makeRequest(body: unknown): NextRequest {
@@ -123,8 +141,8 @@ beforeEach(() => {
   mockRate.mockResolvedValue({ allowed: true });
   mockQuotaBackendConfigured.mockReturnValue(true);
   mockIsProduction.mockReturnValue(false);
-  mockGetCached.mockResolvedValue(null);
-  mockGetById.mockResolvedValue(null);
+  mockGetCached.mockResolvedValue(miss);
+  mockGetById.mockResolvedValue(miss);
 });
 
 describe("POST /api/vocabulary/pronounce — auth and lookup", () => {
@@ -190,7 +208,7 @@ describe("POST /api/vocabulary/pronounce — dictionary path", () => {
 describe("POST /api/vocabulary/pronounce — already-linked asset (checked before dictionary)", () => {
   it("resolves via pronunciation_audio_asset_id without a fresh cache lookup", async () => {
     fromMock.mockReturnValue(makeItemBuilder(baseItem({ pronunciation_audio_asset_id: "asset-1" })));
-    mockGetById.mockResolvedValue(currentAsset("asset-1", "azure/existing.mp3", "run"));
+    mockGetById.mockResolvedValue(hit(currentAsset("asset-1", "azure/existing.mp3", "run")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -208,7 +226,7 @@ describe("POST /api/vocabulary/pronounce — already-linked asset (checked befor
         baseItem({ audio_url: "https://dict.example.com/run-broken.mp3", pronunciation_audio_asset_id: "asset-1" })
       )
     );
-    mockGetById.mockResolvedValue(currentAsset("asset-1", "azure/generated.mp3", "run"));
+    mockGetById.mockResolvedValue(hit(currentAsset("asset-1", "azure/generated.mp3", "run")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -218,8 +236,8 @@ describe("POST /api/vocabulary/pronounce — already-linked asset (checked befor
 
   it("falls through to a fresh cache lookup when the linked asset is missing", async () => {
     fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up", pronunciation_audio_asset_id: "asset-stale" })));
-    mockGetById.mockResolvedValue(null);
-    mockGetCached.mockResolvedValue(currentAsset("asset-2", "azure/fresh.mp3", "give up"));
+    mockGetById.mockResolvedValue(miss);
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-2", "azure/fresh.mp3", "give up")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -229,8 +247,8 @@ describe("POST /api/vocabulary/pronounce — already-linked asset (checked befor
 
   it("falls through to a fresh cache lookup when the linked asset's identity no longer matches (e.g. after a synthesis_version bump)", async () => {
     fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up", pronunciation_audio_asset_id: "asset-old" })));
-    mockGetById.mockResolvedValue(currentAsset("asset-old", "azure/old-version.mp3", "give up", { synthesisVersion: "v0" }));
-    mockGetCached.mockResolvedValue(currentAsset("asset-current", "azure/current.mp3", "give up"));
+    mockGetById.mockResolvedValue(hit(currentAsset("asset-old", "azure/old-version.mp3", "give up", { synthesisVersion: "v0" })));
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-current", "azure/current.mp3", "give up")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -239,12 +257,12 @@ describe("POST /api/vocabulary/pronounce — already-linked asset (checked befor
     expect(mockGetCached).toHaveBeenCalled();
   });
 
-  it("falls through when the linked asset's identity matches but its Storage object can't be resolved (missing/broken)", async () => {
+  it("falls through when the linked asset's identity matches but its Storage object is confirmed missing", async () => {
     const { resolvePlaybackUrl } = jest.requireMock("@/lib/vocabularyAudioCache");
     fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up", pronunciation_audio_asset_id: "asset-broken" })));
-    mockGetById.mockResolvedValue(currentAsset("asset-broken", "azure/broken.mp3", "give up"));
-    (resolvePlaybackUrl as jest.Mock).mockImplementationOnce(() => Promise.resolve(null));
-    mockGetCached.mockResolvedValue(currentAsset("asset-current", "azure/current.mp3", "give up"));
+    mockGetById.mockResolvedValue(hit(currentAsset("asset-broken", "azure/broken.mp3", "give up")));
+    (resolvePlaybackUrl as jest.Mock).mockImplementationOnce(() => Promise.resolve(playbackMissing()));
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-current", "azure/current.mp3", "give up")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -253,11 +271,67 @@ describe("POST /api/vocabulary/pronounce — already-linked asset (checked befor
   });
 });
 
+describe("POST /api/vocabulary/pronounce — DB/Storage errors are never treated as confirmed misses", () => {
+  it("aborts (never synthesizes) when the linked-asset lookup fails with a DB error", async () => {
+    fromMock.mockReturnValue(makeItemBuilder(baseItem({ pronunciation_audio_asset_id: "asset-1" })));
+    mockGetById.mockResolvedValue(lookupError("connection reset"));
+
+    const res = await POST(makeRequest({ itemId: "item-1" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("TTS_UPSTREAM_ERROR");
+    expect(mockGetCached).not.toHaveBeenCalled();
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("aborts (never synthesizes) when the shared-cache lookup fails with a DB error", async () => {
+    fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up" })));
+    mockGetCached.mockResolvedValue(lookupError("connection reset"));
+
+    const res = await POST(makeRequest({ itemId: "item-1" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("TTS_UPSTREAM_ERROR");
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("aborts (never synthesizes) when signing a linked asset's playback URL fails for a reason other than a missing object", async () => {
+    const { resolvePlaybackUrl } = jest.requireMock("@/lib/vocabularyAudioCache");
+    fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up", pronunciation_audio_asset_id: "asset-1" })));
+    mockGetById.mockResolvedValue(hit(currentAsset("asset-1", "azure/give-up.mp3", "give up")));
+    (resolvePlaybackUrl as jest.Mock).mockImplementationOnce(() => Promise.resolve(playbackError("Storage service unavailable")));
+
+    const res = await POST(makeRequest({ itemId: "item-1" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("TTS_UPSTREAM_ERROR");
+    expect(mockGetCached).not.toHaveBeenCalled();
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("aborts (never synthesizes) when signing a shared-cache asset's playback URL fails for a reason other than a missing object", async () => {
+    const { resolvePlaybackUrl } = jest.requireMock("@/lib/vocabularyAudioCache");
+    fromMock.mockReturnValue(makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up" })));
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-shared", "azure/give-up.mp3", "give up")));
+    (resolvePlaybackUrl as jest.Mock).mockImplementationOnce(() => Promise.resolve(playbackError("Storage service unavailable")));
+
+    const res = await POST(makeRequest({ itemId: "item-1" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("TTS_UPSTREAM_ERROR");
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/vocabulary/pronounce — shared cache", () => {
   it("returns a shared cache hit without calling Azure, and links the asset back to the item", async () => {
     const builder = makeItemBuilder(baseItem({ term: "give up", normalized_term: "give up" }));
     fromMock.mockReturnValue(builder);
-    mockGetCached.mockResolvedValue(currentAsset("asset-shared", "azure/shared.mp3", "give up"));
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-shared", "azure/shared.mp3", "give up")));
 
     const res = await POST(makeRequest({ itemId: "item-1" }));
     const body = await res.json();
@@ -275,7 +349,7 @@ describe("POST /api/vocabulary/pronounce — shared cache", () => {
   it("guards the link with an explicit canonical_form equality check when one is persisted", async () => {
     const builder = makeItemBuilder(baseItem({ term: "given up", normalized_term: "given up", canonical_form: "give up" }));
     fromMock.mockReturnValue(builder);
-    mockGetCached.mockResolvedValue(currentAsset("asset-shared", "azure/shared.mp3", "give up"));
+    mockGetCached.mockResolvedValue(hit(currentAsset("asset-shared", "azure/shared.mp3", "give up")));
 
     await POST(makeRequest({ itemId: "item-1" }));
 

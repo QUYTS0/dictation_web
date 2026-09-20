@@ -331,6 +331,27 @@ export async function PATCH(request: NextRequest) {
     // preserve-on-omit / explicit-value-wins behavior untouched.
     const termChanged = normalizedTerm !== existing.normalized_term;
 
+    // The backfill-only canonical_form fill-in below (see canonical_form's
+    // own comment) changes what /api/vocabulary/pronounce resolves as
+    // textToSpeak (`canonical_form ?? term`) exactly the same way a term
+    // edit does — going from null to a real value flips the effective
+    // pronunciation identity from `term` to `canonical_form`. Any audio
+    // already resolved/linked before that flip was necessarily generated
+    // for the OLD identity (`term`) and must be invalidated the same way
+    // termChanged invalidates it below; otherwise a stale
+    // pronunciation_audio_asset_id keeps pointing at an asset whose
+    // normalized_text no longer matches what this item will ask for next,
+    // so the very next tap misses the cache and pays for a real Azure
+    // synthesis call for audio that, from the user's perspective, was
+    // "already played" moments earlier. This was the confirmed root cause
+    // of that bug — see "Vocabulary Audio Audit and Azure TTS Plan.md".
+    const canonicalFormNewlySet =
+      !termChanged &&
+      canonicalForm !== undefined &&
+      existing.canonical_form == null &&
+      normalizeOptionalMetadata(canonicalForm) !== null;
+    const pronunciationIdentityChanged = termChanged || canonicalFormNewlySet;
+
     const payload = {
       term: nextTerm,
       normalized_term: normalizedTerm,
@@ -389,8 +410,8 @@ export async function PATCH(request: NextRequest) {
         : learningPattern !== undefined && existing.learning_pattern == null
         ? normalizeOptionalMetadata(learningPattern)
         : existing.learning_pattern,
-      audio_url: termChanged ? null : existing.audio_url,
-      pronunciation_audio_asset_id: termChanged ? null : existing.pronunciation_audio_asset_id,
+      audio_url: pronunciationIdentityChanged ? null : existing.audio_url,
+      pronunciation_audio_asset_id: pronunciationIdentityChanged ? null : existing.pronunciation_audio_asset_id,
     };
 
     const { data, error } = await supabase

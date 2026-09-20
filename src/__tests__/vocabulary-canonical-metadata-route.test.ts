@@ -324,4 +324,78 @@ describe("PATCH /api/vocabulary — legacy canonical-form backfill (heading/pron
 
     expect(res.status).toBe(400);
   });
+
+  // Regression for the confirmed root cause of "pronunciation audio gets
+  // generated again after it was already played": a legacy row can have
+  // pronunciation resolved/synthesized (and pronunciation_audio_asset_id
+  // linked) BEFORE this backfill ever runs — /api/vocabulary/pronounce
+  // speaks `canonical_form ?? term`, so while canonical_form is still null
+  // that synthesis is necessarily keyed on `term`. The moment this backfill
+  // sets canonical_form, the item's effective pronunciation text flips from
+  // `term` to `canonical_form` — exactly like a term edit does — so any
+  // audio already linked for the OLD (`term`) identity must be invalidated
+  // the same way termChanged invalidates it, or the next tap silently
+  // resolves a different, uncached identity and pays for a real Azure call
+  // for "the same word" the user just heard.
+  it("invalidates a previously-resolved audio_url/pronunciation_audio_asset_id when the backfill actually sets canonical_form (identity flips from term to canonical_form)", async () => {
+    setupExisting({
+      id: "item-1",
+      user_id: "user-1",
+      term: "given up",
+      normalized_term: "given up",
+      sentence_context: "He has given up.",
+      canonical_form: null,
+      learning_pattern: null,
+      // Resolved BEFORE the backfill — necessarily keyed on `term`
+      // ("given up"), since canonical_form was null at that time.
+      audio_url: null,
+      pronunciation_audio_asset_id: "asset-keyed-on-given-up",
+    });
+
+    const res = await PATCH(makePatchRequest({ id: "item-1", canonicalForm: "give up" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.item.canonical_form).toBe("give up");
+    expect(body.item.pronunciation_audio_asset_id).toBeNull();
+    expect(body.item.audio_url).toBeNull();
+  });
+
+  it("does NOT invalidate audio when the backfill request carries no canonicalForm to apply (nothing actually changes)", async () => {
+    setupExisting({
+      id: "item-1",
+      user_id: "user-1",
+      term: "run",
+      normalized_term: "run",
+      sentence_context: "I like to run.",
+      canonical_form: null,
+      audio_url: "https://example.com/run.mp3",
+      pronunciation_audio_asset_id: null,
+    });
+
+    // A plain note edit — no canonicalForm in the body at all.
+    const res = await PATCH(makePatchRequest({ id: "item-1", note: "practice more" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.item.audio_url).toBe("https://example.com/run.mp3");
+  });
+
+  it("does NOT invalidate audio when canonical_form was already persisted (no identity flip — repeat backfill attempt is a no-op)", async () => {
+    setupExisting({
+      id: "item-1",
+      user_id: "user-1",
+      term: "given up",
+      normalized_term: "given up",
+      sentence_context: "He has given up.",
+      canonical_form: "give up",
+      pronunciation_audio_asset_id: "asset-keyed-on-give-up",
+    });
+
+    const res = await PATCH(makePatchRequest({ id: "item-1", canonicalForm: "give up" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.item.pronunciation_audio_asset_id).toBe("asset-keyed-on-give-up");
+  });
 });

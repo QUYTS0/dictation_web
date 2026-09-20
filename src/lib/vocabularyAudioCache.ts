@@ -14,13 +14,15 @@ import { createServiceClient } from "@/lib/supabase/server";
 // private, and nothing in the client ever needs direct access to either —
 // every read/write happens here, server-side, and playback URLs are
 // resolved fresh (resolvePlaybackUrl, time-limited) per authenticated
-// pronounce request. All read functions here are best-effort in the sense
-// that a failure returns null/undefined rather than throwing — the
-// pronounce route decides what to do about a cache miss, this module just
-// reports one honestly. Writes (cacheAudioAsset) are NOT silently swallowed
-// to null on failure the way translationCache's writer is — the caller (the
-// pronounce route) must know whether the write actually succeeded before
-// telling the client the audio is safely cached.
+// pronounce request. The read functions below never throw, but they also
+// never collapse a failure into a plain "not found" — each returns a
+// tri-state result (AssetLookupResult / PlaybackUrlResult: hit / miss /
+// error) so the pronounce route can tell "confirmed nothing here, safe to
+// synthesize" apart from "the read itself failed, this proves nothing" and
+// refuse to spend a real Azure call on the latter. Writes (cacheAudioAsset)
+// are NOT silently swallowed to null on failure the way translationCache's
+// writer is — the caller (the pronounce route) must know whether the write
+// actually succeeded before telling the client the audio is safely cached.
 
 const TABLE = "vocabulary_audio_assets";
 const BUCKET = "vocabulary-audio";
@@ -43,6 +45,45 @@ export interface AudioAssetKey {
 export interface CachedAudioAsset extends AudioAssetKey {
   id: string;
   storagePath: string;
+}
+
+/**
+ * Tri-state result for every cache/storage read below — "hit" and "miss"
+ * are both confirmed, trustworthy outcomes (safe to act on: reuse the hit,
+ * or fall through to synthesis on a miss); "error" means the read itself
+ * failed (DB unreachable, auth/permission failure, Storage outage) and
+ * therefore proves nothing about whether a matching asset actually exists.
+ * Collapsing "error" into "miss" (a plain `T | null` return, this module's
+ * previous shape) is exactly the bug this type prevents: a transient
+ * failure would silently look identical to "no asset exists yet" and the
+ * caller would pay for a real Azure synthesis call that a valid asset might
+ * already make unnecessary. Callers must treat "error" as its own case —
+ * abort with a retryable error, never fall through to synthesis.
+ */
+export type AssetLookupResult =
+  | { status: "hit"; asset: CachedAudioAsset }
+  | { status: "miss" }
+  | { status: "error"; message: string };
+
+export type PlaybackUrlResult =
+  | { status: "ok"; url: string }
+  /** The object itself is confirmed gone from Storage (not merely
+   *  unreachable) — safe to treat as "this asset is unusable" and fall
+   *  through to re-synthesis, which self-heals the row via `upsert`. */
+  | { status: "missing" }
+  | { status: "error"; message: string };
+
+/** True when Supabase Storage's error for a signing attempt indicates the
+ *  object itself doesn't exist (safe to treat as a confirmed miss), as
+ *  opposed to some other failure — auth, network, service outage — that
+ *  proves nothing about the object's actual existence. Supabase's storage-js
+ *  reports a missing object as statusCode "404" with a message containing
+ *  "not found"; matched defensively on both since neither field's exact
+ *  shape is contractually documented. */
+function isConfirmedMissingObjectError(error: { message?: string; statusCode?: string } | null): boolean {
+  if (!error) return false;
+  if (error.statusCode === "404") return true;
+  return /not\s*found/i.test(error.message ?? "");
 }
 
 /** True when a previously-linked/cached asset's own identity still matches
@@ -91,23 +132,29 @@ export function storagePathFor(key: AudioAssetKey): string {
  *  and table are service-role-only (migration 019) — nothing about a saved
  *  vocabulary item's text is publicly queryable, and this signed URL is a
  *  temporary playback credential, not the asset's permanent identity (that
- *  remains its `id`/`storage_path`). Returns null on any failure
- *  (missing env vars, the object having gone missing from Storage, etc.) —
- *  callers treat that the same as "this asset is currently unusable" and
- *  fall through to a fresh lookup/synthesis rather than serving a broken
- *  reference. */
-export async function resolvePlaybackUrl(storagePath: string): Promise<string | null> {
+ *  remains its `id`/`storage_path`). Distinguishes a CONFIRMED-missing
+ *  object (safe to fall through to re-synthesis, which self-heals the row)
+ *  from any other signing failure (missing env vars, an unreachable Storage
+ *  service, a permission error) — the latter proves nothing about whether
+ *  the object actually exists, so callers must treat it as its own case and
+ *  never fall through to synthesis on it (see AssetLookupResult's doc
+ *  comment for why conflating the two is exactly the bug this guards
+ *  against). */
+export async function resolvePlaybackUrl(storagePath: string): Promise<PlaybackUrlResult> {
   try {
     const supabase = createServiceClient();
     const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS);
     if (error) {
+      if (isConfirmedMissingObjectError(error)) return { status: "missing" };
       console.warn("[vocabularyAudioCache] createSignedUrl failed:", error.message);
-      return null;
+      return { status: "error", message: error.message };
     }
-    return data?.signedUrl ?? null;
+    if (!data?.signedUrl) return { status: "error", message: "createSignedUrl returned no URL" };
+    return { status: "ok", url: data.signedUrl };
   } catch (err) {
-    console.warn("[vocabularyAudioCache] createSignedUrl failed:", err instanceof Error ? err.message : err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[vocabularyAudioCache] createSignedUrl failed:", message);
+    return { status: "error", message };
   }
 }
 
@@ -125,7 +172,7 @@ function rowToAsset(data: Record<string, unknown>): CachedAudioAsset {
   };
 }
 
-export async function getCachedAudioAsset(key: AudioAssetKey): Promise<CachedAudioAsset | null> {
+export async function getCachedAudioAsset(key: AudioAssetKey): Promise<AssetLookupResult> {
   try {
     const supabase = createServiceClient();
     const { data, error } = await supabase
@@ -140,30 +187,32 @@ export async function getCachedAudioAsset(key: AudioAssetKey): Promise<CachedAud
 
     if (error) {
       console.warn("[vocabularyAudioCache] read failed:", error.message);
-      return null;
+      return { status: "error", message: error.message };
     }
-    if (!data) return null;
-    return rowToAsset(data);
+    if (!data) return { status: "miss" };
+    return { status: "hit", asset: rowToAsset(data) };
   } catch (err) {
-    console.warn("[vocabularyAudioCache] read failed:", err instanceof Error ? err.message : err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[vocabularyAudioCache] read failed:", message);
+    return { status: "error", message };
   }
 }
 
-export async function getAudioAssetById(id: string): Promise<CachedAudioAsset | null> {
+export async function getAudioAssetById(id: string): Promise<AssetLookupResult> {
   try {
     const supabase = createServiceClient();
     const { data, error } = await supabase.from(TABLE).select(ASSET_COLUMNS).eq("id", id).maybeSingle();
 
     if (error) {
       console.warn("[vocabularyAudioCache] read-by-id failed:", error.message);
-      return null;
+      return { status: "error", message: error.message };
     }
-    if (!data) return null;
-    return rowToAsset(data);
+    if (!data) return { status: "miss" };
+    return { status: "hit", asset: rowToAsset(data) };
   } catch (err) {
-    console.warn("[vocabularyAudioCache] read-by-id failed:", err instanceof Error ? err.message : err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn("[vocabularyAudioCache] read-by-id failed:", message);
+    return { status: "error", message };
   }
 }
 
