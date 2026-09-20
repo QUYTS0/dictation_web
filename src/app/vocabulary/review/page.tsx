@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Headphones } from "lucide-react";
 import UserButton from "@/components/UserButton";
 import { useAuth } from "@/context/auth";
+import { invalidateVocabularyQueries } from "@/lib/queries/vocabulary";
 import type { ReviewGrade, VocabularyItem } from "@/lib/types";
 
 const GRADE_OPTIONS: { grade: ReviewGrade; label: string; className: string }[] = [
@@ -16,6 +18,7 @@ const GRADE_OPTIONS: { grade: ReviewGrade; label: string; className: string }[] 
 
 export default function VocabularyReviewPage() {
   const { user, loading, openAuthModal } = useAuth();
+  const queryClient = useQueryClient();
   const [queue, setQueue] = useState<VocabularyItem[]>([]);
   const [loadingQueue, setLoadingQueue] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +57,10 @@ export default function VocabularyReviewPage() {
       setQueue((prev) => prev.slice(1));
       setReviewedCount((n) => n + 1);
       setRevealed(false);
+      // This grade only needs to be reflected the next time the Vocabulary
+      // Bank page is visited, not live — invalidating here (rather than
+      // mid-session) is sufficient (see the plan doc, §5).
+      invalidateVocabularyQueries(queryClient, user?.id);
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : "Failed to save review.";
       setError(message);

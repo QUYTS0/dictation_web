@@ -1,4 +1,5 @@
 import type { DiffToken, VocabHighlightPhrase, VocabularyItem } from "@/lib/types";
+import { inferVocabularyItemKind } from "@/lib/utils/vocabulary";
 import type { ComparedToken, LessonItemType, LessonSavedItem } from "./types";
 
 /** Formats a segment's start time (seconds) as a YouTube-style "m:ss" timestamp. */
@@ -255,15 +256,11 @@ export function buildScriptRenderItems(text: string, phrases: VocabHighlightPhra
   return items;
 }
 
-export function normalizeComparableText(text: string) {
-  return text.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
+/** Delegates to the shared implementation (src/lib/utils/vocabulary.ts) so
+ *  the dictation page's saved-items list and the Vocabulary Bank page infer
+ *  word/phrase/sentence identically from one place. */
 export function inferSavedItemType(item: VocabularyItem): LessonItemType {
-  const normalizedTerm = normalizeComparableText(item.term);
-  const normalizedSentence = normalizeComparableText(item.sentence_context);
-  if (normalizedTerm && normalizedTerm === normalizedSentence) return "sentence";
-  return splitSentenceIntoWords(item.term).length <= 1 ? "word" : "phrase";
+  return inferVocabularyItemKind(item);
 }
 
 // ---- Vocabulary tab search/filter/detail helpers ----

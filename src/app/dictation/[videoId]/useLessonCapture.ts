@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { TranscriptSegment, VocabHighlightPhrase, VocabularyItem, VocabularyPreviewResponse } from "@/lib/types";
+import { invalidateVocabularyQueries } from "@/lib/queries/vocabulary";
 import { normalizeVocabularyTerm } from "@/lib/utils/vocabulary";
 import {
   SCRIPT_POPOVER_MAX_SIDE_MARGIN_PX,
@@ -49,6 +51,7 @@ export function useLessonCapture({
   phrasesBySegmentIndex,
   onAfterSave,
 }: UseLessonCaptureOptions) {
+  const queryClient = useQueryClient();
   const [learningItems, setLearningItems] = useState<LessonSavedItem[]>([]);
   const [learningError, setLearningError] = useState<string | null>(null);
   const [learningErrorRetry, setLearningErrorRetry] = useState<(() => void) | null>(null);
@@ -338,6 +341,10 @@ export function useLessonCapture({
               next[existingIndex] = item;
               return next;
             });
+            // The Vocabulary Bank page's cache (a different page/route) has
+            // no way to know this save happened — make sure it's stale so
+            // it catches up next time it's visited.
+            invalidateVocabularyQueries(queryClient, user?.id);
             clearLearningNoteInputs();
             onAfterSave();
             // Show a brief confirmation in the popover instead of vanishing
@@ -379,7 +386,7 @@ export function useLessonCapture({
           });
       });
     },
-    [clearLearningNoteInputs, clearScriptSelection, onAfterSave, requireAuth, videoId]
+    [clearLearningNoteInputs, clearScriptSelection, onAfterSave, queryClient, requireAuth, user?.id, videoId]
   );
   useEffect(() => {
     saveLessonCaptureAtSegmentRef.current = saveLessonCaptureAtSegment;
@@ -403,6 +410,7 @@ export function useLessonCapture({
               throw new Error(data.error || "Failed to delete saved item");
             }
             setLearningItems((prev) => prev.filter((item) => item.id !== itemId));
+            invalidateVocabularyQueries(queryClient, user?.id);
           })
           .catch((err: unknown) => {
             const message =
@@ -417,7 +425,7 @@ export function useLessonCapture({
           });
       });
     },
-    [requireAuth]
+    [queryClient, requireAuth, user?.id]
   );
   useEffect(() => {
     deleteLessonCaptureRef.current = finalizeDelete;
@@ -519,6 +527,7 @@ export function useLessonCapture({
                   : item
               )
             );
+            invalidateVocabularyQueries(queryClient, user?.id);
           })
           .catch((err: unknown) => {
             const message =
@@ -533,7 +542,7 @@ export function useLessonCapture({
           });
       });
     },
-    [requireAuth]
+    [queryClient, requireAuth, user?.id]
   );
   useEffect(() => {
     updateLessonCaptureRef.current = updateLessonCapture;

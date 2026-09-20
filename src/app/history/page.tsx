@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   Calendar,
   CheckCircle2,
@@ -13,24 +14,14 @@ import {
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
-import type { ErrorType, ResumableSession } from "@/lib/types";
+import { useScrollRestoration } from "@/hooks/useScrollRestoration";
+import { usePersistedViewState } from "@/hooks/usePersistedViewState";
+import { useDashboardSummaryQuery } from "@/lib/queries/dashboard";
+import { useHistoryMistakesQuery } from "@/lib/queries/historyMistakes";
+import type { ResumableSession } from "@/lib/types";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
-
-interface DashboardData {
-  completedVideos: number;
-  avgAccuracy: number;
-  totalPracticeMinutes: number;
-  vocabularyCount: number;
-  recentVocabulary: Array<{
-    id: string;
-    term: string;
-    sentence_context: string;
-    created_at: string;
-  }>;
-  resumableSessions: ResumableSession[];
-}
 
 function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
   return (
@@ -44,69 +35,44 @@ function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
   );
 }
 
-interface MistakeItem {
-  id: string;
-  sessionId: string;
-  videoId: string;
-  videoTitle: string | null;
-  segmentIndex: number;
-  expectedText: string;
-  userText: string;
-  errorType: ErrorType | null;
-  createdAt: string;
-}
-
-interface MistakesResponse {
-  items: MistakeItem[];
-  hasMore: boolean;
-  total: number;
-}
-
-const MISTAKES_PAGE_SIZE = 10;
-
-export default function HistoryPage() {
+/** usePersistedViewState reads useSearchParams(), which opts this
+ *  otherwise-static route into needing a Suspense boundary at build time —
+ *  see the default export below. */
+function HistoryPageContent() {
   const { user, loading, openAuthModal } = useAuth();
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const userId = user?.id;
+  const pathname = usePathname();
 
-  const [mistakes, setMistakes] = useState<MistakeItem[]>([]);
-  const [mistakesLoading, setMistakesLoading] = useState(false);
-  const [mistakesError, setMistakesError] = useState<string | null>(null);
-  const [mistakesHasMore, setMistakesHasMore] = useState(false);
-  const [mistakesTotal, setMistakesTotal] = useState(0);
-  const [videoFilter, setVideoFilter] = useState("");
-  const [errorTypeFilter, setErrorTypeFilter] = useState("");
-  const [dateFromFilter, setDateFromFilter] = useState("");
-  const [dateToFilter, setDateToFilter] = useState("");
+  // Shared with the Dashboard page — same query key, same cache entry, so
+  // this no longer issues an independent duplicate request for data
+  // Dashboard likely already fetched.
+  const summaryQuery = useDashboardSummaryQuery(userId);
+  const dashboardData = summaryQuery.data;
+  const dashboardError = summaryQuery.isError ? "Failed to load history data. Please refresh and try again." : null;
 
-  useEffect(() => {
-    if (!user) return;
+  const [filters, updateFilters, viewStateHydrated] = usePersistedViewState("history-viewstate", userId, {
+    videoId: "",
+    errorType: "",
+    dateFrom: "",
+    dateTo: "",
+  });
 
-    let isCancelled = false;
-    fetch("/api/dashboard/summary")
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Failed to fetch dashboard summary");
-        return res.json();
-      })
-      .then((data: DashboardData) => {
-        if (isCancelled) return;
-        setDashboardData(data);
-        setDashboardError(null);
-      })
-      .catch(() => {
-        if (isCancelled) return;
-        setDashboardError("Failed to load history data. Please refresh and try again.");
-      });
+  const mistakesQuery = useHistoryMistakesQuery(userId, filters);
+  const mistakes = useMemo(() => mistakesQuery.data?.pages.flatMap((page) => page.items) ?? [], [mistakesQuery.data]);
+  const mistakesTotal = mistakesQuery.data?.pages[0]?.total ?? 0;
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [user]);
+  // `filters` feeds directly into the query key, so a sessionStorage-
+  // restored filter set (arriving one render after the default filters'
+  // initial render) swaps the mistakes query to a different cache entry.
+  // `keepPreviousData` means `isLoading` alone can stay false while it's
+  // still showing the *previous* (default-filter) page as a placeholder —
+  // `isPlaceholderData` is what actually distinguishes "showing the final,
+  // correctly-filtered list" from that transient state, so scroll
+  // restoration must wait for it too, on top of view-state hydration.
+  const viewStateApplied = viewStateHydrated && !mistakesQuery.isPlaceholderData;
+  useScrollRestoration(pathname, userId, viewStateApplied && !summaryQuery.isLoading && !mistakesQuery.isLoading);
 
-  const historyItems = useMemo(
-    () => dashboardData?.resumableSessions ?? [],
-    [dashboardData]
-  );
+  const historyItems = useMemo(() => dashboardData?.resumableSessions ?? [], [dashboardData]);
 
   const videoOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -120,39 +86,6 @@ export default function HistoryPage() {
     }
     return [...map.entries()];
   }, [historyItems, mistakes]);
-
-  const loadMistakes = useCallback(
-    async (offset: number, append: boolean) => {
-      setMistakesLoading(true);
-      setMistakesError(null);
-      try {
-        const searchParams = new URLSearchParams();
-        if (videoFilter) searchParams.set("videoId", videoFilter);
-        if (errorTypeFilter) searchParams.set("errorType", errorTypeFilter);
-        if (dateFromFilter) searchParams.set("dateFrom", dateFromFilter);
-        if (dateToFilter) searchParams.set("dateTo", dateToFilter);
-        searchParams.set("limit", String(MISTAKES_PAGE_SIZE));
-        searchParams.set("offset", String(offset));
-
-        const res = await fetch(`/api/history/mistakes?${searchParams.toString()}`);
-        if (!res.ok) throw new Error("Failed to fetch mistakes");
-        const data: MistakesResponse = await res.json();
-        setMistakes((prev) => (append ? [...prev, ...data.items] : data.items));
-        setMistakesHasMore(data.hasMore);
-        setMistakesTotal(data.total);
-      } catch {
-        setMistakesError("Failed to load mistakes. Please try again.");
-      } finally {
-        setMistakesLoading(false);
-      }
-    },
-    [videoFilter, errorTypeFilter, dateFromFilter, dateToFilter]
-  );
-
-  useEffect(() => {
-    if (!user) return;
-    loadMistakes(0, false);
-  }, [user, loadMistakes]);
 
   return (
     <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
@@ -176,12 +109,26 @@ export default function HistoryPage() {
                 Sign in
               </button>
             </section>
-          ) : dashboardError ? (
+          ) : summaryQuery.isLoading ? (
+            <p className="text-sm text-slate-500">Loading history…</p>
+          ) : dashboardError && !dashboardData ? (
             <p className="text-sm text-red-600">{dashboardError}</p>
           ) : !dashboardData ? (
             <p className="text-sm text-slate-500">Loading history…</p>
           ) : (
             <>
+              {dashboardError && (
+                <p className="flex items-center gap-2 text-xs text-amber-600">
+                  Couldn&apos;t refresh — showing the last loaded data.
+                  <button
+                    type="button"
+                    onClick={() => summaryQuery.refetch()}
+                    className="font-semibold underline hover:text-amber-700"
+                  >
+                    Retry
+                  </button>
+                </p>
+              )}
               <section className="flex flex-col items-start justify-between gap-6 border-b border-white/40 pb-6 md:flex-row md:items-end">
                 <div>
                   <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">Practice History</h1>
@@ -330,8 +277,8 @@ export default function HistoryPage() {
 
                 <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/60 bg-white/40 p-3 shadow-sm backdrop-blur-md">
                   <select
-                    value={videoFilter}
-                    onChange={(e) => setVideoFilter(e.target.value)}
+                    value={filters.videoId}
+                    onChange={(e) => updateFilters({ videoId: e.target.value })}
                     className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
                     aria-label="Filter by video"
                   >
@@ -343,8 +290,8 @@ export default function HistoryPage() {
                     ))}
                   </select>
                   <select
-                    value={errorTypeFilter}
-                    onChange={(e) => setErrorTypeFilter(e.target.value)}
+                    value={filters.errorType}
+                    onChange={(e) => updateFilters({ errorType: e.target.value })}
                     className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
                     aria-label="Filter by error type"
                   >
@@ -359,8 +306,8 @@ export default function HistoryPage() {
                     From
                     <input
                       type="date"
-                      value={dateFromFilter}
-                      onChange={(e) => setDateFromFilter(e.target.value)}
+                      value={filters.dateFrom}
+                      onChange={(e) => updateFilters({ dateFrom: e.target.value })}
                       className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
                       aria-label="From date"
                     />
@@ -369,8 +316,8 @@ export default function HistoryPage() {
                     To
                     <input
                       type="date"
-                      value={dateToFilter}
-                      onChange={(e) => setDateToFilter(e.target.value)}
+                      value={filters.dateTo}
+                      onChange={(e) => updateFilters({ dateTo: e.target.value })}
                       className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
                       aria-label="To date"
                     />
@@ -380,9 +327,18 @@ export default function HistoryPage() {
                   )}
                 </div>
 
-                {mistakesError ? (
-                  <p className="text-sm text-red-600">{mistakesError}</p>
-                ) : mistakes.length === 0 && !mistakesLoading ? (
+                {mistakesQuery.isError ? (
+                  <p className="text-sm text-red-600">
+                    Failed to load mistakes.{" "}
+                    <button
+                      type="button"
+                      onClick={() => mistakesQuery.refetch()}
+                      className="font-semibold underline hover:text-red-700"
+                    >
+                      Retry
+                    </button>
+                  </p>
+                ) : mistakes.length === 0 && !mistakesQuery.isLoading ? (
                   <div className="rounded-2xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-sm backdrop-blur-md">
                     No mistakes match these filters.
                   </div>
@@ -419,13 +375,13 @@ export default function HistoryPage() {
                   </div>
                 )}
 
-                {mistakesHasMore && (
+                {mistakesQuery.hasNextPage && (
                   <button
-                    onClick={() => loadMistakes(mistakes.length, true)}
-                    disabled={mistakesLoading}
+                    onClick={() => mistakesQuery.fetchNextPage()}
+                    disabled={mistakesQuery.isFetchingNextPage}
                     className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
                   >
-                    {mistakesLoading ? "Loading…" : "Load more"}
+                    {mistakesQuery.isFetchingNextPage ? "Loading…" : "Load more"}
                   </button>
                 )}
               </section>
@@ -434,5 +390,26 @@ export default function HistoryPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+function HistoryPageFallback() {
+  return (
+    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+      <div className="relative z-10 flex flex-1 flex-col">
+        <AppHeader active="history" />
+        <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-8">
+          <p className="text-sm text-slate-500">Loading…</p>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default function HistoryPage() {
+  return (
+    <Suspense fallback={<HistoryPageFallback />}>
+      <HistoryPageContent />
+    </Suspense>
   );
 }

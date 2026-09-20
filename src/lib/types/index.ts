@@ -446,6 +446,26 @@ export interface VocabularyItem {
   last_reviewed_at: string | null;
 }
 
+/** Server-computed, exact-count aggregate stats for the Vocabulary Bank
+ *  page (GET /api/vocabulary/stats) — deliberately separate from the
+ *  GET /api/vocabulary item list so these numbers stay correct regardless
+ *  of any row cap the list fetch might be subject to, and so the two can
+ *  load/error independently. `new`/`learning`/`due` are computed via
+ *  getVocabularyLearningStatus's SQL equivalent (src/lib/utils/vocabulary.ts)
+ *  and are mutually exclusive and exhaustive: new + learning + due === total. */
+export interface VocabularyStatsResponse {
+  total: number;
+  new: number;
+  learning: number;
+  due: number;
+  /** Count of items currently admissible into the review queue
+   *  (next_review_at <= now(), regardless of last_reviewed_at) — the exact
+   *  same predicate GET /api/vocabulary/review uses to admit items, kept as
+   *  its own field rather than derived client-side from new+due so the two
+   *  can never drift apart (see isVocabularyItemReviewable). */
+  reviewable: number;
+}
+
 export interface VocabularyRequest {
   videoId: string;
   segmentIndex: number;

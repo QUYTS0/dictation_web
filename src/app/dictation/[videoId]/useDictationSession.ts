@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { YouTubePlayerHandle } from "@/components/YouTubePlayer";
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
+import { dashboardKeys } from "@/lib/queries/dashboard";
+import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
 import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState } from "@/lib/types";
 import { RESUME_SEEK_DELAY_MS, CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
 import {
@@ -68,6 +70,7 @@ interface UseDictationSessionOptions {
 export function useDictationSession({ videoId, user, autoEnterPaused = false }: UseDictationSessionOptions) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
+  const queryClient = useQueryClient();
 
   const [currentSegIdx, setCurrentSegIdx] = useState(0);
   const [uxState, setUxState] = useState<UXState>("loading_transcript");
@@ -341,12 +344,27 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       )
         .then((r) => {
           if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
+          if (status === "completed" && user) {
+            // Dashboard/History cache the persisted data this write just
+            // changed (completedVideos/avgAccuracy/resumableSessions, error
+            // patterns, and mistakes are all derived from learning_sessions
+            // + the attempt_logs rows this session accumulated) — mark them
+            // stale so returning to either page picks up this session
+            // instead of showing pre-completion numbers for up to
+            // staleTime. Intermediate "active" autosaves deliberately don't
+            // do this: they're too frequent to invalidate on every one
+            // without hammering these endpoints for data the user isn't
+            // looking at yet.
+            void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+            void queryClient.invalidateQueries({ queryKey: dashboardKeys.errorPatterns(user.id) });
+            void queryClient.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(user.id) });
+          }
         })
         .catch(() => {
           if (state.sessionId) sessionStore.setSessionId(null);
         });
     },
-    [playerStore.currentTimeSec, sessionStore, transcriptId, user, videoId]
+    [playerStore.currentTimeSec, queryClient, sessionStore, transcriptId, user, videoId]
   );
 
   // ---- Answer submission ----
@@ -874,9 +892,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         setCleanSolveCount(0);
         setIsLastResultClean(false);
         sessionStore.reset();
+        // Restart marks the session "abandoned" server-side (see
+        // /api/session/restart) — that changes resumableSessions on
+        // Dashboard/History. It never touches attempt_logs, so
+        // error-patterns/history-mistakes are unaffected and deliberately
+        // left alone.
+        if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
       })
       .catch(() => {});
-  }, [resumeState?.sessionId, sessionStore, user, videoId]);
+  }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId]);
 
   return {
     currentSegIdx,
