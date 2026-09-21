@@ -4,6 +4,7 @@ import Link from "next/link";
 import clsx from "clsx";
 import { BookOpen, Headphones, History, LayoutDashboard, MapPin } from "lucide-react";
 import UserButton from "@/components/UserButton";
+import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 
 const NAV_LINKS = [
   { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -27,8 +28,8 @@ interface AppHeaderProps {
  */
 export default function AppHeader({ active }: AppHeaderProps) {
   return (
-    <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 px-6 py-4 backdrop-blur-md">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between">
+    <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 py-4 backdrop-blur-md">
+      <div className={clsx("mx-auto flex w-full items-center justify-between", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
         <Link href="/" className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
             <Headphones size={18} />

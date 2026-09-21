@@ -6,9 +6,29 @@ repository (migrations `001`–`019`, and the live route/hook/component code), n
 any prior planning document. Where an earlier finding from `.claude/vocabulary-stats-and-navigation-caching-plan.md`
 overlaps, it was re-verified, not trusted as-is.
 
+**Revision 5.** Revision 1 was the original audit + plan; Revision 2 a correctness/concurrency
+review; Revision 3 added **Script Versions**; Revision 4 resolved eight findings going deeper into
+mechanisms Revision 3 had touched but not fully fixed (rows R21–R28 of the
+[Review-resolution table](#review-resolution-table)). **This revision (5)** fixes a second layer of
+defect the same review process surfaced under closer inspection: `learning_sessions` was identified
+as needing RLS tightening but never actually received it (§9.9, now with a full per-function
+permission matrix); the cutover "gate" checked a flag but never fenced concurrent writes, so an old
+writer could still create a `provenance='current'` row after the cutoff (§8.14, now a genuine
+Postgres row-lock fence, not a timeout); a claim that `SERIALIZABLE` isolation alone protects
+against a concurrent lower-isolation write was factually wrong and is removed, replaced with an
+honest statement that indirect vocabulary/bookmark reference-checking has no available
+concurrency-safety mechanism (§6.9, deletion now ships disabled by default); a real publish-vs-
+delete race (promoting a revision a concurrent deletion just removed) is now closed by a row-lock-
+and-reverify step (§6.9/§8.3); §9.5 and §9.7 gave contradictory rules for Listening writes,
+resolved by splitting round-based staleness rejection from Listening's own round-independent rule
+(§9.5/§9.6); and the navigation-boundary flush invalidated caches before the flush it was
+reflecting had actually committed, now corrected to a post-success-only guarantee owned by a
+module-level coordinator, not a component effect (§11.6). §2/§3 remain unchanged from Revision 1.
+
 ## Table of contents
 
 1. [Executive summary](#1-executive-summary)
+   - [Review-resolution table](#review-resolution-table)
 2. [Current-state audit](#2-current-state-audit)
 3. [Confirmed defects and ambiguous behavior](#3-confirmed-defects-and-ambiguous-behavior)
 4. [Agreed product rules and assumptions](#4-agreed-product-rules-and-assumptions)
@@ -55,6 +75,67 @@ product rules in §4.
 No new paid provider, no long-term recording storage, and no new client-state library are
 introduced. The existing TanStack Query layer (already fully wired for Vocabulary/Bookmarks/
 Dashboard/History as of this session) is extended with the same patterns already proven there.
+
+Two review rounds hardened this further. The correctness/concurrency review found that the round
+still needed a genuine per-video "added but not started" concept the original derived-only Library
+design couldn't represent (fixed with a new, minimal `user_videos` membership table — never a
+competing source of truth for scores), that the completion check as originally specified had a
+real missed-completion race under concurrent submissions (fixed with row-level locking), that the
+idempotent-write contract as written was actually broken (`ON CONFLICT DO NOTHING RETURNING *`
+returns no row on conflict), and that Listening's coverage denominator overcounted when a
+transcript has gaps between segments. The follow-up round added **Script Versions** — a
+transcript-revision management feature (listing, honest storage-size estimates, duplicate
+prevention via content fingerprinting, and reference-aware authorized deletion) — and caught a
+subtler flaw in the interval-tracking design: gap-tolerant "compaction" applied to the same data
+used for coverage math would silently lose real coverage decisions on a later flush.
+
+A fourth review pass went deeper into mechanisms the first two rounds had already touched and
+found genuine, concrete defects rather than remaining ambiguity: an idempotent-retry SQL pattern
+that referenced a column (`attempt_logs.updated_at`) the actual schema does not have; a
+transcript-revision "current" promotion pseudocode that violated its own unique-current index by
+promoting before retiring; a Library query that could not produce a result for Listening-only
+videos; a Postgres RLS gap that would let an authenticated client set `is_admin` on their own row,
+or write fabricated Shadowing scores directly via PostgREST, bypassing every RPC-level check this
+plan adds; a revision-deletion safety check that silently depended on legacy `attempt_logs` rows
+having a `transcript_id` they were never backfilled with; and a "same deploy" cutover description
+with no actual coordination mechanism behind it. All of this — plus the cache-invalidation gaps
+and compatibility-contract corrections the same review raised — is resolved below; see the
+review-resolution table immediately following for the full map, and the new rows R21–R28
+specifically for this pass.
+
+<a id="review-resolution-table"></a>
+### Review-resolution table
+
+| # | Finding | Decision | Updated sections | Verification |
+|---|---|---|---|---|
+| R1 | Practice-time formula measured session span, not active time | New wall-clock `activity_intervals` union per study session (cross-mode), distinct from `elapsed_span_sec`; account-level total unions across sessions to avoid cross-session double-count | §5.3, §6.3b, §8.3, §9, §13 (#25–28) | Scenarios #25 (25-min gap not counted), #27 (overlapping tabs not double-counted) |
+| R2 | No entity represents "added, not started" or a Listening-only session with no round | New `user_videos` membership table (never authoritative for scores); `study_sessions.round_id` made nullable | §4, §5.1, §5.2, §5.6, §8.2, §9.2, §10.1–10.2 | Scenarios #21, #22 |
+| R3 | Shadowing's Azure aggregate fell back to Word Match | Three fully independent aggregates (`azurePronunciationSummary`, `wordMatchSummary`, `shadowingPracticeCoverage`); `bestEvaluatedAttempt` renamed `latestSuccessfulAzureAttempt` (chronological, not highest-score) | §6.7, §9.4, §13 (#31) | Scenario #31 |
+| R4 | Legacy `completed` rows would be silently treated as verified | `provenance`/`segment_identity_provenance` columns, schema-level not prose-level; legacy completions shown as a separate, non-blended Dashboard stat | §5.7 (base addendum item 4, now folded into §5), §6.8, §8.6, §10.3, §13 (#32–33) | Scenarios #32, #33 |
+| R5 | Completion-check "transaction" didn't actually prevent a missed-completion race | `SELECT ... FOR UPDATE` on the round row before insert, inside one RPC function | §6.5, §8.7, §13 (#23) | Scenario #23 (two concurrent final-sentence submissions) |
+| R6 | `ON CONFLICT DO NOTHING RETURNING *` returns no row on conflict | Superseded by R26 below: an explicit lock-then-lookup-then-insert flow, not an `ON CONFLICT ... DO UPDATE` self-touch (which R26 found still references a column `attempt_logs` doesn't have) | §6.5, §8.7, §9.3, §13 (#24, #29) | Scenarios #24, #29 |
+| R7 | Transcript-revision handling only fixed the writer, not the readers | Explicit two-path reads (new-round vs. pinned-resume), `?transcriptId=` param on the transcript-fetch route, atomic publish function, advisory-locked version/fingerprint allocation | §6.9, §8.8, §9.6, §13 (#34–35) | Scenarios #34, #35 |
+| R8 | Listening coverage denominator overcounted with segment gaps | Denominator = union of valid transcript-segment intervals (not `max(end)-min(start)`); credited coverage = observed ∩ that union, exact merge only | §6.3, §13 (#36) | Scenario #36 |
+| R9 | No server-owned evaluation-failure/staleness/relationship-validation story | `azure_eval_request_seq` anti-staleness token, lazy stuck-`pending` expiry, explicit relationship-validation checklist, reference text resolved server-side | §9.4, §9.7, §13 (#38) | Scenario #38 |
+| R10 | Cache matrix only fired on round completion | Every practice mutation invalidates round/library/dashboard at session-boundary events (not every 15s flush, to avoid excessive refetching) | §11.2 | Scenario #37 |
+| R11 | Metric-labeling/scope conflicts (Dictation "accuracy," §6.8 vs. Phase 5 dedup contradiction, in-progress/completed treated as exclusive) | "Sentence accuracy" (binary, per-sentence) throughout; one unambiguous population/scope per stat; in-progress and completed are no longer mutually exclusive | §6.6, §6.8 | Scenario #39 (video with both a completed and an active round) |
+| R12 | Migration/phase order had a real dependency bug (a completion function referenced `shadowing_attempts` before its migration) | All new schema created in one early phase before any cross-table function is written | §12 | Phase dependency graph re-checked against every function's table references |
+| R13 | Acceptance criteria needed more scenarios | 24 scenarios from the first review round (#21–44), Script Versions scenarios (#45–48), the third-pass scenarios (#49–59, R21–R28), and this pass's scenarios (#57–65, replacing/extending #57–59 and adding #60–65 — issue groups 1–5 below) | §13 | — |
+| R14 | Exact-interval preservation: gap-compacted storage plus one exact counter can't tell what's newly covered on a later flush | Dropped the compaction/exact-counter split; all stored interval sets merge on true overlap only, never on a tolerance window | §6.3, §6.3b | Re-derived worked example in §6.3 |
+| R15 | Additive counters (`listening_observed_sec` etc.) had no retry-safe batch identity | New `activity_flush_log` dedup table (`(study_session_id, flush_batch_id)` primary key) gates every additive update | §6.3b, §8.3 | Scenario #26 |
+| R16 | Per-session interval union doesn't dedupe overlapping wall-clock time across *different* sessions | Account-level "practice time" unions `activity_intervals` across all of a user's sessions at read time | §6.3b, §6.8 | Scenario #27 |
+| R17 | Provider-issued score columns were protected on UPDATE but not INSERT | Superseded by R28 below: no owner-write policy of any kind remains on `shadowing_attempts` — a fresh-row-shape INSERT check alone still bypassed the round lock and validation, so R28 removes direct owner INSERT entirely rather than narrowing it | §8.7, §9.9 | RLS policy text itself |
+| R18 | Legacy-provenance tagging and disabling old completion writes were scheduled too late relative to new readers depending on them | Both ship in the same deploy as the Dictation RPC cutover, not a later phase — made concrete by R23's write-gate runbook below, which is the actual mechanism, not just a scheduling statement | §12 (Phase 3) | Phase ordering |
+| R19 | "Historical segments never become unavailable" was no longer true once deletion exists | Replaced with a cross-reference to the retention/deletion rules; any live reference still protects a revision | §6.9, §10.5 | §6.9's retention table |
+| R20 | Script Versions feature: listing, size estimates, duplicate prevention, retention, authorized deletion | Full design in §6.9, §8.8, §9.6, §10.5 | §5.7, §6.9, §8.8, §9.6, §10.5, §12 (Phase 9), §13 (#45–48) | Scenarios #45–48 |
+| R21 | Phase 0 fixed the transcript-revision *writer* but the *reader* (`fetchTranscript`, query key, new-round selection) stayed on Phase 9 — an existing round would render the wrong revision's text the moment Phase 0 alone shipped | Reader path (pinned-revision fetch, `?transcriptId=`, query-key split, server-side `is_current` resolution at round creation) moves into Phase 0 itself; duplicate-active-round reconciliation moves from the old Phase 7 into Phase 1, before Phase 2's functions assume round uniqueness | §12 (Phase 0, Phase 1), §9.1, §9.9 | Scenario #1 |
+| R22 | §6.9's promotion pseudocode set `is_current=true` on the new/matched row *before* retiring the old current row — violates the `transcripts_one_current_idx` partial unique index, disagreeing with §8.3's own (correct) SQL function | Pseudocode corrected to retire-then-promote, matching §8.3 exactly | §6.9 | Re-read against §8.3's SQL, statement order now identical |
+| R23 | "Same deploy" cutover language had no actual coordination mechanism for migrations vs. running instances vs. old tabs | A concrete `app_write_gate` singleton-row mechanism + bounded-timestamp backfill + explicit runbook with a defined recovery path — further corrected this pass into a genuine row-lock fence (issue group 2 below) | §8.14, §9.9, §12 (Phase 3), §14.2 | Scenarios #60, #61 |
+| R24 | Library query selected Listening progress through `latest_round.transcript_id` — undefined when no round exists | Listening selection made round-independent: keyed by the video's own `is_current` transcript (or the null-transcript row), never through a round | §5.5, §6.3, §8.8, §10.2 | Scenario #49 |
+| R25 | Cache matrix still gated several kinds of ordinary partial progress behind completion or a milestone, and relied on `pagehide` for in-app navigation | Direct cache patches for cheap deltas, throttled/boundary-triggered invalidation for aggregates, an explicit navigation-boundary flush hook (route-change, not just `pagehide`) — further corrected this pass for post-success ordering (issue group 5 below) | §11.2, §11.6 | Scenarios #38, #52, #65 |
+| R26 | Idempotent-retry SQL used `ON CONFLICT ... DO UPDATE SET updated_at = now()`, but `attempt_logs` (confirmed against `001_initial.sql:105-114`) has no `updated_at` column; `roundCompleted` conflated "completed by this request" with "currently completed" | Explicit lock-then-lookup-then-insert flow (no self-touch UPDATE); response splits into `roundCompletedByThisRequest` (fixed at response time) and `roundStatus` (current, may legitimately differ on a later retry) | §6.5, §8.6, §8.12, §9.3, §9.8 | Scenario #24 |
+| R27 | Listening/activity flush batching was described as a dedup-log-gated update but not confirmed atomic (dedup insert + interval merge + counter updates as one transaction), and had no defense against a reused batch id with different content | Single `fn_flush_study_activity` function per §6.3b, one transaction, `payload_fingerprint` column added to `activity_flush_log` for mismatch rejection | §6.3b, §8.10, §9.6 | Scenario #53 |
+| R28 | Authorization stopped at row ownership: this app's existing client-side Supabase client can call PostgREST directly, and the existing `users_self_update`/`sessions_owner`/`attempts_owner` policies (`for all`/no `with check`) already permit a client to bypass server-side validation entirely — the new tables would inherit the same gap, including a self-`is_admin`-grant path; the Azure-recovery `persisted:false` path had no bound on what a "retry the persistence step" call could accept; revision-deletion's reference check silently depended on `attempt_logs.transcript_id`, which legacy rows are never backfilled with | New §9.9 documents SECURITY DEFINER execution identity + explicit `auth.uid()` checks in every function body; owner-`for all` RLS on `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` narrowed to owner-SELECT-only, writes RPC-only; `users` gets a `BEFORE UPDATE` trigger blocking client-driven `is_admin` changes; Azure recovery uses a server-signed, expiring token, never client-supplied scores; deletion's retention check now reads `learning_sessions.transcript_id` directly for every round status, not only via attempts | §8.6, §8.7, §8.8, §8.10, §8.11, §9.4, §9.9, §6.9 | Scenarios #54, #55, #56, #47 (corrected — a prior version of this row cited #9–#12, which are unrelated scenarios in this document's own numbering; those numbers belonged to the review's own request list, not this table) |
 
 ---
 
@@ -315,11 +396,20 @@ justified where they first apply):
 |---|---|---|
 | `INACTIVITY_TIMEOUT_MINUTES` | 30 | Study-session boundary (§5.3) — long enough that a bathroom break doesn't fragment one sitting, short enough that leaving a tab open overnight doesn't merge two real sessions |
 | `SHADOWING_MIN_DURATION_SEC` | 0.5 | Floor to filter accidental instant-cancel taps, not a correctness proof (§6.2) |
-| `LISTENING_GAP_TOLERANCE_SEC` | 1.5 | Merge tolerance for interval bookkeeping — covers 200ms-poll jitter + flush latency without silently bridging a real seek (§6.3) |
-| `LISTENING_SYNC_FLUSH_INTERVAL_SEC` | 15 (of active `PLAYING` time) | Bounds request volume (~4/min while playing) and bounds data loss on crash to ≤15s (§6.3) |
-| `LISTENED_THROUGH_THRESHOLD` | 90% coverage ratio | 100% is unrealistic given polling granularity and normal pause/seek behavior; 90% tolerates that without accepting a mostly-skipped video (§6.3) |
-| `MAX_SHADOWING_ATTEMPT_HISTORY` | 5 per sentence | Already the existing client constant (`MAX_ATTEMPTS_PER_SENTENCE`); reused as-is |
+| `LISTENING_GAP_TOLERANCE_SEC` | 1.5 | **Client-side seek/discontinuity detection only** — decides whether two consecutive playback ticks form one continuous candidate interval before submission. Never used server-side to merge stored data or inflate credited coverage (§6.3, correcting a flaw the review caught in the first draft) |
+| `SEEK_DETECTION_TOLERANCE_SEC` | 2.0 | Rate-aware discontinuity check: `abs(actual_pos - (last_pos + wall_clock_elapsed * playback_rate)) > 2.0` ⇒ treat as a seek, not continuous playback (§6.3) |
+| `MAX_TICK_GAP_SEC` | 5.0 | A wall-clock gap between consecutive playback ticks larger than this is never bridged, independent of the position delta — covers browser suspension/throttling even when the resulting position jump looks small (§6.3) |
+| `LISTENING_SYNC_FLUSH_INTERVAL_SEC` | 15 (of active `PLAYING` time) | Normal-case flush cadence, bounding request volume (~4/min while playing) — not a data-loss guarantee (§6.3) |
+| `MAX_PENDING_BUFFER_SEC` | 300 | The actual worst-case data-loss bound under sustained network failure or tab death, once buffered data exceeds this the oldest is dropped — corrects an earlier, false "≤15s" claim (§6.3) |
+| `LISTENED_THROUGH_THRESHOLD` | 90% coverage ratio | An explicit product tolerance for legitimate intro/outro skips, re-listens, and ordinary pause/seek behavior — **not** a measurement-precision artifact (the review correctly rejected "200ms polling jitter" as the justification) (§6.3) |
+| `MAX_SHADOWING_ATTEMPT_HISTORY` | 5 per sentence | **Client-side display/cache cap only** — the server table (`shadowing_attempts`) retains full history indefinitely; this never limits what coverage/History/reports can see |
 | `ATTEMPT_IDEMPOTENCY_KEY` | client-generated `clientAttemptId` (UUID v4), one per logical submit | Minimal mechanism to make retried network requests safe (§9) |
+| `FLUSH_BATCH_ID` | client-generated UUID v4, one per buffered activity/listening flush | Retry-safe batch identity for additive counters, via `activity_flush_log` (§6.3b, §8.3) |
+| `PULSE_ENGAGEMENT_WINDOW_SEC` | 45 | A generic activity pulse (Dictation keystroke, hint reveal, etc.) is only emitted while genuine interaction has occurred within this window — closes the "attention" gap honestly rather than pulsing on mere page-open (§6.3b) |
+| `EVAL_PENDING_TIMEOUT_SEC` | 120 | A `shadowing_attempts` row still `azure_eval_status='pending'` past this age is lazily surfaced/rewritten as `failed` (`expired`) on next read — no cron needed at this app's scale (§9.5) |
+| `REVISION_GRACE_PERIOD_DAYS` | 30 | A superseded, otherwise-unreferenced transcript revision becomes a Script Versions cleanup candidate only after this long — never based on age alone or "keep latest N" (§6.9). Anchored to `superseded_at`, not to whichever moment it most recently became unreferenced (§6.9) |
+| `AZURE_RECOVERY_TOKEN_TTL_SEC` | 600 | Expiry bound on the server-signed Azure-result recovery token (§9.4/§9.9) — a persistence retry older than this must re-request evaluation rather than replay a stale signed payload |
+| `CUTOVER_DRAIN_WINDOW_SEC` | 30 | How long the legacy completion-write path waits, after `app_write_gate` is set to paused, before the provenance backfill runs — generous versus this app's observed request latency, bounding (not eliminating) the in-flight-request window (§8.14/§9.9) |
 
 Assumptions carried forward from the audit rather than re-litigated:
 - **Video identity stays `youtube_video_id` (text)**, not a switch to `videos.id` (uuid) as the
@@ -330,12 +420,20 @@ Assumptions carried forward from the audit rather than re-litigated:
   *Practice Round* table going forward, but the physical table name stays to avoid an
   unnecessary, purely-mechanical multi-file rename across ~10 route/hook files for zero
   functional gain. Noted as an optional later cleanup (§14).
-- **No dedicated `user_videos`/library table.** The Video Library view (§10) is served by a
-  query-time aggregation across `learning_sessions` + `shadowing_attempts` +
-  `listening_progress`, mirroring the union pattern `dashboard/summary/route.ts` already uses
-  successfully — a denormalized anchor table would be a second source of truth to keep in sync,
-  which the task explicitly asks to avoid, and this app's scale (a small group of users, per
-  `Master Plan.md §6`) doesn't need the read-path optimization it would buy.
+- **A minimal `user_videos` membership table *is* added** (reversing Revision 1's "no dedicated
+  library table" call). A query-time aggregation across `learning_sessions` + `shadowing_attempts`
+  + `listening_progress` — Revision 1's original approach — cannot represent "video added, not yet
+  started" (no rows exist anywhere yet to aggregate) or a Listening-only session with no round.
+  `user_videos` closes that gap while staying strictly a membership/UI-convenience pointer: it is
+  **never** read for coverage, completion, or scores — every such read still goes to the
+  authoritative tables above, via a LEFT JOIN from `user_videos`, not the reverse. This keeps the
+  "no parallel sources of truth" rule intact while fixing the representational gap (§5.6).
+- **Transcripts remain shared/global per `(youtube_video_id, language)`, not per-user** — confirmed
+  from `transcripts_public_read`/`transcripts_service_manage` RLS (`001_initial.sql:142-147`).
+  Script Versions (§6.9) therefore has no per-user partition to reason about: duplicate detection,
+  "current" selection, and retention are all scoped to `(youtube_video_id, language)` only, and
+  deletion requires a new, minimal admin concept (§6.9/§8.8) since no per-user owner exists to
+  gate it on.
 
 ---
 
@@ -346,16 +444,19 @@ Assumptions carried forward from the audit rather than re-litigated:
 | Domain concept | Table | Status |
 |---|---|---|
 | Video catalog | `videos` | Existing, unchanged |
-| Transcript revision | `transcripts` | Existing, **behavior fix** (§8.4) |
+| **Video library membership** | `user_videos` | **New** (§5.6) — UI-convenience anchor, never authoritative for scores |
+| Transcript revision | `transcripts` | Existing, **behavior fix + new columns** (§8.2/§8.3; §8.11 — Script Versions) |
 | Transcript sentences | `transcript_segments` | Existing, unchanged |
 | **Practice round** | `learning_sessions` | Existing, **extended** (repurposed conceptually, physical name unchanged — §4) |
-| **Study session** | `study_sessions` | **New** |
+| **Study session** | `study_sessions` | **New** (nullable `round_id` — §5.3) |
 | Dictation sentence attempt | `attempt_logs` | Existing, **extended** |
 | Shadowing sentence attempt | `shadowing_attempts` | **New** |
 | **Listening coverage** | `listening_progress` | **New** — supersedes `listening_sessions` |
+| **Cross-mode activity time** | *(fields on `study_sessions`)* | **New** (§5.3, §6.3b) — no separate table |
+| **Flush idempotency log** | `activity_flush_log` | **New** (§6.3b) |
 | AI session feedback | `ai_feedback` | Existing, unchanged |
 | Legacy Listening rows | `listening_sessions` | Existing, **deprecated** (frozen, kept for backfill provenance, no new writes) |
-| Video Library view | *(none — query-time aggregation)* | New read path, no new table (§4) |
+| Video Library view | `user_videos` LEFT JOIN onto the authoritative tables above | Query-time aggregation, anchored by a real table (§5.6, correcting Revision 1) |
 
 Everything outside this list (`vocabulary_items`, `bookmarks`, translation/highlight caches,
 `vocabulary_audio_assets`) is untouched — see §14 scope preservation.
@@ -364,53 +465,113 @@ Everything outside this list (`vocabulary_items`, `bookmarks`, translation/highl
 
 ```mermaid
 erDiagram
+    users ||--o{ user_videos : "library membership"
+    videos ||--o{ user_videos : "added by users"
     videos ||--o{ transcripts : "has revisions"
     transcripts ||--o{ transcript_segments : "has sentences"
     videos ||--o{ learning_sessions : "practice rounds"
-    learning_sessions ||--o{ study_sessions : "spans"
+    learning_sessions ||--o{ study_sessions : "spans (nullable FK)"
     learning_sessions ||--o{ attempt_logs : "dictation attempts"
     learning_sessions ||--o{ shadowing_attempts : "shadowing attempts"
     study_sessions ||--o{ attempt_logs : "during"
     study_sessions ||--o{ shadowing_attempts : "during"
+    study_sessions ||--o{ activity_flush_log : "idempotent flushes"
     transcript_segments ||--o{ attempt_logs : "sentence identity"
     transcript_segments ||--o{ shadowing_attempts : "sentence identity"
     videos ||--o{ listening_progress : "per (user, transcript revision)"
     transcripts ||--o{ listening_progress : "revision-scoped coverage"
     learning_sessions ||--o{ ai_feedback : "via attempt_logs"
+    user_videos }o--|| learning_sessions : "current round pointer"
 ```
 
 `learning_sessions` = **Practice Round**. One row per pass through a video's sentence set, fixed
 to one `transcript_id`. Both Dictation and Shadowing attempts reference it via `round_id`
 (physically the existing `session_id`/new `round_id` FK — see §8.2 on naming). `study_sessions`
-sits *inside* a round (many sessions per round, spanning days) and both attempt tables also
-reference the specific study session they occurred in, for History's per-sitting breakdown.
-`listening_progress` deliberately does **not** reference a round — Listening isn't a discrete-
-sentence pass, it's tracked per `(user, video, transcript revision)` directly, exactly matching
-the product rule that Listening coverage is separate from active-practice coverage.
+sits *inside* a round (many sessions per round, spanning days) — but its `round_id` FK is
+**nullable**, because a Listening-only study session has no round to attach to at all (§5.3).
+Both attempt tables also reference the specific study session they occurred in, for History's
+per-sitting breakdown. `listening_progress` deliberately does **not** reference a round —
+Listening isn't a discrete-sentence pass, it's tracked per `(user, video, transcript revision)`
+directly, exactly matching the product rule that Listening coverage is separate from
+active-practice coverage. `user_videos` sits above all of this as a thin per-`(user, video)`
+anchor row — it points *at* a current round when one exists, but every score/coverage/completion
+read still goes through the tables above it, never through `user_videos` itself (§5.6).
 
 ### 5.3 Study session — start/resume/inactivity/end rules
 
-A study session is not equivalent to a round (§5.2) or a completed video. Rules, none of which
-depend solely on `beforeunload`/`pagehide`:
+A study session is not equivalent to a round (§5.2) or a completed video, and — unlike Revision 1
+— **does not require a round to exist.** Rules, none of which depend solely on
+`beforeunload`/`pagehide`:
 
-1. **Start:** on the first *qualifying activity* for a round with no `study_sessions` row whose
-   `last_activity_at` is within `INACTIVITY_TIMEOUT_MINUTES` (30) of now — insert a new row.
+1. **Start:** on the first *qualifying activity* for a `(user, video)` with no `study_sessions`
+   row whose `last_activity_at` is within `INACTIVITY_TIMEOUT_MINUTES` (30) of now — insert a new
+   row. `round_id` is set to whatever round is current at that moment, or `NULL` for Listening-only
+   activity with no round yet.
 2. **Resume:** on qualifying activity within that window — update the existing row's
    `last_activity_at`, and append the active mode to `modes_used` if not already present.
 3. **Inactivity boundary:** a gap larger than 30 minutes means the *next* qualifying activity
    starts a brand-new `study_sessions` row, even for the same round on the same day.
-4. **End:** no explicit "close" call is required for correctness. `ended_at` is set
-   **opportunistically** by extending the existing `visibilitychange`(hidden)/`pagehide` listener
-   already in `useDictationSession.ts:684-715` to also stamp it — but the *authoritative* session
-   duration for all stats is always `last_activity_at - started_at`, which is correct whether or
-   not `ended_at` ever gets set (a crashed tab simply leaves it `null` forever; `last_activity_at`
-   already reflects the true last moment of activity).
+4. **Explicit round start always force-closes the current session**, regardless of the 30-minute
+   window: starting a new round (Dictation/Shadowing "Practice again," or the first round created
+   out of a previously round-less Listening-only session) stamps `ended_at = now()` on whatever
+   session is currently open and opens a fresh one attached to the new round. This is the concrete
+   answer to "what happens to a study session when the user explicitly starts another round" —
+   and it means a session's `round_id`, once set, **never changes** after creation; a round change
+   always means a new session row instead.
+5. **End:** beyond rule 4, no explicit "close" call is required for correctness. `ended_at` is
+   also set **opportunistically** by extending the existing
+   `visibilitychange`(hidden)/`pagehide` listener already in `useDictationSession.ts:684-715` to
+   stamp it — but the *authoritative* session-grouping span is always
+   `elapsed_span_sec = last_activity_at - started_at` (bookkeeping only), which is correct whether
+   or not `ended_at` ever gets set. The *estimated active-practice time* shown to users is a
+   **separate** field, `active_practice_sec`, computed from the `activity_intervals` mechanism in
+   §6.3b — never the same number as `elapsed_span_sec` (this is the direct fix for the review's
+   core finding: a 20:00 submission followed by a 20:25 submission after an unrelated break must
+   not read as 25 minutes of active practice).
 
-**Qualifying activity events** (bump `last_activity_at`, and create/resume the row):
-Dictation attempt submit, Shadowing attempt save, a Listening sync flush (§6.3 — only fired after
-real accumulated `PLAYING` time, never a bare position poll), segment navigation
-(skip/previous/bookmark-jump). Passive 200ms position ticks while paused or merely mounted are
-**not** qualifying — this is what keeps an idle-but-open tab from fabricating a session.
+**Qualifying activity events** (bump `last_activity_at`, create/resume the row, and contribute to
+`activity_intervals` per §6.3b): Dictation keystrokes/input-change, segment auto-play, hint
+reveals, and submissions; Shadowing recording ticks and attempt saves; a Listening sync flush
+(§6.3, only fired after real accumulated `PLAYING` time); segment navigation
+(skip/previous/bookmark-jump). Passive 200ms position ticks with no accompanying interaction are
+**not** qualifying on their own — this is what keeps an idle-but-open tab from fabricating a
+session or inflating active time.
+
+**Per-session Listening bookkeeping**, distinct from the lifetime `listening_progress` union
+(which discards which-session-contributed-what once merged): `listening_observed_sec`
+(session-scoped raw sum of playback time actually observed this session, deliberately **not**
+deduped against prior sessions — legitimate re-listening within one sitting still counts as
+listening activity) and `listening_newly_covered_sec` (session-scoped delta actually credited to
+the *lifetime* union at flush time, `covered_sec_after − covered_sec_before`). Both are additive
+counters protected by the same `activity_flush_log` idempotency mechanism as
+`active_practice_sec` (§6.3b) — a retried flush never double-adds to either.
+
+**Units, precisely (the review asked this be made explicit, distinct from wall-clock study
+time):** `listening_observed_sec` and `listening_newly_covered_sec` are both measured in
+**media-timeline seconds** — the same axis as `covered_sec`/`coverage_ratio` (§6.3), i.e. how much
+*content* was played back, not how long the listener sat there. This is deliberately the same unit
+as coverage (so "observed vs. covered" is a directly comparable ratio) and deliberately **not**
+the same unit as `active_practice_sec` (§6.3b), which is wall-clock engaged time — the two answer
+different questions ("how much of the content did you play back, replays included" vs. "how much
+real time did you spend engaged") and are never conflated into one number.
+
+**Payload and calculation, replay-inclusive by construction:** the client does **not** pre-merge
+replayed spans before flushing — every `PLAYING`-state span observed since the last flush is sent
+as its own entry in `intervals` (§9.6), even if it overlaps an entry already in the *same* batch
+(e.g. `[{"start":41.2,"end":51.2},{"start":41.2,"end":51.2}]` for "played the same 10 media-seconds
+twice within this flush window"). The server computes the two counters differently from the same
+raw list: `listening_observed_sec`'s contribution from a batch is `Σ (entry.end − entry.start)`
+over every entry, unmerged; `covered_intervals`/`listening_newly_covered_sec` come from merging
+those same entries into the stored union first (§6.3) and taking only the *new* territory. **At 1×
+speed**, listening to the same 10-media-second interval twice within one flush produces
+`covered_sec` +10 (unique) and `listening_observed_sec` +20 (replay-inclusive), matching the
+review's example exactly. **At other playback speeds**, both counters stay in media-timeline
+units and are unaffected by rate directly — `getCurrentTime()` already reports true media
+position independent of rate (§6.3's existing note) — so playing a 10-media-second interval once
+at 2× (5 real seconds elapsed) still contributes 10 to both `covered_sec` and
+`listening_observed_sec`, not 5; rate only enters §6.3's *discontinuity* check, never the
+observed/covered duration math itself. A user who wants to know how much real time they spent at
+elevated playback rates is answered by `active_practice_sec` (§6.3b), not by these two fields.
 
 ### 5.4 Sentence attempt — shared fields across Dictation and Shadowing
 
@@ -434,10 +595,59 @@ columns don't overlap):
 ### 5.5 Listening coverage — separate from active practice
 
 `listening_progress`, one row per `(user, video, transcript_id)`: a merged, non-overlapping list
-of observed play intervals (`covered_intervals jsonb`), a denormalized `covered_sec`/
-`coverage_ratio`, a `listened_through` boolean + timestamp, and `last_position_sec` tracked
-**separately** from coverage (resume convenience only — never used to infer coverage, closing
-defect D6/D7). Full mechanics in §6.3.
+of observed play intervals (`covered_intervals jsonb`, merged **only on true overlap/touching —
+never on a tolerance window**, correcting a flaw the second review round caught in the first
+draft's "compaction" idea — see §6.3), a denormalized `covered_sec`/`coverage_ratio`, a
+`listened_through` boolean + timestamp, and `last_position_sec` tracked **separately** from
+coverage (resume convenience only — never used to infer coverage, closing defect D6/D7). Full
+mechanics, including the corrected denominator and discontinuity detection, in §6.3.
+
+### 5.6 `user_videos` — video-library membership, not a competing source of truth
+
+Revision 1 argued a dedicated table was unnecessary because the Library view could be derived
+purely from `learning_sessions`/`shadowing_attempts`/`listening_progress`. The review correctly
+found this couldn't represent two real states: a video the user has added but never started
+practicing (no rows exist anywhere to derive from), and a Listening-only session with no round.
+`user_videos` — one row per `(user_id, youtube_video_id)` — closes both gaps:
+
+| Column | Purpose |
+|---|---|
+| `added_at` | When the video entered this user's library (Add Video, or first-touch backfill) |
+| `last_mode` | Last mode the user was actually in, written by an **explicit** mode-switch ping (§9), not inferred only from attempt timestamps (closes a labeling gap the review flagged) |
+| `last_active_round_id` | Convenience pointer to the current round, if one exists |
+| `last_resume_segment_index` | Convenience resume hint |
+| `last_activity_at` | For Library sort order |
+
+**Invariant, stated once and never violated elsewhere in this plan:** `user_videos` is read *only*
+for membership listing and resume convenience. Every coverage/completion/score read goes to
+`learning_sessions`/`attempt_logs`/`shadowing_attempts`/`listening_progress` directly — the
+Library query is a `user_videos` LEFT JOIN *onto* those tables (§10.2), never the reverse, and
+`last_mode`/`last_resume_segment_index` use ordinary last-write-wins semantics (no monotonic
+guard needed) precisely because they carry no scoring weight — a deliberately narrower
+consistency requirement than every other new table in this plan.
+
+### 5.7 Script Versions — transcript-revision management as a first-class concern
+
+Beyond the revision-*pinning* fix in §8.2/§8.3 (existing rounds must keep resolving their exact
+sentence text), the review's follow-up round asked for revision *management*: a per-video listing
+of transcript revisions with honest storage-size estimates, duplicate-generation prevention, and
+reference-aware authorized deletion. This adds two things to the domain model, detailed with full
+mechanics in §6.9:
+
+- **`transcripts` gains identity/lifecycle columns**: `content_fingerprint` (for duplicate
+  detection), `is_current` (decoupled from `version`, since the highest version number is not
+  always the current one — see §6.9), `superseded_at` (starts the retention grace period), and a
+  small set of `estimated_*_bytes` columns (lazily-refreshed storage estimates, never a live
+  full-database scan).
+- **`users` gains `is_admin`** — the minimum authorization primitive needed to gate deletion of a
+  *shared* transcript revision (transcripts have no per-user owner to check instead, confirmed by
+  their public-read RLS — §4).
+
+Transcript revisions were previously described as "never deleted." That claim no longer holds —
+authorized, reference-checked deletion is now a real, designed pathway (§6.9) — but the
+protection guarantee that matters for the rest of this plan is unchanged: **any revision actually
+referenced by a live round, any historical attempt, or any Listening-coverage row can never be
+deleted**, only a genuinely unreferenced, long-superseded revision can be.
 
 ---
 
@@ -449,7 +659,7 @@ defect D6/D7). Full mechanics in §6.3.
 where `text_normalized <> ''` (excludes malformed/empty segments — a segment with no real text
 can't be practiced). Snapshotted into `learning_sessions.required_sentence_count` at round
 creation for fast reads, always re-derivable from `transcript_segments` since segments are no
-longer mutated in place after the §8.4 transcript-revision fix.
+longer mutated in place after the §8.2/§8.3 transcript-revision fix.
 
 - **Zero-eligible-sentence videos:** if `required_sentence_count = 0`, the round can never
   auto-complete via the coverage rule (0/0 is undefined, not 100%) — the completion check is
@@ -479,8 +689,16 @@ duration proves the reference sentence was spoken — practice credit is about "
 produce and finalize a real attempt," not "was it correct." Credit is granted the moment the
 recording is finalized and saved (mirroring the existing recorder's own non-empty-blob gate) —
 **independent of whether Word Match or Azure evaluation ever runs or succeeds.** Cancelling
-mid-recording, or a recording that never finalizes, produces no row and no credit. Three
-independent, non-exclusive states are tracked per row:
+mid-recording, or a recording that never finalizes, produces no row and no credit.
+
+**Honesty about *how* validity was established:** the practice-credit endpoint
+(`POST /api/practice/attempt`) receives only a duration number, not the audio itself (no
+long-term recording storage, §14) — the server literally cannot verify real speech occurred.
+`validity_basis` (`'client_reported'` by default) makes this explicit at the schema level rather
+than implying a verification that never happened; it stays entirely separate from
+`is_practice_valid` and never gates practice credit.
+
+Three independent, non-exclusive states are tracked per row:
 
 - **Practiced:** `is_practice_valid = true` (set once, at insert, never revoked).
 - **Evaluated:** `word_match_status = 'completed'` OR `azure_eval_status = 'completed'`.
@@ -489,49 +707,183 @@ independent, non-exclusive states are tracked per row:
 
 ### 6.3 Listening coverage and the "listened through" rule
 
-On each sync flush (§9), the server merges the client's newly-observed `[start, end]` sub-interval
-into `listening_progress.covered_intervals`, treating two intervals as one contiguous run when
-the gap between them is ≤ `LISTENING_GAP_TOLERANCE_SEC` (1.5s — covers normal 200ms-poll jitter
-and flush latency without bridging an actual seek, which typically jumps many seconds).
+**Two review-round corrections applied here, both load-bearing for the formula below:** (1) the
+denominator must be the *union* of valid transcript-segment intervals, not `max(end) − min(start)`
+— the latter overcounts whenever a transcript has a gap between segments (e.g. a silent intro), a
+concrete bug the second review round caught. (2) stored coverage data is merged **only on true
+overlap/touching, never on a tolerance window** — the first draft's `LISTENING_GAP_TOLERANCE_SEC`
+merge was applied directly to the authoritative stored intervals, which meant a later flush
+landing exactly in a previously-bridged-but-never-actually-watched gap would be silently seen as
+"already covered" and get no credit. `LISTENING_GAP_TOLERANCE_SEC` (1.5s) is repurposed as a
+**client-side-only** signal: it decides whether two consecutive ticks represent one continuous
+candidate interval before submission. It never touches server-side storage or credited duration
+again.
 
 ```
-transcript_span_sec  = max(segment.end_sec) − min(segment.start_sec)   over transcript_segments for round.transcript_id
-covered_sec          = Σ length(interval ∩ [min_start, max_end])       over merged covered_intervals
-coverage_ratio        = covered_sec / transcript_span_sec               (guarded: 0 if span is 0 or unknown)
-listened_through      = coverage_ratio >= LISTENED_THROUGH_THRESHOLD (0.90)
+segment_valid_intervals(round)  = [start_sec, end_sec] for each transcript_segments row of
+                                   round.transcript_id where end_sec > start_sec
+                                   and text_normalized <> ''         (same eligibility as §6.1)
+transcript_valid_union           = exact merge (true overlap/touching only) of segment_valid_intervals
+transcript_covered_sec           = Σ length(interval) over transcript_valid_union
+
+covered_sec           = Σ length(interval) over ( listening_progress.covered_intervals ∩ transcript_valid_union )
+coverage_ratio         = covered_sec / transcript_covered_sec          (0 if transcript_covered_sec is 0 or unknown)
+listened_through       = coverage_ratio >= LISTENED_THROUGH_THRESHOLD (0.90)
 ```
+
+`listening_progress.covered_intervals` itself is always the **exact** merged union of everything
+actually observed (real overlap/touching merge only — a genuinely tiny, sub-0.05-second
+floating-point-noise gap may still be joined for storage hygiene, since that's far below anything
+that could represent real unwatched content, unlike the old 1.5s figure). This single
+representation is both the storage format and the source of truth for coverage math — there is no
+separate "compacted" copy and no separate "exact counter" to keep in sync, which is what made the
+first draft's design fragile.
 
 - **Video duration vs. transcript-covered duration:** the denominator is the transcript's own
-  span (sum of real sentence timing), not the raw video duration — a long intro/outro with no
-  transcript coverage shouldn't be required listening. If no transcript exists yet for the video,
-  `videos.duration_sec` is used as a fallback denominator when populated; if neither is available,
-  coverage is shown as raw seconds only, with no completion badge — never a fabricated percentage.
+  valid-segment union (real sentence timing, gaps between segments excluded from *both* sides), not
+  the raw video duration — a long intro/outro with no transcript coverage shouldn't be required
+  listening, and a gap between two segments can't inflate the denominator the way `max−min` did. If
+  no transcript exists yet for the video, `videos.duration_sec` is used as a fallback denominator
+  when populated; if neither is available, coverage is shown as raw seconds only, with no
+  completion badge — never a fabricated percentage.
+- **Overlapping/invalid segment cues:** `segment_valid_intervals` are merged among themselves
+  before use, so overlapping cues in bad transcript data don't double-count the denominator;
+  segments with `end_sec <= start_sec` or empty text are excluded (same rule as §6.1's
+  `required_sentence_count`, reused here rather than redefined).
 - **Seeking forward never credits the skipped interval** — only the sub-range actually traversed
-  at real playback speed between ticks is submitted as a new interval; a `seekTo()` starts a new,
-  disjoint interval rather than extending the previous one.
+  at real playback speed between ticks is submitted as a new interval; a detected discontinuity
+  (below) starts a new, disjoint interval rather than extending the previous one.
+- **Rate-aware discontinuity detection**, replacing the earlier "any position jump = new interval"
+  hand-wave: on each tick, compute `expected_pos = last_pos + wall_clock_elapsed_sec *
+  playback_rate`. If `abs(actual_pos - expected_pos) > SEEK_DETECTION_TOLERANCE_SEC` (2.0s), or if
+  `wall_clock_elapsed_sec > MAX_TICK_GAP_SEC` (5.0s) **regardless of how small the position delta
+  looks**, the current interval is closed and a new one starts at `actual_pos`. The second
+  condition is what correctly handles browser suspension/throttling: a suspended tab's next tick
+  can show only a small position delta (since the player's own clock was also paused) despite a
+  large real-world gap, and the wall-clock check catches that even when the position-based check
+  alone would not.
 - **Replaying an interval doesn't inflate coverage** — the server-side merge is a set union;
-  re-covering an already-covered range is a no-op on `covered_sec`.
-- **Paused/buffering time doesn't count** — the client stops accumulating the open interval on
-  any state other than `PLAYING` (closing the current BUFFERING gap in the audit, D6) and starts a
-  fresh interval when playback resumes.
-- **Playback speed** needs no correction — `getCurrentTime()` already reports real media-timeline
-  position independent of rate, so interval math is rate-agnostic by construction.
+  re-covering an already-covered range contributes 0 new seconds to `covered_sec`. (It does still
+  contribute to the session-scoped, deliberately-not-deduped `listening_observed_sec` — §5.3 — since
+  that field measures listening *activity*, not unique coverage.)
+- **Paused/buffering time doesn't count** — the client stops accumulating the open interval on any
+  state other than `PLAYING` (closing the BUFFERING gap from the audit, D6) and starts a fresh
+  interval when playback resumes.
+- **Playback speed** needs no correction in the coverage math itself — `getCurrentTime()` already
+  reports real media-timeline position independent of rate; rate only enters the *discontinuity*
+  check above, where it's needed to compute a correct `expected_pos`.
 - **End-of-video behavior:** on `ENDED`, the last open interval's end is extended to
-  `min(currentTime_at_last_tick, transcript_span_end)` — i.e. `ENDED` only closes out the last
-  fraction of a second already in-flight, it never retroactively credits a skipped span. This is
-  what prevents the seek-to-end abuse case (D6): seeking to the end and immediately hitting `ENDED`
-  only ever closes a sub-2-second gap, not the whole video.
+  `min(currentTime_at_last_tick, transcript_valid_union_end)` — i.e. `ENDED` only closes out the
+  last fraction of a second already in-flight, it never retroactively credits a skipped span. This
+  is what prevents the seek-to-end abuse case (D6): seeking to the end and immediately hitting
+  `ENDED` only ever closes a sub-2-second gap (bounded by `SEEK_DETECTION_TOLERANCE_SEC`), not the
+  whole video.
 - **Sampling/sync frequency:** client-side position polling stays at the existing 200ms; new
   intervals are flushed to the server every `LISTENING_SYNC_FLUSH_INTERVAL_SEC` (15s) of actual
-  `PLAYING` time, or immediately on pause/mode-switch/tab-hide — bounding both request volume and
-  worst-case data loss on a crash to ~15 seconds, without building a general offline-sync system.
+  `PLAYING` time, or immediately on pause/mode-switch/tab-hide. This is the **normal-case** cadence,
+  not a guarantee — see §6.3b for the corrected, honest worst-case data-loss bound
+  (`MAX_PENDING_BUFFER_SEC`, 300s), which replaces an earlier, incorrect "≤15s" claim.
+- **Retry-safe flushing:** every flush carries a client-generated `flushBatchId`; the server
+  dedupes via `activity_flush_log` (§6.3b) before applying any interval merge, so a retried flush
+  (network retry, not a genuine new observation) is a pure no-op rather than a chance to
+  double-process — merging is already idempotent for `covered_intervals` itself (re-merging the
+  same range is a no-op regardless), but the dedup log matters for the *additive*
+  `listening_observed_sec`/`listening_newly_covered_sec` counters, which are not naturally
+  idempotent (§6.3b).
 - **Resume position stays separate:** `last_position_sec` is updated on every flush purely for
   "resume where you left off" and is allowed to move backward (rewatching an earlier part is a
   legitimate resume point) — it never feeds `coverage_ratio`, closing D7.
-- **Threshold limitation, stated honestly:** 90% cannot distinguish "watched 90% attentively" from
-  "watched 90%, was AFK for the last 10%" — this plan does not attempt attention detection; it
-  only claims *media-timeline traversal*, which is the strongest signal the current player API can
-  provide.
+- **90% threshold, justified as a product tolerance, not a measurement-precision workaround:** the
+  first draft justified this by "200ms polling jitter," which the review correctly rejected — jitter
+  at that scale is not a meaningful source of missed coverage under the corrected exact-merge
+  design. The real justification: legitimate intro/outro skips, brief re-seeks to re-hear
+  something, and ordinary pause/seek behavior mean requiring literal 100% would punish normal
+  listening. 90% cannot distinguish "watched 90% attentively" from "watched 90%, was AFK for the
+  last 10%" — this plan does not attempt attention detection; it only claims *media-timeline
+  traversal*, the strongest signal the current player API can provide, and states that limitation
+  in the UI copy itself, not only in this document.
+
+### 6.3b Cross-mode active-practice-time accounting
+
+This is the direct fix for the review's core finding: `elapsed_span_sec` (§5.3,
+`last_activity_at − started_at`) measures a session's *span*, not time actually spent practicing —
+submitting at 20:00 and again at 20:25 after an unrelated break must not read as 25 minutes of
+active practice. A single mechanism, reused from Listening's own interval math (§6.3), produces an
+honest estimate for **all three modes**.
+
+**Activity pulses.** While a mode is genuinely engaged — Dictation: keystrokes/input-change,
+segment auto-play, hint reveals, submissions; Shadowing: recording ticks; Listening: playback
+ticks (shared with §6.3's own tracking, not a duplicate signal) — the client emits a candidate
+wall-clock interval `[event_time − PULSE_LOOKBACK_SEC, event_time]`, buffered locally and flushed
+every ~15–20s or on pause/hide/mode-switch, same cadence as Listening sync. A pulse is only
+emitted while genuine interaction has occurred within `PULSE_ENGAGEMENT_WINDOW_SEC` (45s) — a
+tab merely left open with nothing typed or played does not keep generating pulses, which is the
+stated, honest limit of this mechanism: it measures *engagement*, not attention, exactly as
+Listening's own threshold does.
+
+**Storage:** `study_sessions.activity_intervals jsonb` — wall-clock timestamp intervals, merged
+**only on true overlap/touching**, the same discipline as `listening_progress.covered_intervals`
+(§6.3) and for the same reason: a tolerance-bridged stored union can't tell a later flush which
+parts of a new interval are genuinely new versus already covered.
+
+```
+active_practice_sec(session)  = Σ length(interval) over session.activity_intervals   (session-scoped, for History)
+total_practice_sec(user)      = Σ length(interval) over ( union of activity_intervals
+                                                            across ALL of that user's study_sessions )   (Dashboard)
+```
+
+**Cross-session deduplication.** A per-session union alone does not dedupe overlapping wall-clock
+time across *different* sessions — e.g. the same video open in two tabs, one running a
+round-less Listening session and one running a Dictation round, both active at once. The
+Dashboard-level `total_practice_sec` is computed by unioning `activity_intervals` **across every
+study session the user owns**, at read time, before summing — so genuinely overlapping wall-clock
+spans are counted once at the account level even though they legitimately live in two different
+session rows. At this app's stated scale (a small group of users, low hundreds of sessions each
+at most) this is a cheap live query, not an incremental-maintenance job.
+
+**Retry-safe additive counters, via a small dedup table** (not a monotonic per-session sequence —
+that construction breaks under genuine multi-tab concurrency, since two tabs would generate
+colliding sequence numbers independently), **with a payload fingerprint so a reused batch id with
+different content is rejected rather than silently treated as a matching retry** (R27):
+
+```sql
+create table activity_flush_log (
+  study_session_id uuid not null references study_sessions(id) on delete cascade,
+  flush_batch_id uuid not null,
+  kind text not null check (kind in ('listening', 'activity')),
+  payload_fingerprint text not null,
+  processed_at timestamptz not null default now(),
+  primary key (study_session_id, flush_batch_id)
+);
+```
+
+Every flush (Listening sync or generic activity-pulse) carries a client-generated `flushBatchId`
+— regenerated only for genuinely new buffered data, reused verbatim across network retries of the
+same attempt. The full flush is applied by one `SECURITY DEFINER` function,
+`fn_flush_study_activity` (§9.6/§9.9), in one transaction: it looks up any existing row for
+`(study_session_id, flush_batch_id)`; if found with a matching `payload_fingerprint` (a hash of
+the submitted `intervals`), it's a genuine retry and the function returns the current state as a
+pure no-op; if found with a **different** fingerprint, the function rejects it (`409
+flush_batch_id_reused_with_different_payload`) rather than silently applying or silently ignoring
+mismatched content; if absent, the function inserts the dedup row **and** merges interval data
+**and** bumps `last_activity_at`/`listening_observed_sec`/`listening_newly_covered_sec`, all inside
+the same transaction — so a failure partway through rolls back the dedup insert along with
+everything else, never leaving a marker with no applied progress (§9.6). This is what makes the
+additive, deliberately-not-deduped `listening_observed_sec` (§5.3) retry-safe despite being
+additive by design; interval-merge fields like `covered_intervals`/`activity_intervals` are
+already naturally idempotent (re-merging an already-covered range is a no-op), but the additive
+counters are not, hence this table.
+
+**Timezone attribution for streaks/day-bucketing:** the client includes its resolved IANA
+timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) on each flush; the server derives
+`activity_local_date` from it for day-grouping. No per-user timezone column is introduced — this
+is a pragmatic, low-stakes choice (day-bucketing only, nothing security- or ownership-relevant)
+rather than a new preferences subsystem.
+
+**Labeling discipline:** until this mechanism actually ships (§12), no API response field is
+named `activeDurationSec` anywhere in this plan — a response carries `elapsedSpanSec` (the
+bookkeeping value) until Phase 5 lands `active_practice_sec`/`total_practice_sec`, at which point
+the field is renamed and the mislabeled sum-of-playhead-positions figure (D9) is retired for good.
 
 ### 6.4 Active-practice coverage (mixed Dictation + Shadowing)
 
@@ -568,12 +920,73 @@ The round is complete through mixed practice; neither individual mode reaches 10
 | Overlap | {6,7,8} | 3 |
 | **Unique overall** | {1..10} | **10** (8 + 5 − 3, not 13) |
 
-### 6.5 Round completion — atomic, idempotent
+### 6.5 Round completion — locked, atomic, idempotent
 
-```
+The review's exact scenario — a round at 8/10, one transaction submitting sentence 9, a
+concurrent transaction submitting sentence 10, both must succeed and the round must end
+completed without a third action — exposed a real gap in Revision 1's design: wrapping the
+insert and the completion check in "one transaction" does not by itself prevent both
+transactions from reading a stale 8/10 coverage count before either commits. The fix is an
+explicit row lock, acquired **before** the insert, inside a single server-side function.
+
+**Correcting Revision 3's SQL, which does not match the actual schema:** `ON CONFLICT ... DO
+UPDATE SET updated_at = now()` assumes `attempt_logs` has an `updated_at` column. It does not —
+confirmed directly against `supabase/migrations/001_initial.sql:105-114`, which defines
+`attempt_logs` with only `id`, `session_id`, `segment_index`, `expected_text`, `user_text`,
+`is_correct`, `error_type`, `created_at`. (`shadowing_attempts` is a **new** table this plan
+defines with its own `updated_at`, §8.7 — but touching it as a bare "self-update just to trigger
+`xmax=0`" is the same fragile idiom and is dropped for both tables, not only the one that would
+fail outright.) The corrected flow does the idempotency lookup **explicitly**, inside the same
+lock, instead of relying on an `ON CONFLICT ... DO UPDATE` self-touch:
+
+```sql
+-- fn_record_dictation_attempt(...) / fn_record_shadowing_attempt(...), invoked via .rpc()
+-- called by the authenticated caller's own client (not the service-role key) — see §9.9 for why
+-- this function can still write columns the caller's own RLS no longer permits it to write
+-- directly, and how actor identity is derived from auth.uid(), never a request parameter.
+
+-- 1. Lock the round row first, serializing concurrent submissions to the SAME round, and
+--    validate it belongs to the caller and the claimed video in the same statement (§9.7).
+SELECT id, status, transcript_id FROM learning_sessions
+WHERE id = :roundId AND user_id = auth.uid() AND youtube_video_id = :videoId
+FOR UPDATE;
+-- zero rows here means "not your round" or "wrong video" -- raise 403/404, never proceed.
+
+-- 2. Idempotency lookup within the defined scope (round_id, segment_index, client_attempt_id) --
+--    an explicit SELECT, not an upsert-and-hope. Safe to do as a plain SELECT (not FOR UPDATE)
+--    because step 1's round-row lock already serializes every writer touching this round.
+SELECT * FROM attempt_logs
+WHERE session_id = :roundId AND segment_index = :segmentIndex AND client_attempt_id = :clientAttemptId;
+
+IF found THEN
+  -- Reusing the same key: compare the immutable core payload (expected_text/user_text for
+  -- Dictation; recording_duration_sec for Shadowing) against the incoming request.
+  IF existing row's core payload <> incoming payload THEN
+    RAISE EXCEPTION USING ERRCODE = '23505',
+      MESSAGE = 'idempotency_key_reused_with_different_payload';  -- mapped to HTTP 409
+  END IF;
+  -- Genuine retry: return the existing row untouched -- no timestamp bump, no coverage
+  -- recompute, no repeated side effect. roundCompletedByThisRequest is always false here,
+  -- since no completion transition happens as part of resolving a retry (§9.3/§9.8, R26).
+  RETURN existing_row, was_inserted := false, round_completed_by_this_request := false,
+         round_status := (current status of :roundId);
+END IF;
+
+-- 3. Absent: insert. A unique index (§8.6/§8.7) remains as a defense-in-depth backstop for any
+--    future caller that reaches this function outside the round lock's serialization -- under
+--    normal operation (every writer goes through step 1's lock first) this ON CONFLICT branch
+--    is unreachable, and its DO NOTHING is intentionally inert, not a second idempotency path.
+INSERT INTO attempt_logs (..., client_attempt_id) VALUES (..., :clientAttemptId)
+ON CONFLICT (session_id, segment_index, client_attempt_id) DO NOTHING
+RETURNING *;
+
+-- 4. Recompute coverage and complete, still holding the round's lock -- only reachable for
+--    active, uncompleted rounds, so a delayed request against an abandoned round can never
+--    resurrect it.
 UPDATE learning_sessions
 SET status = 'completed', completed_at = now()
 WHERE id = :roundId
+  AND status = 'active'
   AND completed_at IS NULL
   AND required_sentence_count > 0
   AND (SELECT count(DISTINCT segment_index)
@@ -581,28 +994,82 @@ WHERE id = :roundId
              UNION
              SELECT segment_index FROM shadowing_attempts WHERE round_id = :roundId AND is_practice_valid) u)
       >= required_sentence_count;
+
+-- 5. Return the new row, was_inserted := true, round_completed_by_this_request := (step 4
+--    actually flipped this round to completed), round_status := (current status of :roundId).
 ```
 
-Run inside the same server-side transaction as the attempt insert that might trigger it (§9) —
-the `completed_at IS NULL` guard makes it safe to run after every valid attempt without ever
-double-firing or racing two concurrent tabs. **Revisiting sentences in an already-completed
-round** is always allowed (re-practice writes new attempt rows normally) and never un-completes
-the round — `completed_at` is fixed at first completion; revisited attempts still update the
-round's latest-attempt-per-sentence scoring (§6.6), so an improved retake is reflected in the
-accuracy shown even after completion.
+Walking the review's exact scenario through this: the transaction submitting sentence 9 acquires
+the round's row lock first and holds it until it commits (lookup finds nothing, inserts, coverage
+recompute sees 9/10, does not complete). The transaction submitting sentence 10 blocks on step 1
+until the first commits, then acquires the lock, inserts, and recomputes coverage **after**
+sentence 9's insert is already visible — correctly sees 10/10 and completes. Whichever request
+arrives second always sees the first's committed state before deciding completion; there is no
+window where both can read a stale count.
+
+**`roundCompletedByThisRequest` vs. `roundStatus` — resolving the ambiguity the review flagged.**
+A single `roundCompleted` field cannot honestly answer two different questions at once: "did *my*
+request just complete the round" (a one-time event, fixed forever for that specific request) and
+"is the round *currently* completed" (a live fact that can change between when the original
+request ran and when a later retry of the *same* idempotency key is resolved, if some *other*
+request completed the round in between). The response therefore carries both, separately:
+`roundCompletedByThisRequest` is computed once, only when `was_inserted = true`, and is **not**
+recomputed on a later retry (a retry's value is always `false`, per step 2 above, even if the
+round is now completed) — this is what the client uses to decide whether to show a
+completion celebration, and showing it twice for the same logical submit would be wrong.
+`roundStatus` is simply the round's live status at response time, safe to differ between the
+original response and a retry's response — that is not a violation of idempotency, since nothing
+about the retry's *own effect* changed, only the observed state of a value the retry was never
+responsible for. §9.3/§9.8 use this same pair; §11.2's cache matrix triggers on
+`roundCompletedByThisRequest`, never on `roundStatus`, to avoid re-invalidating on every retry of
+an already-completed request.
+
+**General concurrency rule, applied consistently everywhere this plan needs it** (stated once
+here, referenced elsewhere rather than re-derived): row-level `FOR UPDATE` locks where a natural
+owning row already exists (round completion above; round-number allocation, §10.5;
+transcript-revision selection, §6.9); `pg_advisory_xact_lock(hashtext(...))` where no owning row
+exists yet to lock (study-session creation when none exists yet — §5.3; transcript version/
+fingerprint allocation, §6.9); atomic `INSERT ... ON CONFLICT DO UPDATE SET col = merge_fn(...)`
+where Postgres's own upsert locking already suffices without an extra lock (Listening interval
+merge, §6.3; `activity_flush_log` dedup, §6.3b).
+
+`WHERE status = 'active' AND completed_at IS NULL` (not `completed_at IS NULL` alone, correcting
+Revision 1) is what makes an abandoned or already-completed round immune to a late-arriving
+request: the write to `attempt_logs`/`shadowing_attempts` itself still succeeds (honest history —
+the attempt did happen), but the completion UPDATE simply matches zero rows.
+
+**Revisiting sentences in an already-completed round** is always allowed (re-practice writes new
+attempt rows normally, still through the same locked function) and never un-completes the round —
+`completed_at` is fixed at first completion; revisited attempts still update the round's
+latest-attempt-per-sentence scoring (§6.6), so an improved retake is reflected in the accuracy
+shown even after completion.
 
 "Practice complete" is a coverage claim only — it never implies "mastered" or "all correct." A
 round can complete with 0% Dictation accuracy if every required sentence was attempted (even
 entirely incorrectly) or shadowed.
 
-### 6.6 Dictation performance aggregation
+**Idempotent retries never repeat side effects.** The `was_inserted` flag from step 3 gates
+everything beyond returning the current state: `last_activity_at`/`activity_intervals` (§6.3b) are
+only bumped, and the completion check (step 4) only runs at all, when `was_inserted = true` — a
+retry (step 2's lookup found an existing row) returns straight from step 2 and never reaches steps
+3–4. A retried submission (same `client_attempt_id`, lost first response) always gets back the
+same attempt id and `roundCompletedByThisRequest := false`, with no double-credited activity time
+and no repeated side effect — `roundStatus` alone may legitimately differ from the original
+response, per the distinction above.
+
+### 6.6 Dictation performance aggregation — "sentence accuracy," not word-level accuracy
 
 ```
 For each segment_index with ≥1 valid attempt in the round:
   latest_attempt(segment) = the attempt_logs row with max(created_at) for that (round_id, segment_index)
 
-dictation_accuracy = count(latest_attempt.is_correct = true) / count(latest_attempt)
+dictation_sentence_accuracy = count(latest_attempt.is_correct = true) / count(latest_attempt)
 ```
+
+Named and documented as **"sentence accuracy"** throughout this plan (not "Dictation accuracy" or
+"word-level accuracy") because `checkAnswer`'s underlying grading (§2.3) is whole-string equality
+— a binary correct/incorrect per sentence, never a partial-credit percentage. This plan does not
+invent per-word/partial-credit data the grading pipeline doesn't produce.
 
 Denominator is **dictation-practiced sentences**, not `required_sentence_count` — an unpracticed
 sentence has no score to include, and is never treated as a 0. This is a deliberate change from
@@ -611,46 +1078,371 @@ sentence" — directly resolving D14/the "don't overweight a sentence with more 
 `dictation_coverage` (§6.4) is surfaced alongside it so coverage and accuracy are never conflated
 into one number.
 
-### 6.7 Shadowing performance aggregation
+**Optimistic display matches the confirmed value, by construction.** The client-side optimistic
+indicator switches from Revision 1's running correct/total tally (which counted every attempt,
+retries included — a different metric from the one above) to a local
+`Map<segmentIndex, isCorrect>` of latest submissions per sentence, computed with the exact same
+"latest per sentence" rule as the server formula. There is only ever one accuracy definition in
+this plan; the client and server simply compute it from the same rule over data each currently
+has, never two different rules.
 
-Reuses the existing, already-correct weighting logic from `videoPracticeSummary.ts`
-(word-count-weighted for accuracy/completeness, duration-weighted for fluency/prosody/
-pronunciation), just re-pointed from the sessionStorage map to a DB query:
+### 6.7 Shadowing performance aggregation — Azure and Word Match never blended
+
+Revision 1 let Azure's aggregate silently fall back to Word Match's numbers when no successful
+Azure evaluation existed for a sentence — the review correctly flagged this as contaminating a
+provider-specific score with a differently-sourced one. Fixed: **three fully independent
+aggregates**, each with its own coverage denominator, none ever substituting into another:
 
 ```
 For each segment_index with ≥1 shadowing attempt in the round:
-  best_evaluated(segment) = the shadowing_attempts row with max(created_at) WHERE azure_eval_status='completed'
-                             (falls back to word_match if no successful Azure evaluation exists)
-  latest_attempt(segment) = the shadowing_attempts row with max(created_at), regardless of eval status
+  latestAttempt(segment)              = the shadowing_attempts row with max(created_at)
+  latestSuccessfulAzureAttempt(segment) = the shadowing_attempts row with max(created_at)
+                                           WHERE azure_eval_status = 'completed'   (chronological pick — NOT highest score)
+  latestWordMatchAttempt(segment)       = the shadowing_attempts row with max(created_at)
+                                           WHERE word_match_status = 'completed'
 
-accuracy/completeness  = word-count-weighted average of best_evaluated.{accuracy,completeness} over practiced segments
-fluency/prosody        = duration-weighted average of best_evaluated.{fluency,prosody} over evaluated segments only
-evaluated_coverage      = count(segments with an evaluated best_evaluated) / count(segments with ≥1 shadowing attempt)
+azurePronunciationSummary:
+  accuracy/completeness = word-count-weighted average of latestSuccessfulAzureAttempt.{accuracy,completeness}
+  fluency/prosody        = duration-weighted average of latestSuccessfulAzureAttempt.{fluency,prosody}
+  azureEvaluatedCoverage = count(segments with a latestSuccessfulAzureAttempt) / count(segments with ≥1 shadowing attempt)
+
+wordMatchSummary:
+  accuracy/completeness = word-count-weighted average of latestWordMatchAttempt.{accuracy,completeness}
+  wordMatchCoverage      = count(segments with a latestWordMatchAttempt) / count(segments with ≥1 shadowing attempt)
+
+shadowingPracticeCoverage = §6.4's shadowing_coverage — unrelated to evaluation, pure is_practice_valid coverage
 ```
 
-Missing metrics are **excluded from the average, never treated as zero** — same discipline the
-current `weightedAverage`/`weakestMetric` helpers already implement; this plan only moves their
-data source server-side, the math itself is preserved as-is per the scope-preservation rule (§14).
+`azurePronunciationSummary` is computed **only** from `azure_eval_status='completed'` rows — a
+sentence with no successful Azure evaluation simply contributes nothing to it, never a
+Word-Match-sourced substitute. `wordMatchSummary` is entirely separate, with its own coverage
+figure. Both reuse the existing, already-correct weighting discipline from `videoPracticeSummary.ts`
+(word-count-weighted for accuracy/completeness, duration-weighted for fluency/prosody/
+pronunciation) — this plan only moves the computation server-side and un-blends the two sources;
+the weighting math itself is preserved as-is per the scope-preservation rule (§14). Missing
+metrics are **excluded from every average, never treated as zero** — same discipline the current
+`weightedAverage`/`weakestMetric` helpers already implement.
 
 **Newer attempt with no successful assessment, explicitly handled:** the API returns
-`latestAttempt` (most recent recording + its own eval status) and `bestEvaluatedAttempt` (the
-most recent recording that *did* get a successful score) as two separate fields — never merged.
-UI copy: *"Score from your Sep 5 take — your latest recording (Sep 7) hasn't been evaluated yet."*
-The old score is never presented as describing the new recording.
+`latestAttempt`, `latestSuccessfulAzureAttempt`, and `latestWordMatchAttempt` as three separate,
+independently-nullable fields — never merged. `bestEvaluatedAttempt` (Revision 1's name) is
+retired entirely: the pick is chronological ("the most recent one that succeeded"), not
+score-based, so the old name implied a comparison this plan never makes. UI copy: *"Score from
+your Sep 5 take — your latest recording (Sep 7) hasn't been evaluated yet."* The old score is
+never presented as describing the new recording.
+
+**Reference text is server-resolved, not client-supplied** (§9.4) — closes a related integrity
+gap: the text Azure is asked to score against is looked up from the attempt's own pinned
+`segment_id`, never trusted from the evaluate request's payload.
 
 ### 6.8 Dashboard-level formulas
 
 | Stat | Formula | Scope |
 |---|---|---|
-| Completed videos (practice) | `count(distinct youtube_video_id)` from rounds where `status='completed'` | All-time, per user |
-| Listened-through videos | `count(distinct youtube_video_id)` from `listening_progress` where `listened_through=true` | Separate stat — never merged into "completed" |
-| In-progress videos | distinct videos with an `active` round, **minus** those already counted as completed | All-time, per user |
-| Dictation accuracy | §6.6, aggregated across **all** the user's rounds | All-time (a recency window is a reasonable future refinement, not required for v1) |
-| Shadowing summary | §6.7, aggregated across all rounds | All-time |
-| Practice time | `sum(last_activity_at − started_at)` over `study_sessions` | All-time, all modes combined (this *is* the cross-mode "study time" metric — replaces the mislabeled playhead-sum) |
+| Completed videos (practice) | `count(distinct youtube_video_id)` from rounds where `status='completed' AND provenance='current'` | All-time, per user — legacy completions are a **separate** stat, never blended in (§5.7/§6.9's provenance rules) |
+| Legacy completions (unverified) | `count(distinct youtube_video_id)` from rounds where `status='completed' AND provenance='legacy_unverified'` | Shown separately, explicitly labeled — never added to the row above |
+| Listened-through videos | `count(distinct youtube_video_id)` from `listening_progress` where `listened_through=true` | Separate stat — never merged into either completed-videos row |
+| In-progress videos | `count(distinct youtube_video_id)` with a round `status='active'` | All-time, per user. **Not** mutually exclusive with "Completed videos" (correcting Revision 1's subtraction) — a video with one completed round and a newer active round legitimately counts in both |
+| Sentence accuracy | §6.6, aggregated across **every** dictation-practiced sentence in **every** round the user owns, not deduped by video — a video completed twice via two separate rounds contributes each round's own practiced sentences | All-time (a recency window is a reasonable future refinement, not required for v1) |
+| Azure pronunciation summary | §6.7's `azurePronunciationSummary`, aggregated across all rounds | All-time, Azure-evaluated segments only |
+| Word Match summary | §6.7's `wordMatchSummary`, aggregated across all rounds | All-time, Word-Match-evaluated segments only |
+| Practice time | `total_practice_sec` (§6.3b) — union of `activity_intervals` across all the user's study sessions | All-time, all modes combined; this *is* the cross-mode "study time" metric, replacing the mislabeled sum-of-playhead-positions (D9) |
 
-No blended Dictation+Shadowing+Listening score is ever produced — each row above is its own
-number, its own scope, shown independently (§10).
+This table resolves the contradiction the review found between an earlier draft's "aggregate
+across all rounds" language here and a since-removed Phase-5 sentence that implied accuracy was
+deduped by video — **it is not**; only the distinct-video *counts* (completed/legacy/listened-
+through/in-progress) dedupe by video. Score aggregates (sentence accuracy, both Shadowing
+summaries) are always populated at the sentence-attempt level across every round, stated once,
+unambiguously, here. No blended Dictation+Shadowing+Listening score is ever produced — each row
+above is its own number, its own scope, shown independently (§10).
+
+### 6.9 Script Versions — duplicate prevention, current-revision selection, retention, deletion
+
+**Duplicate prevention and content fingerprinting.** Transcripts are shared/global per
+`(youtube_video_id, language)` (confirmed via `transcripts_public_read` RLS, §4) — no per-user
+partition to reason about. `transcripts.content_fingerprint` is a hash over the ordered segment
+set `{text_normalized, start_sec, end_sec}` per segment, timestamps rounded to 0.1s before
+hashing (so imperceptible float jitter between two generations of essentially the same content
+never spuriously creates a new revision, while genuine re-segmentation/re-timing does change the
+hash). Transient fields (generation timestamp, request id) are never part of the input.
+
+```
+On regeneration, inside an advisory-locked section keyed by hashtext(youtube_video_id || language)
+(the same general-concurrency-rule lock class as §6.5, applied here so concurrent identical
+regenerations collapse to one outcome rather than racing). RETIRE THE PREVIOUS CURRENT REVISION
+BEFORE PROMOTING OR INSERTING ANOTHER, in that order, within the same transaction (R22 — a prior
+draft of this pseudocode promoted first, which would transiently create two is_current rows for
+the same (video, language) and violate transcripts_one_current_idx immediately; the order below
+matches §8.3's actual SQL function, which was already correct):
+
+  new_fingerprint = fingerprint(newly-fetched content)
+  match = SELECT * FROM transcripts
+          WHERE youtube_video_id = :videoId AND language = :language
+            AND status = 'ready' AND content_fingerprint = new_fingerprint
+          LIMIT 1                                    -- matched against ANY ready revision, not just the current one
+
+  IF match EXISTS:
+    UPDATE transcripts SET is_current = false, superseded_at = now()
+      WHERE youtube_video_id = :videoId AND language = :language AND is_current AND id <> match.id
+    UPDATE transcripts SET is_current = true  WHERE id = match.id
+    -- no new row inserted; existing revision retired-then-reused, promoted to current
+  ELSE:
+    UPDATE transcripts SET is_current = false, superseded_at = now()
+      WHERE youtube_video_id = :videoId AND language = :language AND is_current
+    INSERT INTO transcripts (..., version = max(version)+1, is_current = true, content_fingerprint = new_fingerprint)
+```
+
+`transcripts.is_current` (with `create unique index transcripts_one_current_idx on
+transcripts(youtube_video_id, language) where is_current`) decouples "current" from "highest
+version number" — **the highest version is not assumed to always be current**, directly per the
+requirement: regeneration can match and re-promote an *older* ready revision. `superseded_at` is
+stamped on whichever row transitions from current to not-current, starting that revision's
+retention grace period (below).
+
+**Reader paths, both explicit, both shipped in Phase 0 (R21 — correcting Revision 3, which shipped
+only the writer here and deferred the reader to Phase 9):** a **new round** resolves its
+transcript via `WHERE is_current = true AND status='ready'`, resolved **server-side** at round
+creation, never trusting a client-supplied `transcriptId` for that decision (a pre-existing gap:
+`save-progress/route.ts:87,116`, confirmed, currently accepts a client-supplied `transcriptId`
+verbatim for both update and insert — this plan's round-creation path stops doing that, though a
+client-supplied `transcriptId` remains meaningful for *validating* an already-pinned round, §9.5);
+an **existing round** resolves directly through its own pinned `transcript_id`, never re-querying
+"current" at all. Existing rounds are completely unaffected by which revision is current — already
+true by construction, reconfirmed against this new logic.
+
+**Why the reader fix cannot wait, confirmed against the live client code:** `fetchTranscript`
+(`src/app/dictation/[videoId]/api.ts:11-12`) calls `GET /api/transcript/${videoId}?lang=en` with no
+revision parameter at all, and `useDictationSession.ts:170-172` queries it under key
+`["transcript", videoId]` with the comment *"a transcript never changes mid-session"* — true only
+because, before this plan, regeneration mutated a transcript's row **in place**. The moment Phase
+0's writer fix ships alone, that assumption breaks: regeneration now produces a genuinely separate
+revision, but the client still has no way to ask for anything other than "whatever's current," so
+an existing round pinned to revision A would render revision B's text on its very next load. This
+is why the reader fix ships in the *same* phase, not a later one:
+
+- **`GET /api/transcript/[videoId]`** gains an optional `?transcriptId=` — when present, returns
+  that exact revision's segments regardless of `is_current` (any `status` except `processing`,
+  which 404s as "not ready" rather than serving a partial transcript); when absent, resolves
+  `is_current AND status='ready'` as today.
+- **`fetchTranscript(videoId, transcriptId?)`** — the client fetch adds the optional param.
+- **`useDictationSession.ts`'s transcript query branches on whether `GET /api/session/resume`
+  returned an existing round** (§9.2's now-nullable `round`): if `round !== null`, fetch
+  `fetchTranscript(videoId, round.transcriptId)` — the **pinned** revision; if `round === null`
+  (fresh video, or Listening-only so far), fetch `fetchTranscript(videoId)` — `is_current` — and
+  that resolved id is what a subsequently-created round pins to.
+- **Query key changes from `["transcript", videoId]` to `["transcript", videoId, transcriptId ??
+  "current"]`** — a breaking key change, made deliberately in this phase: without it, a round
+  pinned to revision A and a fresh "current" fetch (possibly revision B) could share one cache
+  entry and serve each other's segments.
+- **Failed/in-progress regeneration preserves the usable revision by construction**, not by an
+  extra check: `fn_publish_transcript_revision` (§8.3) only flips `is_current`/inserts inside one
+  transaction that starts from already-fetched, complete content — a fetch/parse failure upstream
+  means the function is never invoked, so the previously-current, already-`ready` revision's
+  `is_current` flag is simply untouched. There is no intermediate state where a failed
+  regeneration leaves a video with zero current revisions.
+
+Multiple rounds referencing the same revision without copying it is satisfied by construction
+(rounds only ever hold a `transcript_id` FK). Retroactively merging any **pre-existing** duplicate
+revisions (created before this duplicate-prevention logic existed) is explicitly **out of
+scope** — they simply coexist; at most one is ever `is_current`. No automatic merge, ever.
+
+**What genuinely stays in the later Script Versions phase** (§12, Phase 9) — and why it can:
+revision *listing*, *preview*, and *authorized deletion* are UI/management surfaces layered on top
+of the identity Phase 0 establishes; they don't change how any round resolves its text, so
+deferring them doesn't reintroduce the reader-path bug above. Deletion additionally depends on
+Phase 1's reference tables and `is_admin` (§6.9's release gate) — the dependency graph in §12 is
+corrected to say so explicitly, rather than "depends only on Phase 0."
+
+**Honest storage-size estimates.** New nullable columns on `transcripts`: `estimated_text_bytes`,
+`estimated_segments_bytes`, `estimated_translations_bytes`, `estimated_highlights_bytes`,
+`estimated_total_bytes`, `size_estimated_at`. Computed via `pg_column_size(...)`/
+`octet_length(...)` aggregates scoped by `transcript_id` — an estimate of attributed **logical
+row storage**, explicitly labeled as such (does not include index overhead or on-disk
+compression, and never claims deleting a revision frees exactly that many physical bytes).
+Text/segment bytes are computed once at publish time (known immediately, §6.9's publish step);
+translation/highlight bytes refresh lazily — opportunistically when those rows are generated, and
+otherwise only if `size_estimated_at` is older than a 1-hour staleness window the next time the
+Script Versions dialog is opened — never a full-database recalculation per view. Vocabulary
+images, TTS audio, and `vocabulary_audio_assets` (a separate, content-addressed, cross-revision
+cache) are explicitly **excluded** — not owned by the revision. No revision-owned "files" category
+exists in this app today (confirmed: no transcript-scoped Storage bucket); the column exists for
+forward-compatibility and is always zero currently, stated as such rather than omitted. The
+dialog additionally shows a **derived, not stored**, "eligible for removal" figure per revision —
+equal to the logical-size estimate only when the revision is an actual cleanup candidate (below),
+otherwise `0` alongside an explanation of what's protecting it.
+
+**Retention classification — direct and indirect references, enumerated.** A revision is
+**protected** (never a cleanup candidate) if any of:
+
+*Direct references* (each a straightforward existence check against a FK this plan controls):
+- `is_current`.
+- Referenced by **any** `learning_sessions.transcript_id`, **for every round status** (`active`,
+  `completed`, or `abandoned`) — correcting Revision 3, which only checked `status='active'`
+  rounds directly and relied on `attempt_logs.transcript_id` to indirectly protect completed/
+  abandoned ones. That reliance was unsound: `attempt_logs.transcript_id` is a **new**, nullable
+  column (§8.6) with no backfill value for pre-existing rows, so every legacy attempt has it
+  `NULL` — a completed *legacy* round's revision would appear falsely unprotected under the old
+  check. Checking `learning_sessions.transcript_id` directly, for any status, needs no backfill and
+  has no such gap.
+- Referenced by **any** `attempt_logs.transcript_id`/`shadowing_attempts.transcript_id` that *is*
+  populated (kept as an additional, belt-and-suspenders check for `attempt_logs`/`shadowing_attempts`
+  rows whose `transcript_id` differs from their own round's — possible only if a round's pinned
+  revision could ever change, which it can't by design, so this check is currently redundant with
+  the one above but costs nothing to keep).
+- Referenced by any `listening_progress.transcript_id`.
+- Has `status='processing'` (an active job).
+- Touched by any `attempt_logs`/`shadowing_attempts` row tagged `legacy_unverified` (§5.7) —
+  conservatively protected until that uncertainty is resolved.
+
+*Indirect references* (no FK to check against — a coarser, explicitly-acknowledged mitigation,
+not a precise one): `vocabulary_items`/`bookmarks` carry no `transcript_id` column at all (a
+pre-existing gap, not introduced here), so a revision cannot be positively cleared against
+vocabulary/bookmark references at the row level. Deletion is blocked if **any**
+`vocabulary_items`/`bookmarks` rows exist for that video — coarser than ideal (it protects the
+whole video's revisions, not just the specific one a saved word came from), but honest about the
+schema's current limits rather than silently ignoring the gap.
+
+**This indirect check has no available concurrency-safety mechanism within this plan's scope — a
+prior draft's claim otherwise was factually wrong about Postgres, and is corrected here rather than
+softened.** `vocabulary_items`/`bookmarks` inserts are ordinary, unmodified, owner-scoped PostgREST
+writes (§14.1's scope-preservation rule keeps them that way), executed at the **default `READ
+COMMITTED`** isolation level — they take no lock shared with `fn_delete_transcript_revision`, and
+there is no `transcript_id` column to lock against even if they did. **A prior draft claimed
+running the deletion transaction at `SERIALIZABLE` would, by itself, detect and abort a concurrent
+`vocabulary_items` insert "regardless of the other transaction's own isolation level" — this is not
+how Postgres's serializable snapshot isolation works, and the claim is removed.** Per Postgres's
+own documentation, true serializability guarantees hold only **among transactions that are all
+themselves running at `SERIALIZABLE`**; a concurrent transaction running at a lower level (as
+`vocabulary_items`/`bookmarks` inserts do, unmodified, per scope preservation) does not participate
+in the predicate-locking/conflict-detection machinery at all, so it cannot be "detected" by a
+`SERIALIZABLE` transaction on the other side. **There is, as a result, no available mechanism —
+within this plan's scope — that closes the gap between the deletion function's existence-check and
+its `DELETE` statement for these two tables.** The existence check still correctly sees any
+vocabulary/bookmark row that **committed before** the deletion transaction began (ordinary MVCC
+visibility, no special isolation needed for that part); what remains genuinely open is a row that
+commits **during** the deletion transaction's lifetime, which the existence check cannot see and
+`SERIALIZABLE` alone does not protect against here. A video with any vocabulary/bookmark activity
+therefore stays protected by the coarse existence check for everything up to the moment deletion's
+check runs, but the narrow in-transaction race is a **real, unresolved gap**, not a mitigated one —
+stated as such, not filed under "accepted product tradeoff," because it is a concrete data-
+integrity hole, not a deliberate design choice with a stated rationale on its own terms. The
+**minimal integrity change that would close it** (not implemented by this plan, named so a future
+change knows exactly what's needed): route `vocabulary_items`/`bookmarks` INSERT through a thin
+wrapper that acquires the *same* `hashtext(youtube_video_id)`-keyed advisory lock
+`fn_delete_transcript_revision` would also need to take before its existence check (below) — a
+schema-free, UI/translation/audio/SRS-behavior-free change (purely a lock acquired before an
+otherwise-unchanged insert), but still an integration point into the vocabulary feature this plan
+does not touch, so it is out of scope here and not assumed to exist.
+
+**Given this, deletion for any video with vocabulary/bookmark activity remains disabled — not as a
+"coarse but acceptable" default, but because no safe alternative exists within scope.** This is the
+release gate's binding condition (below), not a footnote.
+
+A revision is a **cleanup candidate** only if none of the above apply **and**
+`now() − superseded_at >= REVISION_GRACE_PERIOD_DAYS` (30; a revision never promoted to current,
+e.g. an abandoned/failed generation, uses `created_at` in place of `superseded_at`). Never based
+on age alone or a "keep latest N" rule.
+
+**Grace-period anchor, resolved explicitly:** the clock is anchored to `superseded_at` — the
+one-time, monotonic moment a revision stopped being current — not to whichever moment it most
+recently *became unreferenced*. A revision superseded 60 days ago that only became unreferenced
+yesterday is immediately eligible (its `superseded_at` is already well past the 30-day mark); a
+revision superseded 5 days ago that just became unreferenced today must wait 25 more days.
+Anchoring to "most recently became unreferenced" instead would let a revision that flickers
+between referenced/unreferenced (e.g. an abandoned-then-resumed round) repeatedly reset its own
+clock — anchoring to the one-time `superseded_at` event avoids that.
+
+**One consistent coordination protocol for publication, deletion, and reference creation on
+`transcripts` itself** (correcting a prior draft's claim that "one uses an advisory lock and the
+other a row lock, so no shared coordination is needed" — that claim missed a real interleaving,
+worked through below):
+
+**The race the prior draft missed:** (1) publication finds an older, superseded revision A whose
+content fingerprint matches newly-fetched content, and decides to reuse it; (2) concurrently,
+deletion acquires a lock on A and removes it (A was, at that moment, correctly a cleanup candidate
+— superseded, unreferenced, past its grace period); (3) publication — having only *read* A's id
+earlier, without yet holding a lock on it — proceeds to retire the current revision and then tries
+to promote A, which no longer exists. **The failure mode is not an error, it is silence**: the
+"promote A" `UPDATE ... WHERE id = A` matches zero rows, and if the "retire current" step already
+committed, the video is left with **zero current revisions** — exactly the outcome this plan must
+never produce.
+
+**The fix — row-lock the candidate before committing to reuse it, and never retire the current
+revision until the replacement is confirmed viable:** `fn_publish_transcript_revision`'s
+"fingerprint match found" branch is reordered so the sequence is *lock → verify → retire → promote*,
+never *retire → promote*:
+```sql
+-- (inside the existing advisory-locked section, §6.9's fingerprint-match branch)
+select * from transcripts where id = :matchId for update;  -- lock the candidate BEFORE acting on it
+if not found or (select status from transcripts where id = :matchId) <> 'ready' then
+  -- Concurrently deleted (or otherwise no longer ready) since the fingerprint SELECT: fall back
+  -- to the "no match" branch -- insert a new revision from the already-fetched content instead of
+  -- promoting a row that no longer exists. The video is never left without a current revision,
+  -- because "retire the old current" has not run yet at this point.
+  -- (falls through to the INSERT branch already specified above)
+else
+  update transcripts set is_current = false, superseded_at = now()
+    where youtube_video_id = :videoId and language = :language and is_current and id <> :matchId;
+  update transcripts set is_current = true where id = :matchId;
+end if;
+```
+This closes the race **without deletion needing to take publication's advisory lock**, because the
+two functions now contend on the *same row-level lock* for the one row that matters (the specific
+candidate being reused): whichever of {deletion's `FOR UPDATE`, publication's new `FOR UPDATE` on
+the same candidate} acquires it first wins, and the other correctly observes the outcome once
+unblocked — deletion arriving second finds the row already promoted to `is_current = true` (a
+protected condition it already re-checks, §6.9, so it safely refuses); publication arriving second
+finds the row gone and falls back to inserting fresh content. **Reference creation** (a round newly
+pinning a transcript) cannot race deletion the same way, by construction: new rounds only ever
+resolve `is_current` transcripts (§6.9/§9.9's `fn_create_or_get_active_round`), and `is_current` is
+itself always a protected, non-deletable condition — so a revision eligible for deletion can never
+simultaneously be one a new round is about to reference. **Locking order, stated once:**
+publication's advisory lock (language-scoped, taken first, only when it might insert) and either
+function's row-level `FOR UPDATE` (single-row, taken second, only on a row already identified) are
+never both held by the same function pointed at two different targets, so there is no ordering rule
+beyond "lock the specific row before deciding its fate," which both functions now do.
+
+**Deletion itself.** `fn_delete_transcript_revision(transcript_id)` (`SECURITY DEFINER`, §9.9 — the
+actor is `auth.uid()`, checked against `is_admin` inside, never a caller-supplied parameter):
+`SELECT ... FOR UPDATE` the target `transcripts` row — this row-level lock, not a broader isolation
+level, is what actually coordinates with publication above — **re-check every direct protection
+condition inside that same locked transaction** (never trusting the dialog's earlier snapshot: is
+it now `is_current`? now referenced by a round of any status, an attempt, or a Listening-progress
+row?), and only then cascade-delete (segments/translations/highlights already `on delete cascade`
+from `transcripts`) and delete the `transcripts` row itself. If a direct reference was created
+between the dialog's last read and the delete request, the fresh re-check inside the lock catches
+it and the function raises `409 revision_now_referenced`, deleting nothing. **This guarantee is
+scoped to the direct references above — it does not, and (per the correction earlier) cannot,
+extend to the indirect vocabulary/bookmark check**, which is why that check alone keeps deletion
+disabled rather than being treated as covered by this same mechanism.
+
+**Authorization.** No admin mechanism exists in the audited schema — this plan's minimum addition
+is `users.is_admin boolean not null default false` (self-grant blocked by §9.9's trigger). Deletion
+checks `is_admin = true` for `auth.uid()` inside the function body — an ordinary learner never has
+a working delete action on a shared revision, since transcripts have no per-user owner to gate on
+instead.
+
+**Removing a video from a personal library is separate and non-destructive** — a
+`DELETE /api/videos/library/[videoId]` removes only the caller's own `user_videos` row (§5.6). It
+never touches `transcripts`, and — a deliberate, easily-revisited product default — does not
+delete the caller's own rounds/attempts either, so re-adding the same video later transparently
+surfaces prior history again.
+
+**First-release scope, kept independently releasable, and deletion's specific, default-disabled
+release gate.** Listing, preview, size estimates, and duplicate prevention have no concurrency
+hazard beyond an ordinary read and ship as soon as Phase 0 + Phase 1 are live (§12 — they need
+Phase 1's reference tables for accurate retention *reasons* in the listing, even though listing
+itself doesn't destroy anything). **Deletion specifically ships behind its own flag, default
+disabled, separate from the rest of Phase 9 and from the core learning-management release —
+enabling it is a distinct, later decision, not a byproduct of shipping the feature's other parts.**
+It may be enabled only once: (a) Phase 1's reference tables and `is_admin`/trigger exist; (b) the
+publish-vs-delete row-lock coordination test (acceptance scenario #58) and the direct-
+reference-vs-delete race test (acceptance scenario #47, both real-Postgres tier) have passed; and
+(c) for videos with vocabulary/bookmark activity, deletion stays refused — this is not a temporary
+limitation with a planned follow-up in this document, it is the standing behavior until a future,
+separately-scoped change coordinates vocabulary/bookmark writes (the minimal integrity change is
+named above, not designed here). Automatic scheduled cleanup (a cron sweeping cleanup candidates)
+is a separate, later, initially-**disabled** phase regardless of when manual deletion ships.
 
 ---
 
@@ -661,25 +1453,31 @@ number, its own scope, shown independently (§10).
 ```mermaid
 stateDiagram-v2
     [*] --> active: first save-progress / first attempt
-    active --> active: attempt recorded, coverage < required
-    active --> completed: coverage reaches required_sentence_count (§6.5, atomic + idempotent)
-    active --> abandoned: explicit restart (old round abandoned, new round created)
+    active --> active: attempt recorded (round row locked FOR UPDATE first, §6.5), coverage < required
+    active --> completed: coverage reaches required_sentence_count, still holding the lock (§6.5, race-safe under concurrent submissions)
+    active --> abandoned: explicit restart (old round abandoned, new round created; force-closes the current study session, §7.2)
     completed --> completed: revisit / re-practice a sentence (completed_at unchanged)
     completed --> [*]: "Practice again" creates a NEW round (round_number + 1); this round's history is preserved untouched
-    abandoned --> [*]
+    abandoned --> [*]: a delayed/late request against this round can still write an attempt (honest history) but can never re-trigger completed (WHERE status='active' guard, §6.5)
 ```
 
 ### 7.2 Study session lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> open: qualifying activity, no session within 30min window
+    [*] --> open: qualifying activity, no session within 30min window (round_id set to current round, or NULL for Listening-only)
     open --> open: qualifying activity within 30min of last_activity_at
     open --> closed_by_gap: next qualifying activity arrives >30min later (that activity opens a NEW session instead)
+    open --> closed_by_new_round: user explicitly starts another round — force-closed regardless of the 30min window (§5.3 rule 4); a new session opens attached to the new round
     open --> closed_opportunistically: pagehide/visibilitychange-hidden (best-effort ended_at stamp only)
     closed_by_gap --> [*]
+    closed_by_new_round --> [*]
     closed_opportunistically --> [*]
 ```
+
+A session's `round_id` is set once at creation and never changes — rule 4 above is what makes
+that possible even when the user's round genuinely changes mid-sitting: the old session closes,
+a new one opens, rather than an existing row's `round_id` being mutated.
 
 ### 7.3 Shadowing attempt evaluation lifecycle
 
@@ -687,19 +1485,23 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> recording: user presses Record
     recording --> discarded: cancel / empty blob (no row written, no credit)
-    recording --> practiced: finalized, duration >= 0.5s (row inserted, is_practice_valid=true, credit granted immediately)
+    recording --> practiced: finalized, duration >= 0.5s (row inserted, is_practice_valid=true, validity_basis='client_reported', credit granted immediately)
     practiced --> word_match_running: automatic (Chrome/Edge), or unsupported on Safari
     word_match_running --> word_match_done: completed / failed / unsupported (never revokes practice credit)
-    practiced --> azure_pending: user clicks Evaluate (explicit, opt-in, quota-gated)
-    azure_pending --> azure_completed: Azure returns scores (PATCH by attemptId, §9)
+    practiced --> azure_pending: user clicks Evaluate (explicit, opt-in, quota-gated; azure_eval_request_seq incremented, eval_requested_at stamped)
+    azure_pending --> azure_completed: Azure returns scores, PATCH accepted only if the response's seq still matches the row's current azure_eval_request_seq (§9.5 — stale-response rejection)
     azure_pending --> azure_failed: quota exceeded / Azure error / timeout (previous successful result, if any, untouched)
+    azure_pending --> azure_failed: EVAL_PENDING_TIMEOUT_SEC (120s) elapsed with no response — lazily surfaced as 'expired' on next read, no cron required
     practiced --> practiced: user records again for the same sentence (NEW row, new client_attempt_id; this row's credit/results are independent of prior rows)
 ```
 
 The key invariant carried from the existing (already-correct) client logic: a failed or
 quota-blocked evaluation only ever changes *that attempt's own* `azure_eval_status`; it never
 touches a different row's `azure_*_score` fields, so an earlier successful score is never erased
-by a later failure (§6.7).
+by a later failure (§6.7). The `azure_eval_request_seq` check adds a second, distinct guarantee —
+protection against a genuinely *stale* response to an **earlier** Evaluate click on the **same**
+attempt (a retry or a slow first attempt whose response arrives after a second click already
+started a newer one) overwriting a **newer** result for that same row.
 
 ### 7.4 Asynchronous evaluation attaches to its originating attempt
 
@@ -708,46 +1510,179 @@ sequenceDiagram
     participant UI
     participant API as /api/practice/attempt
     participant Azure as /api/practice/evaluate
-    UI->>API: POST attempt (segment 4, round R1) 
+    UI->>API: POST attempt (segment 4, round R1)
     API-->>UI: 201 {attemptId: A1}
-    UI->>Azure: POST evaluate {attemptId: A1, audio}
+    UI->>Azure: POST evaluate {attemptId: A1, audio}  (server resolves reference text itself from A1's pinned segment_id, §6.7/§9.4)
     Note over UI: user switches to segment 5 / mode / round while Azure call is in flight
-    Azure-->>API: PATCH shadowing_attempts WHERE id = A1 (ownership-checked)
+    Azure-->>API: PATCH shadowing_attempts WHERE id = A1 AND azure_eval_request_seq = <seq at request time>
     API-->>UI: (next fetch of round state) A1 shows evaluated, regardless of what's currently on screen
 ```
 
-The PATCH is keyed strictly by the server-assigned `attemptId`, never by "whatever segment/mode is
-currently visible" — this is the mechanism satisfying acceptance scenario #10 (§13).
+The PATCH is keyed strictly by the server-assigned `attemptId` **and** the request's own
+sequence token, never by "whatever segment/mode is currently visible" — this is the mechanism
+satisfying acceptance scenario #10 (§13).
 
 ---
 
 ## 8. Database changes
 
-All migrations are additive (new tables/columns/indexes), numbered `020`–`027` continuing the
-existing sequence. None drop or destructively rewrite existing data. Ownership/RLS follows the
-exact pattern every existing owner-scoped table already uses
-(`using (auth.uid() = user_id)`).
+**Schema is additive throughout — no existing column is dropped, renamed, or retyped anywhere in
+`020`–`035` — but this is not the same claim as "every migration is behaviorally additive," and
+this document does not make the broader claim.** Several migrations change *existing* behavior on
+purpose: `024`, `025`, and `034` remove or replace RLS policies that currently grant direct
+owner-write access (§9.9 — a real permission *removal*, not an addition, verified against actual
+policy text rather than assumed); `030` and `034` `UPDATE` existing rows (`status`, `provenance`).
+Each is called out explicitly where it happens, not folded into a blanket "additive" claim. RLS
+follows the exact pattern every existing owner-scoped table already uses
+(`using (auth.uid() = user_id)`) **only for SELECT** on the tables §9.9 lists — the write side is
+`SECURITY DEFINER`-function-only, a deliberate departure from the existing owner-`for all` pattern,
+not a continuation of it. **Migration numbering now matches deployment order
+exactly** — every table a function references is created in an earlier migration than that
+function, correcting the review's D-bug (a completion function referencing `shadowing_attempts`
+was originally scheduled before that table existed).
 
 ### 8.1 Migration plan overview
 
-| # | File | Purpose |
-|---|---|---|
-| 020 | `020_practice_round_columns.sql` | Extend `learning_sessions` (Practice Round) with `round_number`, `completed_at`, `required_sentence_count` |
-| 021 | `021_study_sessions.sql` | Create `study_sessions` |
-| 022 | `022_attempt_logs_extensions.sql` | Extend `attempt_logs` with round/session/idempotency/hint/validity/segment-FK columns |
-| 023 | `023_shadowing_attempts.sql` | Create `shadowing_attempts` |
-| 024 | `024_listening_progress.sql` | Create `listening_progress`; backfill from `listening_sessions` as unverified legacy data |
-| 025 | `025_transcript_revision_index.sql` | Index to support real `version` ordering (paired with the app-code fix in §8.4) |
-| 026 | `026_practice_round_backfill.sql` | Backfill `round_number`/`completed_at`/`required_sentence_count` for existing rows |
-| 027 | `027_practice_round_active_uniqueness.sql` | Data cleanup (abandon duplicate active rounds) + partial unique index |
+| # | File | Phase | Purpose |
+|---|---|---|---|
+| 020 | `020_transcript_revision_identity.sql` | 0 | `transcripts` gains `content_fingerprint`, `is_current`, `superseded_at` + partial unique "one current per video/language" index; one-time backfill of `is_current` |
+| 021 | `021_fn_publish_transcript_revision.sql` | 0 | Atomic publish function + advisory-locked dedup/version allocation (§6.9) |
+| 022 | `022_practice_round_columns.sql` | 1 | Extend `learning_sessions` with `round_number`, `completed_at`, `required_sentence_count`, `provenance` (default `'current'`) |
+| 023 | `023_study_sessions.sql` | 1 | Create `study_sessions` — nullable `round_id`, `activity_intervals`, `listening_observed_sec`, `listening_newly_covered_sec` |
+| 024 | `024_attempt_logs_extensions.sql` | 1 | Extend `attempt_logs` — nullable `hint_level_used`, `segment_identity_provenance`, idempotency/segment-FK columns; tightens the pre-existing `attempts_owner` RLS policy to SELECT-only (§9.9, R28) |
+| 025 | `025_shadowing_attempts.sql` | 1 | Create `shadowing_attempts` — `validity_basis`, `azure_eval_request_seq`, owner-SELECT/service-write RLS (no owner-insert, R28) |
+| 026 | `026_listening_progress.sql` | 1 | Create `listening_progress` — two partial unique indexes (nullable-`transcript_id`-safe); backfill from `listening_sessions`; owner-SELECT-only RLS |
+| 027 | `027_user_videos.sql` | 1 | Create `user_videos` — the one new table that keeps owner `for all` (§9.9) |
+| 028 | `028_activity_flush_log.sql` | 1 | Create `activity_flush_log`, now with `payload_fingerprint` (R27); owner-SELECT-only RLS |
+| 029 | `029_admin_and_size_estimate_columns.sql` | 1 | `users.is_admin` + `users_prevent_self_admin_grant` trigger (R28); `transcripts` size-estimate columns; `app_write_gate` singleton table (R23) |
+| 030 | `030_practice_round_active_uniqueness.sql` | 1 | **Moved from the old "034"/"Phase 7" (R21)** — audit-logged cleanup of duplicate active rounds + the one-active-round-per-video partial unique index, now run before any function assumes round uniqueness |
+| 031 | `031_fn_record_dictation_attempt.sql` | 2 | Locking, explicit lookup-then-insert Dictation-attempt-plus-completion function (corrected flow, R26) |
+| 032 | `032_fn_record_shadowing_attempt.sql` | 2 | Same, for Shadowing |
+| 033 | `033_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round` gate-aware bridges (§8.13, dropped in migration 034) |
+| 034 | `034_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply |
+| 035 | `035_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — direct-reference-safe, re-checked-at-delete-time revision deletion; indirect vocabulary/bookmark references have no available concurrency-safety mechanism and stay refused outright (§6.9) |
 
-### 8.2 `020_practice_round_columns.sql`
+### 8.2 `020_transcript_revision_identity.sql`
+
+```sql
+alter table transcripts
+  add column content_fingerprint text null,
+  add column is_current boolean not null default false,
+  add column superseded_at timestamptz null;
+
+create unique index transcripts_one_current_idx
+  on transcripts(youtube_video_id, language)
+  where is_current;
+
+-- One-time backfill: promote the highest-version 'ready' row per (video, language) to current,
+-- matching the "most recent wins" resolution already used elsewhere in this schema (§2.1).
+-- content_fingerprint stays null for pre-existing rows -- it is only computed going forward by
+-- the fixed generate route (021); a null fingerprint simply never matches anything for
+-- duplicate-detection purposes, which is the correct, conservative default.
+with ranked as (
+  select id, row_number() over (
+    partition by youtube_video_id, language
+    order by version desc, updated_at desc
+  ) as rn
+  from transcripts
+  where status = 'ready'
+)
+update transcripts
+set is_current = true
+where id in (select id from ranked where rn = 1);
+```
+
+### 8.3 `021_fn_publish_transcript_revision.sql` — plus a required app-code fix
+
+```sql
+create or replace function fn_publish_transcript_revision(
+  p_youtube_video_id text, p_language text, p_source text,
+  p_full_text text, p_segments jsonb, p_content_fingerprint text
+) returns transcripts as $$
+declare
+  v_match_id uuid;
+  v_match transcripts;
+  v_result transcripts;
+begin
+  -- Advisory lock: serializes concurrent regenerations of the same (video, language), so two
+  -- simultaneous "regenerate" clicks collapse to one outcome instead of racing (§6.5's general
+  -- concurrency rule, applied here to the "no natural owning row yet" case).
+  perform pg_advisory_xact_lock(hashtext(p_youtube_video_id || '::' || p_language));
+
+  select id into v_match_id from transcripts
+    where youtube_video_id = p_youtube_video_id and language = p_language
+      and status = 'ready' and content_fingerprint = p_content_fingerprint
+    limit 1;
+
+  if v_match_id is not null then
+    -- Row-lock the candidate BEFORE acting on it, and re-verify it's still ready -- a concurrent
+    -- fn_delete_transcript_revision could have removed it between the SELECT above and here.
+    -- This is what closes the publish-vs-delete race (§6.9): never retire the current revision
+    -- until the replacement is confirmed to still exist and be viable.
+    select * into v_match from transcripts where id = v_match_id and status = 'ready' for update;
+  end if;
+
+  if found then
+    -- Reuse an existing ready revision (possibly not the highest version) rather than inserting
+    -- a duplicate -- §6.9's duplicate-prevention rule. Retire-then-promote, never the reverse
+    -- (the unique-current partial index forbids two is_current rows existing even transiently).
+    update transcripts set is_current = false, superseded_at = now()
+      where youtube_video_id = p_youtube_video_id and language = p_language
+        and is_current and id <> v_match.id;
+    update transcripts set is_current = true where id = v_match.id returning * into v_result;
+  else
+    -- No match, OR the matched row vanished under lock (concurrent deletion, §6.9) -- either way,
+    -- fall through to inserting fresh content. The video is never left with zero current
+    -- revisions, because "retire the old current" has not run yet at this point in either branch.
+    update transcripts set is_current = false, superseded_at = now()
+      where youtube_video_id = p_youtube_video_id and language = p_language and is_current;
+    insert into transcripts (youtube_video_id, language, source, status, full_text,
+      content_fingerprint, is_current, version)
+    values (p_youtube_video_id, p_language, p_source, 'ready', p_full_text,
+      p_content_fingerprint, true,
+      coalesce((select max(version) from transcripts
+        where youtube_video_id = p_youtube_video_id and language = p_language), 0) + 1)
+    returning * into v_result;
+    insert into transcript_segments (transcript_id, segment_index, start_sec, end_sec,
+      duration_sec, text_raw, text_normalized)
+    select v_result.id, (seg->>'segmentIndex')::int, (seg->>'startSec')::numeric,
+      (seg->>'endSec')::numeric, (seg->>'durationSec')::numeric, seg->>'textRaw', seg->>'textNormalized'
+    from jsonb_array_elements(p_segments) as seg;
+  end if;
+
+  return v_result;
+end;
+$$ language plpgsql
+   security definer
+   set search_path = public, pg_temp;
+
+-- Backend-only (§9.9): this is a shared-content operation with no per-user actor to check, so it
+-- must never be reachable directly from a browser, even an authenticated one.
+revoke execute on function fn_publish_transcript_revision from public, authenticated;
+grant  execute on function fn_publish_transcript_revision to service_role;
+```
+
+**Required companion app-code fix (not itself a migration, but a schema-integrity prerequisite):**
+today `transcript/generate/route.ts:351-433` reuses the same `transcripts.id` on regeneration and
+hard-deletes/replaces `transcript_segments` in place (confirmed, §2/D15). This plan requires that
+route to call `fn_publish_transcript_revision` instead of performing sequential `UPDATE`/`DELETE`/
+`INSERT` REST calls — the function's single transaction is what makes publication **atomic**: a
+partially-written transcript is never visible as `status='ready'` mid-generation (the row simply
+doesn't exist as `ready` until the whole function returns), which sequential REST calls could not
+guarantee. Old transcript rows and their segments are left **untouched**, so old rounds/attempts
+keep resolving correctly through their frozen `transcript_id`/`segment_id`. This is the one
+behavior change in this plan that existing code must actually stop doing, not just extend
+(detailed in §12, Phase 0).
+
+### 8.4 `022_practice_round_columns.sql`
 
 ```sql
 alter table learning_sessions
   add column round_number integer not null default 1,
   add column completed_at timestamptz null,
-  add column required_sentence_count integer null;
+  add column required_sentence_count integer null,
+  add column provenance text not null default 'current'
+    check (provenance in ('current', 'legacy_unverified'));
 
 comment on table learning_sessions is
   'Practice Round: one pass through a video''s sentence set, fixed to one transcript_id. '
@@ -755,18 +1690,25 @@ comment on table learning_sessions is
   'Table name kept for compatibility; see .claude/video-learning-management-plan.md §5.';
 ```
 
-### 8.3 `021_study_sessions.sql`
+The `provenance` default is `'current'` here (schema only, harmless); the actual retroactive
+`'legacy_unverified'` tagging of every pre-existing row happens in migration `033`, deliberately
+co-located with the Dictation route's cutover (§12, R18) rather than here.
+
+### 8.5 `023_study_sessions.sql`
 
 ```sql
 create table study_sessions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,
-  round_id uuid not null references learning_sessions(id) on delete cascade,
+  round_id uuid null references learning_sessions(id) on delete set null,
   youtube_video_id text not null,
   started_at timestamptz not null default now(),
   last_activity_at timestamptz not null default now(),
   ended_at timestamptz null,
   modes_used jsonb not null default '[]'::jsonb,
+  activity_intervals jsonb not null default '[]'::jsonb,
+  listening_observed_sec numeric not null default 0,
+  listening_newly_covered_sec numeric not null default 0,
   created_at timestamptz not null default now()
 );
 
@@ -774,39 +1716,62 @@ create index study_sessions_round_idx on study_sessions(round_id);
 create index study_sessions_user_recent_idx on study_sessions(user_id, last_activity_at desc);
 
 alter table study_sessions enable row level security;
-create policy "study_sessions_owner" on study_sessions for all using (auth.uid() = user_id);
+-- Owner SELECT only (R28) -- create/resume/force-close (fn_get_or_create_study_session) and
+-- activity/interval writes (fn_flush_study_activity) are SECURITY DEFINER-only (§9.9); a direct
+-- client write here would bypass the advisory-locked force-close logic and let activity_intervals
+-- be fabricated directly, inflating the practice-time stat with no server-side check at all.
+create policy "study_sessions_owner_select" on study_sessions for select using (auth.uid() = user_id);
 ```
 
-### 8.4 `022_attempt_logs_extensions.sql` — plus a required app-code fix
+`round_id` is nullable (§5.3) so a Listening-only session needs no round. `activity_intervals`
+follows the exact-merge-only discipline of §6.3b; `listening_observed_sec`/
+`listening_newly_covered_sec` are the session-scoped Listening counters from §5.3, made
+retry-safe by `activity_flush_log` (§8.8).
+
+### 8.6 `024_attempt_logs_extensions.sql`
 
 ```sql
 alter table attempt_logs
   add column study_session_id uuid null references study_sessions(id) on delete set null,
   add column client_attempt_id uuid not null default gen_random_uuid(),
-  add column hint_level_used smallint not null default 0,
+  add column hint_level_used smallint null,
   add column is_practice_valid boolean not null default true,
   add column transcript_id uuid null references transcripts(id) on delete set null,
-  add column segment_id uuid null references transcript_segments(id) on delete set null;
+  add column segment_id uuid null references transcript_segments(id) on delete set null,
+  add column segment_identity_provenance text not null default 'verified'
+    check (segment_identity_provenance in ('verified', 'legacy_unverified'));
 
 create unique index attempt_logs_idempotency_idx
   on attempt_logs(session_id, segment_index, client_attempt_id);
 
 create index attempt_logs_round_segment_idx
   on attempt_logs(session_id, segment_index, created_at desc);
+
+-- Tighten the EXISTING attempts_owner policy (001_initial.sql:160-161, `for all using
+-- (auth.uid() = ...)`), which today permits a direct client INSERT/UPDATE/DELETE via PostgREST --
+-- confirmed reachable, since this app's browser client (src/lib/supabase/client.ts) authenticates
+-- with the user's own JWT, not just the service role. Left as-is, it would bypass every
+-- round-lock/idempotency/relationship-validation guarantee this plan adds (R28, §9.9): a client
+-- could INSERT an attempt_logs row for any segment_index/round it owns, with no lock, no coverage
+-- recompute, no stale-revision check. attempt_logs was never designed to be writable outside its
+-- one existing call site, so this closes a latent gap in the existing table, not just a new one.
+drop policy "attempts_owner" on attempt_logs;
+create policy "attempt_logs_owner_select" on attempt_logs for select using (
+  session_id in (select id from learning_sessions where user_id = auth.uid())
+);
+-- No owner insert/update/delete policy. Writes are reachable only through
+-- fn_record_dictation_attempt (SECURITY DEFINER, §9.9), which bypasses RLS as the table owner and
+-- performs auth.uid()-based ownership/relationship checks explicitly in its own body.
 ```
 
-**Required companion app-code fix (not itself a migration, but a schema-integrity prerequisite):**
-today `transcript/generate/route.ts:351-433` reuses the same `transcripts.id` on regeneration and
-hard-deletes/replaces `transcript_segments` in place (confirmed, §2/D15). Because
-`transcript_id`/`segment_id` above are meant to pin an attempt to the *exact* sentence text it was
-graded against, this plan requires changing that route so regeneration **inserts a new
-`transcripts` row** (new id, `version = previous_version + 1`) and leaves the old transcript row
-and its segments **untouched** — old rounds/attempts keep resolving correctly through their frozen
-`transcript_id`/`segment_id`, and `transcripts.version` finally means what its name says. This is
-the one behavior change in this plan that existing code must actually stop doing, not just extend
-(detailed in §12, Phase 1).
+`hint_level_used` is **nullable with no default** (correcting Revision 1's `not null default 0`,
+which would have fabricated "no hint used" for every legacy row) — `NULL` means genuinely unknown;
+only rows written after this migration, where the client actually reports a hint level, ever have
+a non-null value. `segment_identity_provenance` defaults `'verified'` for all new writes (correct
+under the Phase-0 immutability fix); backfilled legacy rows are tagged `'legacy_unverified'` in
+migration `034`, alongside the round-level `provenance` backfill.
 
-### 8.5 `023_shadowing_attempts.sql`
+### 8.7 `025_shadowing_attempts.sql`
 
 ```sql
 create table shadowing_attempts (
@@ -821,11 +1786,15 @@ create table shadowing_attempts (
   client_attempt_id uuid not null default gen_random_uuid(),
   recording_duration_sec numeric not null,
   is_practice_valid boolean not null,
+  validity_basis text not null default 'client_reported'
+    check (validity_basis in ('client_reported', 'server_verified')),
   word_match_status text null check (word_match_status in ('completed','failed','unsupported')),
   word_match_accuracy numeric null,
   word_match_completeness numeric null,
   azure_eval_status text not null default 'not_evaluated'
     check (azure_eval_status in ('not_evaluated','pending','completed','failed')),
+  azure_eval_request_seq integer not null default 0,
+  eval_requested_at timestamptz null,
   azure_accuracy_score numeric null,
   azure_fluency_score numeric null,
   azure_completeness_score numeric null,
@@ -843,13 +1812,31 @@ create index shadowing_attempts_round_segment_idx
   on shadowing_attempts(round_id, segment_index, created_at desc);
 
 alter table shadowing_attempts enable row level security;
-create policy "shadowing_attempts_owner" on shadowing_attempts for all using (auth.uid() = user_id);
+
+-- Owner may SELECT freely. No owner insert/update/delete policy at all (superseding Revision 3's
+-- "owner may insert a fresh row" policy -- R28 found that even a fresh-row-shape check at INSERT
+-- time still bypasses the round lock, the recording_duration_sec >= 0.5 floor, the stale-revision
+-- check, and idempotency-key validation, all of which only exist inside
+-- fn_record_shadowing_attempt; a narrower INSERT check closes the score-fabrication half of the
+-- gap R17 identified but not the validation-bypass half). All writes -- INSERT of a fresh
+-- practiced row, and UPDATE of provider-issued columns -- go through SECURITY DEFINER functions
+-- (§9.9): fn_record_shadowing_attempt for insert, fn_persist_azure_result /
+-- fn_persist_word_match_result for the evaluation columns -- none of these need an RLS policy to
+-- write, since SECURITY DEFINER already bypasses RLS as the table owner (§9.9). The service-role
+-- policy below is kept purely as an independent, standalone fallback for direct administrative/
+-- support access with the service-role key (outside the app's normal request path entirely), not
+-- because the functions need it -- this table simply has no policy that a plain authenticated
+-- client can use to write at all.
+create policy "shadowing_attempts_owner_select" on shadowing_attempts
+  for select using (auth.uid() = user_id);
+create policy "shadowing_attempts_service_write" on shadowing_attempts
+  for all using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
 ```
 
 No audio column of any kind — consistent with the "no long-term recording storage" policy, which
 this plan preserves exactly as it stands today (§14).
 
-### 8.6 `024_listening_progress.sql`
+### 8.8 `026_listening_progress.sql`
 
 ```sql
 create table listening_progress (
@@ -859,26 +1846,36 @@ create table listening_progress (
   transcript_id uuid null references transcripts(id) on delete set null,
   covered_intervals jsonb not null default '[]'::jsonb,
   covered_sec numeric not null default 0,
-  transcript_span_sec numeric null,
+  transcript_covered_sec numeric null,
   coverage_ratio numeric not null default 0,
   listened_through boolean not null default false,
   listened_through_at timestamptz null,
   last_position_sec numeric not null default 0,
   last_synced_at timestamptz not null default now(),
   legacy_source text null,
+  superseded_at timestamptz null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
-create unique index listening_progress_identity_idx
-  on listening_progress(user_id, youtube_video_id, transcript_id);
+-- Two partial unique indexes, not one plain unique index -- a plain unique index treats every
+-- NULL transcript_id as distinct, silently allowing multiple rows for a video with no transcript
+-- yet (a real bug the review caught in the first draft).
+create unique index listening_progress_identity_with_transcript_idx
+  on listening_progress(user_id, youtube_video_id, transcript_id) where transcript_id is not null;
+create unique index listening_progress_identity_no_transcript_idx
+  on listening_progress(user_id, youtube_video_id) where transcript_id is null;
 create index listening_progress_user_idx on listening_progress(user_id);
 
 alter table listening_progress enable row level security;
-create policy "listening_progress_owner" on listening_progress for all using (auth.uid() = user_id);
+-- Owner SELECT only (R28) -- covered_intervals/covered_sec/coverage_ratio are coverage data, not
+-- UI convenience; writes (including the null-transcript transition, §8.8) are reachable only via
+-- fn_flush_study_activity's listening kind (§9.9), which bypasses RLS as SECURITY DEFINER after
+-- its own auth.uid()/relationship checks.
+create policy "listening_progress_owner_select" on listening_progress for select using (auth.uid() = user_id);
 
 -- Backfill from the dead-but-not-forgotten listening_sessions table. This is a best-effort,
--- explicitly-provenanced import — NOT a claim of verified coverage (per the "do not invent
+-- explicitly-provenanced import -- NOT a claim of verified coverage (per the "do not invent
 -- Listening intervals from a last-played timestamp" rule). covered_intervals stays empty;
 -- only the last-known position carries over, purely for resume convenience.
 insert into listening_progress
@@ -888,107 +1885,567 @@ select distinct on (user_id, youtube_video_id, transcript_id)
 from listening_sessions
 where user_id is not null
 order by user_id, youtube_video_id, transcript_id, updated_at desc
-on conflict (user_id, youtube_video_id, transcript_id) do nothing;
+on conflict do nothing;
 
 comment on table listening_sessions is
   'Deprecated: superseded by listening_progress. No longer written to by the app '
-  '(it was already dead code before this migration — see audit §2.1/D1). Kept, not dropped, '
+  '(it was already dead code before this migration -- see audit §2.1/D1). Kept, not dropped, '
   'for historical provenance.';
 ```
 
-### 8.7 `025_transcript_revision_index.sql`
+**The transition rule for a video that later gains a transcript**, covering all five states the
+review asked this design to handle explicitly:
 
-```sql
-create index transcripts_canonical_lookup_idx
-  on transcripts(youtube_video_id, language, version desc);
+1. **Listening with an available transcript, no round** — the ordinary case: `listening_progress`
+   keyed `(user, video, transcript_id)`, exactly as designed above; no round involved.
+2. **Listening before any transcript exists** — tracked under the `transcript_id IS NULL` row
+   (partial unique index, §8.8 above). `covered_intervals` is still real, exact observed-position
+   data — the client tracks genuine playback intervals regardless of whether a transcript exists to
+   score them against; only `coverage_ratio`/`transcript_covered_sec` stay unset (§6.3's formula:
+   `0 if transcript_covered_sec is 0 or unknown`), since there's no segment union yet to intersect
+   against.
+3. **Listening after the first transcript becomes available** — the transition itself, corrected
+   below.
+4. **Listening across transcript regeneration** — the *listening* row stays keyed to whichever
+   `transcript_id` it was accumulated against; a regeneration does not retroactively move or merge
+   it (§6.9's `superseded_at` marks the *transcript* row, not the listening one). A user who
+   resumes Listening after regeneration starts a **fresh** `listening_progress` row for the new
+   `transcript_id`, at zero coverage for that revision — **no intersection carry-forward from A to
+   B**, unlike state 3 below. This is a deliberate difference, not the same rule: state 3 carries
+   forward from a `transcript_id IS NULL` row, where the client's raw observed positions are
+   transcript-agnostic data that can safely be intersected against whichever transcript arrives
+   first; A→B is a transition between two **real, possibly differently-timed** transcripts, where
+   blindly reusing A's intervals against B's segment timing could misattribute coverage to content
+   B doesn't actually contain at those positions. Not fabricating that carry-forward does **not**
+   mean the video looks "never studied," though — see §9.2/§10.2's separate "historical evidence of
+   study" signal, which is derived independently of which specific revision is currently selected.
+5. **Switching from Listening-only into the first Dictation/Shadowing round** — no special
+   handling needed, and none is added: rounds and Listening progress are independent by product
+   rule (Listening coverage never requires a round). Creating the video's first round does not
+   read, copy, or otherwise touch `listening_progress` — the two coexist as they always would for
+   a video with both kinds of activity.
+
+**State 3, corrected** (the review's core finding: the first draft discarded genuinely-observed
+data instead of crediting it). When a real `transcript_id` first becomes available for a video that
+has an existing `transcript_id IS NULL` row, the *first* `POST /api/listening/sync` call carrying
+that `transcriptId` performs the transition inside an advisory-locked section keyed by
+`hashtext(user_id || '::' || youtube_video_id)` (§6.5's general concurrency rule, applied here
+since no row for the new `(user, video, transcript_id)` key exists yet to lock directly — this is
+what makes the transition itself retry-safe: a second, concurrent sync call discovering "no
+transcript-scoped row yet" blocks on the same lock, and by the time it acquires it, the first
+call's `INSERT ... ON CONFLICT (user_id, youtube_video_id, transcript_id) DO NOTHING` has already
+run, so it simply finds the row and proceeds to ordinary merge logic instead of re-transitioning):
+
+```
+new_transcript_valid_union = segment_valid_intervals(new transcript_id), merged  (§6.3)
+carried_forward_intervals  = null_transcript_row.covered_intervals ∩ new_transcript_valid_union
+
+INSERT INTO listening_progress (user_id, youtube_video_id, transcript_id, covered_intervals,
+                                 covered_sec, last_position_sec, ...)
+VALUES (:userId, :videoId, :newTranscriptId, carried_forward_intervals,
+        Σ length(carried_forward_intervals), null_transcript_row.last_position_sec, ...)
+ON CONFLICT (user_id, youtube_video_id, transcript_id) WHERE transcript_id IS NOT NULL DO NOTHING;
+-- The WHERE clause above is required, not optional -- it names the exact partial index this
+-- INSERT targets (listening_progress_identity_with_transcript_idx, §8.8). A bare
+-- ON CONFLICT (user_id, youtube_video_id, transcript_id) with no predicate does not match either
+-- of the two partial unique indexes this table actually has and would fail at execution time.
+
+UPDATE listening_progress SET superseded_at = now()
+WHERE user_id = :userId AND youtube_video_id = :videoId AND transcript_id IS NULL;
 ```
 
-Supports the fixed generate/fetch routes picking "the current revision" efficiently once
-`version` actually increments (§8.4's companion app-code fix). No other schema change is needed —
-old transcript rows simply stop being touched after being superseded, which combined with `order
-by version desc limit 1` (replacing today's `order by updated_at desc limit 1`) is sufficient to
-determine the canonical revision.
+**Why intersection, not "start empty":** the null-transcript row's `covered_intervals` is genuine,
+exact observed-position data (state 2 above) — intersecting it with the new transcript's valid-
+segment union immediately credits whatever was actually listened to that also falls within real
+sentence timing, rather than discarding it and forcing the user to re-listen. This is safe by
+construction against fabricating coverage: intersection can only ever *reduce* credit relative to
+raw observed time, never invent it.
 
-### 8.8 `026_practice_round_backfill.sql`
+**Why the same rule also correctly keeps legacy position-only records distinct, with no special
+case:** the *other* source of a `transcript_id IS NULL` row is the `legacy_source =
+'legacy_listening_sessions'` backfill (§8.8's migration above), whose `covered_intervals` is
+**empty by construction** (the old `listening_sessions` table only ever recorded a raw playhead
+position, never real intervals — confirmed, `012_listening_sessions.sql`). Running the identical
+intersection formula against an empty set yields an empty result — a legacy position-only row
+transitions to zero carried-forward coverage automatically, without needing to distinguish "real
+null-transcript row" from "legacy-backfilled row" by any extra flag. `last_position_sec` still
+carries forward either way, purely for resume convenience (§5.5), never for coverage.
+
+### 8.9 `027_user_videos.sql`
 
 ```sql
--- required_sentence_count: derive from each round's own transcript_id, where known.
-update learning_sessions ls
-set required_sentence_count = sub.cnt
-from (
-  select transcript_id, count(*) as cnt
-  from transcript_segments
-  where text_normalized <> ''
-  group by transcript_id
-) sub
-where ls.transcript_id = sub.transcript_id
-  and ls.required_sentence_count is null;
+create table user_videos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  youtube_video_id text not null,
+  added_at timestamptz not null default now(),
+  last_mode text null check (last_mode in ('dictation','listening','shadowing')),
+  last_active_round_id uuid null references learning_sessions(id) on delete set null,
+  last_resume_segment_index integer null,
+  last_activity_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
 
--- completed_at: best-effort backfill from updated_at for already-completed rows.
--- This is an approximation, not a verified completion timestamp -- rows backfilled this way
--- are indistinguishable from freshly-completed ones at the column level, which is an accepted
--- limitation (see §14) since the exact historical moment was never recorded.
-update learning_sessions
-set completed_at = updated_at
+create unique index user_videos_identity_idx on user_videos(user_id, youtube_video_id);
+create index user_videos_user_recent_idx on user_videos(user_id, last_activity_at desc);
+
+alter table user_videos enable row level security;
+-- The one table in this plan that deliberately KEEPS owner `for all` (direct client writes
+-- allowed) rather than narrowing to SELECT-only (§9.9) -- reviewed and kept, not an oversight: no
+-- column here feeds coverage/completion/scores (§5.6's invariant), so there is nothing for a
+-- client to gain by writing it directly beyond cosmetic self-inconvenience (a wrong last_mode
+-- badge, a stale resume hint) -- the same threshold that keeps its consistency requirements looser
+-- than every other new table (§5.6).
+create policy "user_videos_owner" on user_videos for all using (auth.uid() = user_id);
+
+-- Backfill membership from every (user, video) with existing evidence -- reliable, not invented.
+insert into user_videos (user_id, youtube_video_id, added_at, last_activity_at)
+select user_id, youtube_video_id, min(started_at), max(updated_at)
+from learning_sessions where user_id is not null
+group by user_id, youtube_video_id
+union
+select user_id, youtube_video_id, min(started_at), max(updated_at)
+from listening_sessions where user_id is not null
+group by user_id, youtube_video_id
+on conflict (user_id, youtube_video_id) do nothing;
+```
+
+Never authoritative for coverage/completion/scores (§5.6's invariant) — this table exists purely
+to represent "added, not started" and to anchor the Library query (§10.2).
+
+### 8.10 `028_activity_flush_log.sql`
+
+```sql
+create table activity_flush_log (
+  study_session_id uuid not null references study_sessions(id) on delete cascade,
+  flush_batch_id uuid not null,
+  kind text not null check (kind in ('listening', 'activity')),
+  payload_fingerprint text not null,
+  processed_at timestamptz not null default now(),
+  primary key (study_session_id, flush_batch_id)
+);
+
+alter table activity_flush_log enable row level security;
+-- Owner may SELECT (debugging/support visibility only); INSERT/UPDATE/DELETE are reachable only
+-- through fn_flush_study_activity (SECURITY DEFINER, §9.9) -- an internal dedup/integrity record
+-- must not be freely writable by the client it's meant to police (R28). No owner-write policy is
+-- defined here at all, matching the pattern used for attempt_logs/shadowing_attempts (§9.9).
+create policy "activity_flush_log_owner_select" on activity_flush_log for select using (
+  auth.uid() = (select user_id from study_sessions where id = study_session_id)
+);
+```
+
+Retry-safe batch identity for the additive counters in §6.3b — mechanics fully specified there.
+
+### 8.11 `029_admin_and_size_estimate_columns.sql`
+
+```sql
+alter table users add column is_admin boolean not null default false;
+
+-- Blocks a client from granting themselves admin via a direct PostgREST PATCH -- the existing
+-- users_self_update policy (001_initial.sql:153, `for update using (auth.uid() = id)`) has no
+-- `with check`, so without this trigger a user could set is_admin=true on their own row (§9.9,
+-- R28). RLS still permits the row update; the trigger just makes this one column inert for a
+-- non-service-role actor.
+create or replace function prevent_self_admin_grant() returns trigger as $$
+begin
+  if auth.role() <> 'service_role' then
+    new.is_admin := old.is_admin;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger users_prevent_self_admin_grant
+  before update on users for each row execute function prevent_self_admin_grant();
+
+alter table transcripts
+  add column estimated_text_bytes bigint null,
+  add column estimated_segments_bytes bigint null,
+  add column estimated_translations_bytes bigint null,
+  add column estimated_highlights_bytes bigint null,
+  add column estimated_total_bytes bigint null,
+  add column size_estimated_at timestamptz null;
+
+-- Singleton write-gate row for the Phase 3 cutover runbook (§8.14/§12/§14.2) -- created here, in
+-- Phase 1, well before it's used, so it's simply part of the same early schema batch.
+create table app_write_gate (
+  id integer primary key default 1 check (id = 1),
+  completion_writes_paused boolean not null default false,
+  paused_at timestamptz null
+);
+insert into app_write_gate (id) values (1);
+
+-- Protect the gate itself: RLS enabled, zero permissive policies for authenticated/anon -- a
+-- client cannot read or write this table through any Supabase client call. Only the service role
+-- (used solely by whoever runs the cutover runbook, §8.14 -- bypasses RLS by default) and
+-- SECURITY DEFINER functions that explicitly check it (also bypass RLS, §9.9) can touch it. This
+-- is the "protect app_write_gate from ordinary-user modification" requirement -- without this,
+-- the default Supabase grant of table-level privileges to authenticated would otherwise leave the
+-- gate directly flippable by any signed-in user.
+alter table app_write_gate enable row level security;
+```
+
+The size-estimate columns are unused until Phase 9 (§6.9/§12) — added here so every new column
+exists in one early schema batch, per the fix for the review's migration-ordering bug (§8, intro).
+`app_write_gate` is likewise unused until Phase 3, for the same reason.
+
+**A note on section vs. execution order:** §8.1's table is the authoritative execution-order
+source. The prose subsections below keep their original physical position in this document for
+readability (each function's write-up stays near the ones it mirrors), but §8.15 — migration
+`030`, the duplicate-round reconciliation — now **executes before** §8.12–§8.14's migrations
+(`031`–`034`), per the renumbering in §12. Read §8.1's table, not this section's physical order,
+when the exact deployment sequence matters.
+
+### 8.12 `031_fn_record_dictation_attempt.sql` / `032_fn_record_shadowing_attempt.sql`
+
+Full logic specified in §6.5 (locking + explicit lookup-then-insert + completion check, one
+function per mode, mirroring each other's shape). Both are `SECURITY DEFINER` (§9.9) and derive
+the caller's identity from `auth.uid()` only — never from a request parameter. Steps:
+1. `SELECT id, status, transcript_id FROM learning_sessions WHERE id = :roundId AND user_id =
+   auth.uid() AND youtube_video_id = :videoId FOR UPDATE` — locks and validates ownership/video in
+   one statement (§9.7).
+2. Validate the request's `transcriptId` matches the locked row's `transcript_id` (§9.5's
+   stale-revision check — done here, inside the lock, not as a separate query).
+3. `SELECT` the existing attempt by `(round_id, segment_index, client_attempt_id)`; if found,
+   compare the immutable core payload and return it unchanged (§6.5's corrected flow — no
+   `updated_at` self-touch, since `attempt_logs` has no such column).
+4. If absent, `INSERT ... ON CONFLICT (...) DO NOTHING RETURNING *` (the unique index is a
+   defense-in-depth backstop, not the primary idempotency mechanism, since step 1's lock already
+   serializes every writer to this round).
+5. If a fresh insert happened, recompute coverage and conditionally complete
+   (`WHERE status='active' AND completed_at IS NULL`, §6.5).
+6. Return the attempt row, `wasInserted`, `roundCompletedByThisRequest`, and `roundStatus` (§6.5).
+
+### 8.13 `033_fn_session_activity_and_evaluation_functions.sql`
+
+Seven `SECURITY DEFINER` functions, bundled in one migration since all share the same
+execution-identity discipline (§9.9) and this app's scale doesn't warrant a separate file per
+function:
+
+- **`fn_create_or_get_active_round`** — the round-creation path §9.9's matrix specifies: locks/
+  checks for an existing active round for `(auth.uid(), youtube_video_id)`; if none, resolves the
+  video's `is_current AND status='ready'` transcript **server-side** (never a client-supplied
+  `transcriptId`, closing the pre-existing gap in `save-progress/route.ts:87,116` where this was
+  previously trusted verbatim from the client), computes `required_sentence_count`, allocates
+  `round_number = max+1`, inserts with `provenance='current'`. This is the function
+  `session/resume`'s "no round yet" path and the practice page's "start practicing" action call
+  into — the *only* path that creates a `learning_sessions` row going forward.
+- **`fn_update_resume_position`** — narrow, resume-convenience-only: `UPDATE learning_sessions SET
+  current_segment_index = :segmentIndex, video_current_time = :videoCurrentTimeSec, updated_at =
+  now() WHERE id = :roundId AND user_id = auth.uid()`. Deliberately cannot touch `status`,
+  `transcript_id`, `provenance`, `accuracy`, `completed_at`, `required_sentence_count`, or
+  `round_number` — those columns are not in its parameter list, not merely unchecked, so there is
+  no code path inside this function that could write them even by mistake.
+- **`fn_restart_round`** — "Practice again": `UPDATE learning_sessions SET status='abandoned' WHERE
+  user_id=auth.uid() AND youtube_video_id=:videoId AND status='active'`, then the same
+  round-creation logic as `fn_create_or_get_active_round`, then force-closes the current study
+  session (§5.3 rule 4) — all in one transaction, replacing `session/restart/route.ts`'s current
+  raw `.update()` (confirmed today's implementation, `session/restart/route.ts:27-41`).
+- **`fn_get_or_create_study_session`** — implements §5.3's rules: `pg_advisory_xact_lock(hashtext(user_id
+  || youtube_video_id))` first (no natural owning row exists before the session does), then either
+  reuse the open session (`last_activity_at` within 30 minutes) or force-close it (rule 4, explicit
+  new round) and open a fresh one.
+- **`fn_flush_study_activity`** — implements §6.3b/§9.6's atomic flush: lock the `study_sessions`
+  row, check `activity_flush_log` for `(study_session_id, flush_batch_id)` with fingerprint
+  comparison, and — only if genuinely new — insert the dedup row and apply the interval merge/
+  counter updates, all in one transaction (R27).
+- **`fn_persist_azure_result`** / **`fn_persist_word_match_result`** — the by-id-and-seq PATCH
+  logic from §9.4/§7.3, moved into functions rather than left as a bare service-role table write,
+  so the seq-staleness check lives in one place, not duplicated across call sites. Backend-only —
+  `EXECUTE` revoked from `authenticated` (§9.9); reachable only via the service-role client inside
+  `/api/practice/evaluate` and its recovery endpoint, after those routes have already verified the
+  caller's ownership using the caller's own client.
+
+**Two additional, explicitly temporary functions ship in this same migration, for the transition
+described in §8.14/§12 (issue group 2):** `fn_legacy_save_progress` and `fn_legacy_restart_round`
+mirror today's `save-progress`/`session/restart` route logic exactly (same permissiveness, same
+trust level — a deliberate non-improvement, since their only job is bridging to the cutover, not
+fixing anything early) with one addition: `SELECT completion_writes_paused FROM app_write_gate FOR
+SHARE` as their first statement, raising if paused. These two are dropped once Phase 3's real cutover
+lands (§8.14) — they exist only so the *existing* `save-progress`/`session/restart` routes can be
+made gate-aware in Phase 2, before `learning_sessions`' RLS is touched, without which the fencing
+mechanism in §8.14 would have nothing to fence.
+
+### 8.14 `034_provenance_backfill_and_completion_cutover.sql`
+
+**This migration now also tightens `learning_sessions`' RLS (§9.9) — moved here from being absent
+entirely, and deliberately not placed in Phase 1, because the *existing* `save-progress`/
+`session/restart` routes depend on the policies being dropped here until the moment Phase 3's real
+code replaces them (issue group 2).** Two parts, run in this order within the runbook below, not
+as an independent "apply the migration" step:
+
+**Part A — the fence itself**, a single transaction that makes the pause a genuine lock, not a
+polled flag (correcting the prior revision, where `CUTOVER_DRAIN_WINDOW_SEC` was the only thing
+standing between "gate closed" and "backfill runs"):
+```sql
+begin;
+select * from app_write_gate for update;          -- exclusive lock: blocks every concurrent
+                                                    -- `for share` reader (below) until commit.
+update app_write_gate set completion_writes_paused = true, paused_at = now();
+commit;                                            -- releases the lock; every writer that was
+                                                    -- blocked on `for share` now unblocks and
+                                                    -- correctly observes paused = true.
+-- :cutover_at is captured as this transaction's app_write_gate.paused_at for use below.
+```
+`fn_legacy_save_progress`/`fn_legacy_restart_round` (§8.13) each begin with `select
+completion_writes_paused from app_write_gate for share`. A call already past that statement and
+mid-write when this transaction starts blocks until `commit`, then re-reads `paused = true` and
+aborts — there is no window where a write started concurrently with the pause can land uncounted.
+A call that *fully committed* before this transaction acquired its lock is correctly attributed
+pre-cutover, since it happened-before by definition. **This lock, not a fixed wait, is the
+correctness mechanism** — `CUTOVER_DRAIN_WINDOW_SEC` (§4) is now only an *operational* timeout
+budget for the deploy-verification step below, never the guarantee that in-flight writes are
+accounted for.
+
+**Part B — the bounded backfill**, run only after Part A commits:
+```sql
+update learning_sessions set provenance = 'legacy_unverified'
+where provenance = 'current' and started_at <= :cutover_at;
+-- Bounded by started_at AND by the fence above -- together, not the timestamp alone, they are
+-- what makes this correct: the fence guarantees no learning_sessions row can be created or
+-- meaningfully written by the legacy path after cutover_at; the timestamp bound is then a safe,
+-- sufficient predicate for "everything the legacy path could have produced."
+
+update attempt_logs set segment_identity_provenance = 'legacy_unverified'
+where segment_identity_provenance = 'verified' and created_at <= :cutover_at;
+
+-- required_sentence_count / completed_at / round_number backfill (unchanged from Revision 2):
+update learning_sessions ls set required_sentence_count = sub.cnt
+from (select transcript_id, count(*) as cnt from transcript_segments
+      where text_normalized <> '' group by transcript_id) sub
+where ls.transcript_id = sub.transcript_id and ls.required_sentence_count is null;
+
+update learning_sessions set completed_at = updated_at
 where status = 'completed' and completed_at is null;
 
--- round_number: number sequentially per (user, video) by started_at, to make existing
--- duplicate-round rows (see D11) at least internally consistent.
 with numbered as (
   select id, row_number() over (partition by user_id, youtube_video_id order by started_at) as rn
   from learning_sessions
 )
-update learning_sessions ls
-set round_number = numbered.rn
-from numbered
-where ls.id = numbered.id;
+update learning_sessions ls set round_number = numbered.rn
+from numbered where ls.id = numbered.id;
+
+-- Part C, same migration, after the backfill: tighten learning_sessions' RLS. Safe now because
+-- the gate is still closed -- fn_legacy_* already rejects writes; dropping the raw policies below
+-- simply removes the now-redundant direct-table path too, per §9.9's verified starting point
+-- (sessions_owner/sessions_anon_insert, 001_initial.sql:156-157).
+drop policy "sessions_owner" on learning_sessions;
+drop policy "sessions_anon_insert" on learning_sessions;
+create policy "learning_sessions_owner_select" on learning_sessions for select
+  using (auth.uid() = user_id);
 ```
 
-### 8.9 `027_practice_round_active_uniqueness.sql`
+**The `app_write_gate` table itself** is created in migration `029` (§8.11), including its own RLS
+protection — not repeated here.
+
+**Full runbook, with the fence as the correctness mechanism and the timeout only as a budget:**
+1. Confirm (deploy-platform status, not a guess) that every instance in rotation is running Phase
+   2's code — i.e. `save-progress`/`session/restart` already call the gate-aware
+   `fn_legacy_save_progress`/`fn_legacy_restart_round`, and `learning_sessions`' RLS is still the
+   *old*, permissive shape (Part C hasn't run yet).
+2. Run Part A (above) — the fence is now live; every legacy write attempt from this point on is
+   genuinely blocked, not merely discouraged.
+3. Run Part B (the bounded backfill) — correct because of the fence, not because of any elapsed
+   time.
+4. Run Part C — tighten `learning_sessions`' RLS. From this instant, even a stray old-code instance
+   that somehow bypassed the transitional functions (it can't, absent a bug in Phase 2's own
+   deploy, but this is defense-in-depth) has no raw table access left either.
+5. Deploy Phase 3's real application code — new routes calling `fn_create_or_get_active_round`,
+   `fn_update_resume_position`, `fn_restart_round`, and the attempt-recording functions directly;
+   the transitional `fn_legacy_*` functions are no longer called by anything.
+6. Confirm via the deploy platform that Phase 3 is **100% live** (no old instances remain able to
+   receive new requests) — budgeted at up to `CUTOVER_DRAIN_WINDOW_SEC` (30s) as an operational
+   alarm threshold, not a correctness wait; if verification takes longer, the gate simply stays
+   closed longer; correctness does not degrade with time.
+7. `UPDATE app_write_gate SET completion_writes_paused = false` — reopens. Mostly cosmetic at this
+   point: Phase 3's code never consults the gate (it doesn't need to — it's correct by
+   construction, not by fencing), so this step exists for legibility and to leave the gate ready
+   for a future use, not because anything still depends on it being open.
+8. Drop `fn_legacy_save_progress`/`fn_legacy_restart_round` (cleanup — nothing calls them once
+   step 5 has shipped).
+
+**What users experience, honestly stated:** between steps 2 and 5, round creation, resume-position
+saves, and "Practice again" are **unavailable** (the gate rejects them with a clear
+`503 { error: "maintenance_pause", retryAfterSec }`, not a silent failure) — a short, real outage
+for those specific actions, not a cosmetic detail. This is the "short controlled pause" the task
+accepts as reasonable for this app's scale; it is bounded by how long steps 3–5 actually take (low
+single-digit minutes for a Vercel deploy at this app's size), not by a fixed number chosen in
+advance.
+
+**Recovery, per boundary:**
+- Failure inside Part A's transaction: it never commits: the gate never closes; nothing to undo.
+- Failure between Part A and Part B/C: `UPDATE app_write_gate SET completion_writes_paused = false`
+  reopens immediately; the backfill and RLS tightening simply haven't run yet, safe to leave for a
+  retry.
+- Failure between Part C and step 5 (RLS already tightened, Phase 3 not yet deployed) — the
+  **riskiest window**, since the only write paths left are the now-gated `fn_legacy_*` functions:
+  recovery is either (a) proceed with deploying Phase 3 promptly (the intended path), or (b) if
+  Phase 3 must be delayed, explicitly **re-create** the dropped policies
+  (`create policy "sessions_owner" on learning_sessions for all using (auth.uid() = user_id);` and
+  the anon-insert policy) and reopen the gate — a genuine, documented, reversible rollback of Part
+  C specifically, restoring exactly today's behavior. This is different from Phase 0's transcript-
+  immutability change (§8.18): tightening `learning_sessions`' RLS is reversible up until Phase 3's
+  new code has actually started relying on the tightened state for correctness (i.e., before any
+  new-path round has been created under it).
+- Failure between step 5 and step 7 (Phase 3 deployed, gate still closed): harmless — Phase 3 code
+  doesn't need the gate open to function correctly; reopen once verification completes.
+
+**The one-time anon-insert removal, noted explicitly:** `sessions_anon_insert`
+(`001_initial.sql:157`, permitting an insert with `user_id is null`) is dropped in Part C alongside
+`sessions_owner` — verified against the actual migration history (§9.9) to have no other
+grant/policy backing it and no other migration touching it; this plan's round model has no
+anonymous-practice concept, so nothing depends on preserving it.
+
+### 8.15 `030_practice_round_active_uniqueness.sql`
+
+**Moved from the old "034"/Phase 7 to migration `030`/Phase 1 (R21)** — runs immediately after the
+rest of Phase 1's schema, before Phase 2's functions are written against an assumption of round
+uniqueness:
 
 ```sql
--- Pre-migration cleanup: resolve any existing duplicate 'active' rows per (user, video),
--- keeping only the most recently updated one active (matches what /api/session/resume already
--- treats as authoritative -- "most recent wins" -- so no user-visible behavior changes).
+create table migration_030_abandoned_rounds_log (
+  round_id uuid not null,
+  previous_status text not null,
+  changed_at timestamptz not null default now()
+);
+
 with ranked as (
-  select id, row_number() over (
-    partition by user_id, youtube_video_id
-    order by updated_at desc
+  select id, status, row_number() over (
+    partition by user_id, youtube_video_id order by updated_at desc
   ) as rn
-  from learning_sessions
-  where status = 'active'
+  from learning_sessions where status = 'active'
 )
-update learning_sessions
-set status = 'abandoned'
-where id in (select id from ranked where rn > 1);
+insert into migration_030_abandoned_rounds_log (round_id, previous_status)
+select id, status from ranked where rn > 1;
+
+update learning_sessions set status = 'abandoned'
+where id in (select round_id from migration_030_abandoned_rounds_log);
 
 create unique index learning_sessions_one_active_per_video
-  on learning_sessions(user_id, youtube_video_id)
-  where status = 'active';
+  on learning_sessions(user_id, youtube_video_id) where status = 'active';
 ```
 
-### 8.10 RLS summary for new tables
+The audit-log table (not just a migration-file comment, correcting the review's finding) is what
+makes this cleanup reversible **in principle** — but the naive rollback statement (`UPDATE
+learning_sessions SET status = 'active' WHERE id IN (SELECT round_id FROM
+migration_030_abandoned_rounds_log)`) **cannot run while the unique index above still exists**: it
+would immediately violate `learning_sessions_one_active_per_video` by restoring more than one
+active row per `(user_id, youtube_video_id)`, the exact state that index exists to forbid. The
+corrected, ordered rollback (§8.18) is: (1) `DROP INDEX learning_sessions_one_active_per_video`
+first, (2) *then* run the restore `UPDATE`. Restoring the status flag also does not undo anything
+that happened *because* the surviving round was treated as the sole active one in the meantime
+(e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
+`active`, not the consequences of that period having passed under the new invariant.
 
-| Table | Policy | Matches existing pattern in |
+### 8.16 `035_fn_delete_transcript_revision.sql`
+
+Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
+identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
+supplied parameter. `SELECT ... FOR UPDATE` the target row (ordinary `READ COMMITTED` is
+sufficient here — the row lock, not a stricter isolation level, is what coordinates with
+publication, §6.9), re-check every **direct** protection condition (references for every round
+status) inside that same locked transaction, cascade-delete on success, `409
+revision_now_referenced` on a detected direct-reference race. **Shipped disabled by default**
+(§6.9's release gate) until enabled; even once enabled, refuses deletion outright for any video
+with vocabulary/bookmark activity, since that check has no available concurrency-safety mechanism
+(§6.9 — not merely a caught exception to retry).
+
+### 8.17 RLS summary for new tables
+
+**Superseded by §9.9's table, which reflects R28's correction — owner access on every
+scoring-relevant table below is SELECT-only, not `for all`.** Kept here only as a pointer, so a
+reader working through §8 sequentially isn't left with the pre-R28 shape:
+
+| Table | Policy (current — see §9.9) | Matches existing pattern in |
 |---|---|---|
-| `study_sessions` | `using (auth.uid() = user_id)`, all commands | `listening_sessions_owner` (`012:27`) |
-| `shadowing_attempts` | `using (auth.uid() = user_id)`, all commands | `bookmarks_owner_*` (`006:22-40`) |
-| `listening_progress` | `using (auth.uid() = user_id)`, all commands | `vocabulary_owner_*` (`002:42-60`) |
+| `study_sessions` | Owner SELECT only; writes via `fn_get_or_create_study_session`/`fn_flush_study_activity` | Tightened *from* `listening_sessions_owner`'s `for all` shape (`012:27`), not matching it — see §9.9 for why |
+| `shadowing_attempts` | Owner SELECT only; writes via `fn_record_shadowing_attempt`/`fn_persist_*` | New split pattern, motivated by R17/R28 — no existing table in this schema has an exact precedent |
+| `listening_progress` | Owner SELECT only; writes via `fn_flush_study_activity` | Tightened from the `vocabulary_owner_*` (`002:42-60`) `for all` shape |
+| `user_videos` | `using (auth.uid() = user_id)`, all commands — the one deliberate exception (§8.9/§9.9) | `bookmarks_owner_*` (`006:22-40`) |
+| `activity_flush_log` | Owner SELECT only via `study_sessions.user_id` subquery; writes via `fn_flush_study_activity` | New pattern, small/internal table |
 
-No public-read policy on any of the three — all are private, owner-only, matching every other
+No public-read policy on any of these — all are private, owner-only, matching every other
 per-user data table in the schema (never the `videos`/`transcripts`-style public-read pattern,
-which is reserved for shared content).
+reserved for shared content). `transcripts`/`transcript_segments` themselves keep their existing
+public-read/service-write policies unchanged; deletion (§8.16) is `SECURITY DEFINER`-executed
+after an `is_admin` check inside the function body (§9.9), not expressed as a new RLS policy on
+`transcripts` itself.
 
-### 8.11 Rollback
+### 8.18 Rollback
 
-Every migration above is additive-only (new tables/columns/indexes; the one `UPDATE` in `027` is
-reversible by re-flipping the affected rows back to `active`, which the migration file will
-capture in a paired `_rollback` comment listing the affected ids at migration time). No existing
-column is dropped, renamed, or has its type changed. Rolling back is: drop the new tables in
-reverse dependency order (`listening_progress`, `shadowing_attempts`, `study_sessions`), drop the
-new `attempt_logs`/`learning_sessions` columns, drop the new indexes. Application code would need
-to roll back in lockstep (it depends on the new columns/tables) — this is a standard
-schema+app coupled rollback, not a special case.
+Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`035`. That is
+**not** the same as every migration being behaviorally reversible-by-default, and this section does
+not claim it is: `030` (formerly `034`'s) `UPDATE` is reversible via its own audit-log table
+(§8.15) — not a bare comment; `034` (formerly `033`'s) provenance-tagging `UPDATE`s are addressed
+separately below (bounded, and not recommended to reverse once Phase 3 is live); and `024`/`025`/
+`034` each remove an existing or newly-added RLS policy granting direct owner-write access — a
+permission change with its own, separate rollback story (§9.9's tightened policies are reversible
+by re-creating the dropped ones, as §8.14 already specifies for `learning_sessions` specifically;
+`attempt_logs`/`shadowing_attempts` follow the identical pattern if ever needed).
+
+**Migration `030`'s (dedup/uniqueness) rollback, corrected — restoring rows while the unique index
+still exists is not a complete rollback (the review's finding):** the naive `UPDATE
+learning_sessions SET status = 'active' WHERE id IN (SELECT round_id FROM
+migration_030_abandoned_rounds_log)` fails outright while `learning_sessions_one_active_per_video`
+is still in place, since restoring more than one active row per `(user_id, youtube_video_id)` is
+exactly what that index forbids. The correct, ordered rollback is:
+1. `DROP INDEX learning_sessions_one_active_per_video`.
+2. `UPDATE learning_sessions SET status = 'active' WHERE id IN (SELECT round_id FROM
+   migration_030_abandoned_rounds_log)`.
+
+**What this rollback can and cannot restore:** it restores the `status` flag on the previously-
+abandoned rows to exactly what it was before the cleanup ran. It does **not** undo anything that
+happened *because* the surviving round was treated as the sole active one during the intervening
+period — e.g. new attempts recorded against the survivor, or a completion that occurred under the
+new invariant. If Phase 2+ has already shipped and relied on round uniqueness by the time this
+rollback runs, restoring multiple active rounds reintroduces the exact ambiguity (§9.2's `round`
+resolution, a client's cached `roundId`) this migration existed to remove — this rollback is
+therefore only a clean, complete operation if performed **before** Phase 2 ships; after that
+point, treat it the same as Phase 0's one-way-commitment rule below, not as a casually reversible
+step.
+
+**Rollback never prescribes dropping populated tables.** The standard rollback for any phase is:
+revert the application routes to their prior behavior (stop calling the new functions/tables),
+leaving the new tables and their data **in place** — a genuine `DROP TABLE` on a table that may
+already hold real user data (Shadowing attempts, Listening coverage, study sessions) is not a
+step this plan's rollback procedure ever takes; dropping schema is a separate, deliberate,
+manually-reviewed decision outside this plan's scope, only relevant if a genuine schema mistake
+(not just "we changed our mind about the feature") needs correcting.
+
+**Phase 0's app-code change is a one-way commitment once Phase 1+ ships.** Reverting the
+transcript-generate route back to hard-delete-in-place *after* later phases have started pinning
+`transcript_id`/`segment_id` on attempts would silently corrupt those pinned references — if
+Phase 0 itself must be rolled back, it has to happen strictly before Phase 1 begins, never after.
+Since Phase 0 now includes the reader-path fix (R21), this also covers the query-key change —
+reverting it after Phase 3+ has shipped `roundId`-scoped client state would be part of the same
+one-way commitment, not a separate concern.
+
+**Migration `034`'s (provenance backfill) rollback:** the backfill's `UPDATE`s are, in principle,
+reversible (`UPDATE learning_sessions SET provenance = 'current' WHERE id IN (...)`, scoped to
+exactly the rows this migration touched — recoverable from `started_at <= :cutover_at`), but doing
+so **after** Phase 3's Dictation cutover has shipped and users have relied on the "legacy
+completions are separate" distinction (§6.8/§14.5) would resurface rows in the primary
+"Completed videos" count that were deliberately excluded — this plan does not recommend reversing
+this specific migration once Phase 3 is live; recovery from a *failed* cutover (before Phase 3's
+route deploy) is covered by §8.14/§12 Phase 3's own runbook instead, which is the actually-exercised
+recovery path, not this migration-level reversal.
+
+**Compatibility with already-open old browser tabs**, addressed explicitly (the review asked for
+this), **with two different strategies depending on the endpoint (§14.3 — not a blanket "all
+additive" claim):** most extended API responses in §9 are additive-only — existing fields an old,
+cached client-side bundle already reads are never removed or renamed, so a tab that hasn't
+refreshed since before rollout keeps functioning against the old field set until it naturally
+reloads. The Dictation-submit and Shadowing-attempt **request** contracts follow the same
+philosophy on the way in — every new request field (`clientAttemptId`, `hintLevelUsed`,
+`studySessionId`, `transcriptId`) is optional with a safe server-side fallback for an old client
+that omits it (§14.3). `POST /api/practice/evaluate`'s **requirement** of `attemptId` is the one
+deliberate exception — it has no safe fallback (there is no attempt to guess), so an old client's
+request is rejected with a stable `409 stale_client_version` rather than adapted or guessed (§14.3).
+Once migration `034` ships, `save-progress` stops **honoring** an old tab's client-supplied
+`status:'completed'` (it's silently ignored, not rejected) — an old tab can still save its resume
+position, it just can no longer mark a round complete by itself; during the write-gate's brief
+pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually true."
 
 ---
 
@@ -998,23 +2455,31 @@ schema+app coupled rollback, not a special case.
 
 | Endpoint | Change | Backing tables |
 |---|---|---|
-| `POST /api/video/resolve` | Unchanged | `videos` |
-| `GET /api/videos/library` | **New** | `learning_sessions`, `shadowing_attempts`, `listening_progress` (aggregated) |
-| `GET /api/session/resume` | Extended response shape | `learning_sessions` |
-| `POST /api/session/save-progress` | Stops being trusted as the accuracy source of truth; still accepted for resume-position convenience | `learning_sessions` |
-| `POST /api/dictation/check` | Accepts `clientAttemptId`, `hintLevelUsed`, `studySessionId`; returns `roundCompleted` | `attempt_logs`, `learning_sessions` |
-| `POST /api/practice/attempt` | **New** — records Shadowing practice credit | `shadowing_attempts`, `learning_sessions` |
-| `PATCH /api/practice/attempt/[attemptId]/word-match` | **New** — persists Word Match result | `shadowing_attempts` |
-| `POST /api/practice/evaluate` | Extended — now requires `attemptId`, PATCHes that row | `shadowing_attempts` |
+| `POST /api/video/resolve` | Extended — also upserts `user_videos` membership (§5.6) | `videos`, `user_videos` |
+| `GET /api/videos/library` | **New** — `user_videos` LEFT JOIN onto the authoritative tables | `user_videos`, `learning_sessions`, `shadowing_attempts`, `listening_progress` |
+| `DELETE /api/videos/library/[videoId]` | **New** — removes only the caller's `user_videos` row (§6.9/§10.5) | `user_videos` |
+| `POST /api/videos/[videoId]/mode` | **New** — explicit mode-switch ping, writes `user_videos.last_mode` | `user_videos` |
+| `GET /api/session/resume` | Extended response shape | `learning_sessions`, `user_videos` |
+| `POST /api/session/save-progress` | Its create/completion-trusting logic is fully retired post-cutover (§8.14/§12 Phase 3) — calls `fn_create_or_get_active_round` (first touch) and `fn_update_resume_position` (resume convenience only) instead; a client-supplied `status:'completed'` has no effect from that point on | `learning_sessions` (via the two functions, never directly) |
+| `POST /api/dictation/check` | Accepts `clientAttemptId`, `hintLevelUsed`, `studySessionId`, `transcriptId` — all **optional**, each with a safe server-side fallback for an old client that omits them (§14.3); calls `fn_record_dictation_attempt`; returns `wasInserted`/`roundCompletedByThisRequest`/`roundStatus` | `attempt_logs`, `learning_sessions` (via §8.12's function) |
+| `POST /api/practice/attempt` | **New** — records Shadowing practice credit via `fn_record_shadowing_attempt` | `shadowing_attempts`, `learning_sessions` |
+| `PATCH /api/practice/attempt/[attemptId]/word-match` | **New** — persists Word Match result, service-role write | `shadowing_attempts` |
+| `POST /api/practice/evaluate` | **Breaking request-contract change**, not additive (§14.3) — requires `attemptId`; a request without it (an old, pre-Phase-4 cached bundle) gets `409 stale_client_version`, never guessed/adapted; increments `azure_eval_request_seq`; PATCHes by id + seq | `shadowing_attempts` |
+| `GET /api/practice/attempt/[attemptId]` | **New** — lets a client discover an evaluation's final result after navigating away, without any push mechanism | `shadowing_attempts` |
 | `GET /api/practice/quota` | Unchanged | Redis |
-| `POST /api/listening/sync` | **New**, replaces dead `/api/listening-session/save-progress` | `listening_progress` |
+| `POST /api/listening/sync` | **New**, replaces dead `/api/listening-session/save-progress`; carries `flushBatchId` | `listening_progress`, `study_sessions`, `activity_flush_log` |
+| `POST /api/study-session/activity` | **New** — generic cross-mode activity-pulse flush (§6.3b) | `study_sessions`, `activity_flush_log` |
 | `GET /api/listening/progress` | **New**, replaces dead `/api/listening-session/resume` | `listening_progress` |
 | `/api/listening-session/*` | **Removed** (dead code, §2.1/D1) | — |
 | `GET /api/session/[sessionId]/report` | Extended with Shadowing/Listening sections, never blended | `attempt_logs`, `shadowing_attempts`, `listening_progress` |
-| `POST /api/session/restart` | Reinterpreted as **"Practice again"** — same mechanics, new round_number | `learning_sessions` |
-| `GET /api/dashboard/summary` | Formulas corrected per §6.8 | all of the above |
+| `POST /api/session/restart` | Reinterpreted as **"Practice again"** — calls `fn_restart_round` (§8.13), force-closes the current study session (§7.2), new `round_number` | `learning_sessions`, `study_sessions` |
+| `GET /api/dashboard/summary` | Formulas corrected per §6.8, including the legacy-completions split | all of the above |
 | `GET /api/history/sessions` | **New** — chronological `study_sessions` view | `study_sessions` + joins |
 | `GET /api/history/mistakes` | Unchanged | `attempt_logs` |
+| `GET /api/transcripts/[videoId]/versions` | **New** — Script Versions listing (§6.9/§10.5) | `transcripts` |
+| `GET /api/transcripts/[videoId]/versions/[transcriptId]/preview` | **New** — read-only segment preview | `transcript_segments` |
+| `DELETE /api/transcripts/versions/[transcriptId]` | **New**, admin-only — calls `fn_delete_transcript_revision` | `transcripts` |
+| `GET /api/transcript/[videoId]` | Extended — optional `?transcriptId=` to fetch a specific pinned revision, not only "the current one" — **ships in Phase 0**, not Phase 9 (R21) | `transcripts`, `transcript_segments` |
 
 ### 9.2 `GET /api/session/resume?videoId=` — extended response
 
@@ -1024,6 +2489,7 @@ schema+app coupled rollback, not a special case.
     "roundId": "uuid",
     "roundNumber": 1,
     "status": "active",
+    "provenance": "current",
     "transcriptId": "uuid",
     "requiredSentenceCount": 10,
     "currentSegmentIndex": 6,
@@ -1031,82 +2497,513 @@ schema+app coupled rollback, not a special case.
     "coverage": { "dictation": 0.6, "shadowing": 0.4, "overall": 1.0 }
   },
   "lastMode": "shadowing",
-  "listening": { "coverageRatio": 0.42, "listenedThrough": false, "lastPositionSec": 88.2 }
+  "listening": {
+    "transcriptId": "uuid",
+    "coverageRatio": 0.42,
+    "listenedThrough": false,
+    "lastPositionSec": 88.2,
+    "hasTranscript": true,
+    "hasHistory": true
+  },
+  "elapsedSpanSec": 1320
 }
 ```
-`lastMode` is derived (max of latest `attempt_logs.created_at`, latest `shadowing_attempts.created_at`,
-`listening_progress.updated_at`), not stored redundantly — see §4's "no `user_videos` table" call.
+**`round` is nullable** — `null` for a video the user has added or listened to but never started a
+Dictation/Shadowing round for (the "added, not started" and "Listening-only" states, §5.6/§10.3).
+Every client consumer of this response (practice page, Continue Learning, resume-position logic)
+must treat `round === null` as a valid, expected state, not an error — this is a direct
+consequence of §5.3's `study_sessions.round_id` being nullable and is the exact shape the review
+flagged as under-specified.
+
+**`listening` is populated independently of `round`** — resolved the same way as §10.2's Library
+query (by the video's current transcript, or the null-transcript row, never by
+`round.transcriptId`), so it is present and accurate even when `round` is `null`. `hasTranscript`
+distinguishes "no coverage yet because nothing's been listened to" from "no coverage yet because
+there's no transcript to score against" (§6.3) — the client shows a raw-seconds figure with no
+percentage in the latter case, never a fabricated ratio. `listening.transcriptId` is the revision
+that `coverageRatio` is computed against (`null` when `hasTranscript` is false), included so the
+client's own `["listening-progress", userId, videoId, transcriptId]` query key (§11.1) has what it
+needs without a second round-trip. **`hasHistory`** is `§10.2`'s `has_listening_history(video)` —
+`true` whenever *any* `listening_progress` row exists for this `(user, video)`, across every
+`transcript_id` ever tracked, independent of `coverageRatio`/`transcriptId` above (which are always
+scoped to the *current* revision only). This is what lets the practice page correctly say "you've
+listened to this before" even when `coverageRatio` reads 0 because the current revision changed —
+without it, a video the user genuinely studied under a superseded revision would appear
+indistinguishable from one never touched at all, which is the exact Library-reclassification bug
+this pair of fields exists to prevent (§10.2).
+
+`lastMode` is read from `user_videos.last_mode` (§5.6/§9.1's mode-switch ping), not inferred from
+attempt timestamps — a mode switch with no accompanying submission (e.g. opening Listening,
+looking around, switching back) is now correctly reflected, which a purely-inferred value would
+miss. `elapsedSpanSec` is deliberately **not** named `activeDurationSec` — see §6.3b's labeling
+discipline; the renamed, estimated field only appears once Phase 5 ships.
 
 ### 9.3 `POST /api/practice/attempt` — Shadowing practice credit
 
 Request:
 ```json
 {
-  "roundId": "uuid", "segmentIndex": 7, "clientAttemptId": "uuid",
+  "roundId": "uuid", "transcriptId": "uuid", "segmentIndex": 7, "clientAttemptId": "uuid",
   "recordingDurationSec": 3.4, "studySessionId": "uuid"
 }
 ```
 Response:
 ```json
-{ "attemptId": "uuid", "isPracticeValid": true, "roundCompleted": false }
+{
+  "attemptId": "uuid", "isPracticeValid": true, "wasInserted": true,
+  "roundCompletedByThisRequest": false, "roundStatus": "active"
+}
 ```
-Server validates `recordingDurationSec >= 0.5`, checks the round's `transcript_id` still matches
-the round's current pinned revision (409 `stale_transcript_revision` otherwise — §9.5), inserts
-via `on conflict (round_id, segment_index, client_attempt_id) do nothing returning *` for
-idempotency, then runs the §6.5 completion check in the same transaction.
+Delegates to `fn_record_shadowing_attempt` (§8.12, `SECURITY DEFINER`, §9.9): locks and validates
+the round row first (`user_id = auth.uid() AND youtube_video_id = :videoId`, §9.7), validates
+`recordingDurationSec >= 0.5`, checks `transcriptId` against the round's pinned revision (409
+`stale_transcript_revision` otherwise — §9.5), then performs the corrected explicit
+lookup-then-insert flow (§6.5):
 
-### 9.4 `POST /api/practice/evaluate` — now attempt-scoped
+```sql
+-- Idempotency lookup within scope, inside the round lock already held.
+select * from shadowing_attempts
+where round_id = :roundId and segment_index = :segmentIndex and client_attempt_id = :clientAttemptId;
+-- found -> compare recording_duration_sec to the incoming request; match -> return unchanged;
+--          mismatch -> 409 idempotency_key_reused_with_different_payload.
+-- absent -> insert, with the unique index as a defense-in-depth backstop only:
+insert into shadowing_attempts (..., client_attempt_id) values (..., :clientAttemptId)
+on conflict (round_id, segment_index, client_attempt_id) do nothing
+returning *;
+```
 
-Request adds `attemptId` (required) alongside the existing `audio`/`referenceText`/`durationSec`
-multipart fields. On success, `PATCH`es `shadowing_attempts` **by id**, ownership-checked via the
-existing `ownsPracticeAttempt`-style helper (mirroring `ownsSession`/`ownsAttempt` in
-`src/lib/supabase/ownership.ts`) — never by "current segment." On failure, the response shape is
-unchanged from today (`502` with a message); the client maps it to `azure_eval_status='failed'`
-without touching any other row.
+**This replaces Revision 1's `ON CONFLICT ... DO NOTHING RETURNING *` (broken: returns zero rows
+on conflict) and Revision 3's `ON CONFLICT ... DO UPDATE SET updated_at = now()` (which, for
+`attempt_logs`, references a column that table does not have — confirmed against
+`001_initial.sql:105-114`; and which, for either table, mutates a retried row's timestamp when the
+review explicitly asked retries to leave timestamps untouched).** The explicit
+lookup-then-insert flow above returns exactly one row either way — found-and-matching, or
+freshly-inserted — without ever touching an existing row's columns on a retry, and rejects a
+found-but-mismatched key with `409` instead of silently accepting or silently overwriting it.
+**What is actually stable across a retry, stated precisely (correcting an earlier overclaim that
+`wasInserted`/`roundCompletedByThisRequest` are "byte-identical" between the original call and a
+retry — they are not, and are not meant to be):** `attemptId` and the recorded content
+(`isPracticeValid`, the submitted core payload) are stable — a retry always returns the identity
+and content of the one row that exists, never a different one. `wasInserted` and
+`roundCompletedByThisRequest` are **per-request flags describing what *this specific call* did**,
+not properties of the attempt — they are expected to differ: the original call may report
+`wasInserted: true` (it inserted) and, if it happened to complete the round,
+`roundCompletedByThisRequest: true`; a later retry of the same `clientAttemptId` always reports
+`wasInserted: false` (nothing to insert, the lookup found the existing row) and
+`roundCompletedByThisRequest: false` (no completion transition runs on a retry, §6.5), regardless
+of what the original call reported. This is correct idempotent behavior — a retry doesn't repeat
+the insert or the completion side effect — not a violation of a stability promise. `roundStatus`
+(the round's live status) is the one field never promised stable at all, since it can legitimately
+change between the original call and a retry for reasons unrelated to the retry itself.
 
-### 9.5 Stale-revision rejection (transcript regeneration safety)
+### 9.4 `POST /api/practice/evaluate` — attempt-scoped, server-resolved reference text
 
-Every write to `attempt_logs`/`shadowing_attempts`/`listening_progress` includes the client's
-believed `roundId`/`transcriptId`. The server compares it against the round's actual pinned
-`transcript_id` (frozen at round creation, immutable thereafter — §8.4). A mismatch means the
-client's local state is stale (e.g., a transcript regeneration happened in another tab/device) and
-the server responds `409 { error: "stale_transcript_revision" }` instead of silently accepting a
-write against a dead revision. The client's response: refetch `/api/session/resume` and prompt
-the user to continue in the current round or start a new one against the new revision — it never
-auto-merges old-revision data into the new one.
+Request: `attemptId` (required) + the recorded `audio` blob only — **no `referenceText` field**.
+The server resolves the text to score against from the attempt's own pinned `segment_id`
+(`transcript_segments.text_normalized`), never trusting client-supplied text — closes an
+integrity gap (a manipulated client could otherwise ask Azure to score arbitrary text and have it
+misattributed to a specific sentence).
 
-### 9.6 `POST /api/listening/sync`
+**Compatibility: `attemptId` is required, with no fallback, and this is deliberate (§14.3).**
+Unlike the Dictation-submit fields above, there is no safe way to adapt an old request that lacks
+one — an old, pre-Phase-4 client didn't know `attemptId` existed (Shadowing had no server
+persistence before this plan at all, §2.3/D2), so it also never called `/api/practice/attempt`
+first to create the row `attemptId` would refer to. Guessing "the current segment" or fabricating
+an attempt to accept such a request is exactly what the review asked this plan not to do — it
+would misattribute a score to history the user never actually produced through the new flow. The
+route instead returns a stable `409 { error: "stale_client_version", action: "reload_required" }`
+— actionable even for an old client's generic error handling, since it's a distinct, named reason
+rather than a generic validation failure. **Preserving unsaved work:** there is none to preserve
+beyond what already existed pre-plan — the recording itself was never persisted either way (no
+long-term audio storage, §14.1), and Shadowing practice credit (a *separate* concern from
+evaluation, §6.2) is unaffected by evaluate's rejection, since an old client that could reach this
+endpoint necessarily also predates `/api/practice/attempt` and was never going to record practice
+credit for that interaction regardless.
 
-Request:
+On request: increments `azure_eval_request_seq` and stamps `eval_requested_at`, returns the
+new `seq` value to the caller for correlation. On Azure success: `PATCH`es `shadowing_attempts`
+**by id AND `azure_eval_request_seq = :seqAtRequestTime`** (via the `fn_persist_azure_result`
+function, `SECURITY DEFINER`, §9.9 — not a bare owner/service-role table write) — a stale response
+whose seq no longer matches the row's current value (a second Evaluate click already superseded
+it) matches zero rows and is silently discarded, never overwriting a newer result. On failure
+(Azure error, quota, or `EVAL_PENDING_TIMEOUT_SEC` expiry): same by-id-and-seq function call sets
+`azure_eval_status='failed'`, `azure_error_reason` — never touches any other row.
+
+**Azure-success/database-failure recovery, bounded and non-forgeable (correcting Revision 3's
+underspecified `persisted:false`).** If Azure succeeds but the immediate persistence call fails
+(a transient DB error), the route retries it a bounded number of times (3, short backoff) before
+giving up. If it still hasn't persisted, the review correctly identified the risk in what
+"retry just the persistence step" could mean: a naive endpoint that accepts client-supplied scores
+for that retry would let a malicious client POST fabricated scores through it directly. Instead:
+
+- The HTTP response carries `persisted:false` plus a **server-signed recovery token** — not the
+  raw scores as trusted input — `recoveryToken = base64url(payload) + "." + base64url(HMAC-SHA256(payload, AZURE_RECOVERY_SIGNING_SECRET))`,
+  where `payload = {attemptId, userId, seq, scores, issuedAt, expiresAt}` and `expiresAt = issuedAt
+  + AZURE_RECOVERY_TOKEN_TTL_SEC` (600, §4). `AZURE_RECOVERY_SIGNING_SECRET` is a new server-only
+  environment variable, never exposed to the client.
+- The client displays the scores locally from the same response body (unaffected by persistence
+  failing) and may call a new, narrow `POST /api/practice/evaluate/persist-recovery` endpoint with
+  **only** the opaque `recoveryToken` — it never resubmits score values itself.
+- That endpoint verifies the HMAC signature (rejects any tampering), checks `expiresAt` has not
+  passed (rejects a stale replay), checks `payload.seq` still matches the row's current
+  `azure_eval_request_seq` (the same stale-response protection as the normal path — a newer
+  Evaluate click since the token was issued invalidates it), and only then calls
+  `fn_persist_azure_result` with the token's embedded scores. The client never gets to influence
+  the score *values*, only relay a token it cannot forge or extend past `AZURE_RECOVERY_TOKEN_TTL_SEC`.
+- This also satisfies "must not require another paid evaluation when a recoverable verified result
+  is available": persistence-retry never calls Azure again — the already-obtained, signature-verified
+  result is simply written on a later attempt, within the token's bounded lifetime. Past
+  `AZURE_RECOVERY_TOKEN_TTL_SEC`, the token is refused and the client must re-request evaluation
+  (a fresh, real Azure call) — a deliberate, bounded limit rather than an indefinitely-replayable
+  credential.
+
+### 9.5 Stale-revision rejection — round-based writes only, split from Listening's own rule
+
+**This rule applies to `attempt_logs`/`shadowing_attempts` — never to `listening_progress`, which
+has its own, different rule (below).** A round-based write includes the client's believed
+`roundId`/`transcriptId`. The server compares it against the round's actual pinned `transcript_id`
+(frozen at round creation, immutable thereafter — §8.3/§8.6). A mismatch means the client's local
+state is stale (e.g., a transcript regeneration happened in another tab/device) and the server
+responds `409 { error: "stale_transcript_revision" }` instead of silently accepting a write against
+a dead revision. The client's response: refetch `/api/session/resume` and prompt the user to
+continue in the current round or start a new one against the new revision — it never auto-merges
+old-revision data into the new one. This check happens **inside** the locked section of
+`fn_record_dictation_attempt`/`fn_record_shadowing_attempt` (§8.12), not as a separate, racy
+pre-check query. **This rule exists because a round *pins* a revision** (§4/§6.9) — writing against
+any transcript other than the one the round is immutably pinned to is a contradiction the server
+must reject.
+
+**Listening writes are not subject to this rule, by design, not by oversight (correcting a
+contradiction between this section and §9.7 in a prior draft — that draft's §9.7 already said
+round-less Listening writes validate without requiring a round, while this section's opening
+sentence still listed `listening_progress` among the round-pinned checks).** `listening_progress`
+has no pinning concept at all: it is keyed directly by `(user, video, transcript_id)`, and the
+client's `transcriptId` on a sync request simply identifies *which* revision's segment timing to
+score the observation against — not a claim that must match some other row's frozen value. A sync
+request is accepted as long as `transcriptId` names a transcript that actually exists (the ordinary
+FK constraint on `listening_progress.transcript_id`); there is no "your revision is stale, refresh
+and retry" rejection for Listening, and none is added. This is also what makes an already-open
+Listening session survive a concurrent regeneration correctly — see §9.6's explicit rule below —
+rather than losing buffered observations to a 409 the way a round-based write legitimately would.
+
+### 9.6 `POST /api/listening/sync` and `POST /api/study-session/activity`
+
+Listening sync request:
 ```json
-{ "videoId": "abc123", "transcriptId": "uuid", "intervals": [{"start": 41.2, "end": 88.9}],
-  "currentPositionSec": 88.9, "studySessionId": "uuid" }
+{ "videoId": "abc123", "transcriptId": "uuid", "flushBatchId": "uuid",
+  "intervals": [{"start": 41.2, "end": 51.2}, {"start": 41.2, "end": 51.2}], "currentPositionSec": 88.9,
+  "studySessionId": "uuid", "clientTimezone": "Asia/Ho_Chi_Minh" }
 ```
+(`intervals` may contain overlapping entries within one batch — e.g. the same span played twice —
+deliberately **not** pre-merged client-side, per §5.3's replay-inclusive `listening_observed_sec`
+requirement.)
+
 Response:
 ```json
-{ "coverageRatio": 0.42, "listenedThrough": false, "coveredSec": 47.7 }
+{ "coverageRatio": 0.42, "listenedThrough": false, "coveredSec": 47.7, "processed": true,
+  "lastPositionSec": 88.9, "hasHistory": true }
 ```
-Server-side interval merge per §6.3; `intervals` is the client's locally-buffered delta since the
-last successful flush (bounded, §6.3's 15s cadence) — not a full replay of the whole session.
+`lastPositionSec`/`hasHistory` are included so the client's direct cache patch of
+`["listening-progress", userId, videoId, transcriptId]` (§11.2) has every field that query's cached
+shape needs from this response alone — echoing `lastPositionSec` back (mirroring the request's own
+`currentPositionSec`) and including `hasHistory` (trivially `true` from this point on, but
+otherwise stale on a merge-only patch) avoids silently leaving stale values in place, per the rule
+that a direct-patch mutation's response must actually carry what the patch needs, not invent it.
+`processed:false` means the `flushBatchId` had already been seen (`activity_flush_log`, §8.10) —
+the response fields still reflect current state, just without re-applying any additive update.
 
-### 9.7 Reliable-writes mechanisms — summary
+**Single-transaction atomicity, closing a gap the review found (R27):** both this route and
+`POST /api/study-session/activity` delegate to one `SECURITY DEFINER` Postgres function,
+`fn_flush_study_activity(kind, study_session_id, flush_batch_id, payload, ...)` (§8.10/§9.9) — not
+a sequence of independent REST calls from the route handler. A route handler issuing separate
+calls (dedup-log insert, then a *separate* interval-merge update, then a *separate*
+counter/timestamp update) would not be atomic — a crash between them could leave a dedup marker
+recorded with no progress actually applied, which is exactly the "processed-batch marker that
+causes a valid retry to lose data" the review flagged. Inside one function, in one transaction:
+
+```sql
+-- 1. Lock the owning study_sessions row (a natural owning row already exists here, unlike
+--    listening-progress-transition's advisory lock, §8.8) and validate ownership.
+SELECT id FROM study_sessions WHERE id = :studySessionId AND user_id = auth.uid() FOR UPDATE;
+
+-- 2. Idempotency + payload-mismatch detection, via a stored fingerprint -- not just a dedup
+--    marker. A reused flush_batch_id with DIFFERENT content is a client bug (or, in principle,
+--    tampering) and must be rejected, not silently no-op'd as if it were a genuine retry.
+SELECT payload_fingerprint FROM activity_flush_log
+WHERE study_session_id = :studySessionId AND flush_batch_id = :flushBatchId;
+
+IF found AND payload_fingerprint <> fingerprint(:payload) THEN
+  RAISE EXCEPTION 'flush_batch_id_reused_with_different_payload';  -- 409
+ELSIF found THEN
+  RETURN current state, processed := false;  -- genuine retry, pure no-op
+END IF;
+
+-- 3. Not seen before: record the dedup marker AND apply the update, in the same transaction.
+INSERT INTO activity_flush_log (study_session_id, flush_batch_id, kind, payload_fingerprint)
+VALUES (:studySessionId, :flushBatchId, :kind, fingerprint(:payload));
+
+-- listening kind -- upsert aligned with the ACTUAL partial unique indexes (§8.8), which are two
+-- separate indexes, not one plain unique constraint: the ON CONFLICT target must name the exact
+-- predicate each one uses, or Postgres cannot match either partial index at all.
+--   raw_observed_delta = sum(entry.end - entry.start) over every entry in :intervals, UNMERGED
+--     (§5.3's replay-inclusive listening_observed_sec -- computed from the raw payload, before
+--     any merge below).
+IF :transcriptId IS NOT NULL THEN
+  INSERT INTO listening_progress (user_id, youtube_video_id, transcript_id, covered_intervals,
+                                   covered_sec, listening_observed_sec, last_position_sec, ...)
+  VALUES (auth.uid(), :videoId, :transcriptId, merge(:intervals), ..., raw_observed_delta, :currentPositionSec, ...)
+  ON CONFLICT (user_id, youtube_video_id, transcript_id) WHERE transcript_id IS NOT NULL
+  DO UPDATE SET covered_intervals = merge_exact(listening_progress.covered_intervals, :intervals),
+                covered_sec = ..., listening_observed_sec = listening_progress.listening_observed_sec + raw_observed_delta,
+                last_position_sec = :currentPositionSec, last_synced_at = now();
+ELSE
+  INSERT INTO listening_progress (user_id, youtube_video_id, transcript_id, covered_intervals,
+                                   listening_observed_sec, last_position_sec, ...)
+  VALUES (auth.uid(), :videoId, NULL, merge(:intervals), raw_observed_delta, :currentPositionSec, ...)
+  ON CONFLICT (user_id, youtube_video_id) WHERE transcript_id IS NULL
+  DO UPDATE SET covered_intervals = merge_exact(listening_progress.covered_intervals, :intervals),
+                listening_observed_sec = listening_progress.listening_observed_sec + raw_observed_delta,
+                last_position_sec = :currentPositionSec, last_synced_at = now();
+  -- No transcript loaded yet on the client -- state 2 of §8.8's five-state list. coverage_ratio
+  -- stays 0/unset until a real transcript_id branch above eventually seeds one (§8.8's transition).
+END IF;
+-- listening_newly_covered_sec (session-scoped, on study_sessions) is bumped separately by
+-- covered_sec_after - covered_sec_before, computed from the same UPDATE ... RETURNING.
+
+-- activity kind: merge intervals into study_sessions.activity_intervals (§6.3b), bump
+-- last_activity_at.
+
+-- 4. Return the new state, processed := true.
+```
+
+A crash or error at any point after step 1 rolls back the **entire** transaction, dedup-log insert
+included — there is no state where the marker exists but the progress it should have gated does
+not, closing the gap directly. `intervals` is the client's locally-buffered delta since the last
+successful flush, bounded to `MAX_PENDING_BUFFER_SEC` (300s) of worst-case retained data, not a
+full replay of the whole session.
+
+`POST /api/study-session/activity` (generic, cross-mode) shares the same function, `flushBatchId`/
+fingerprint mechanism, carrying candidate `activity_intervals` (§6.3b) instead of media-position
+intervals — same request/response shape, different `kind` value.
+
+**Explicit rule: an already-open Listening session when another client regenerates the transcript
+(the task's own required scenario).** Nothing about §9.5's stale-revision rejection applies here
+(Listening is exempt, above), so the answer is simple and loss-free: every buffered interval the
+client has accumulated is tagged, client-side, with the `transcriptId` that was loaded **at the
+moment each observation was made** — not "whatever's current now." The next flush sends that
+`transcriptId` unchanged, and the server credits it against exactly that revision's row, regardless
+of what has since become current. **Pending observations are never lost and never silently
+reassigned** to a different revision because of a regeneration mid-session — they are scored
+against the revision the user actually watched, which is the only revision the observation is
+meaningful against in the first place. If the user's player itself later reloads a new (current)
+transcript — a separate, explicit action, not something a background regeneration does on its
+own — the client simply starts a **new** buffer tagged with the new `transcriptId`, which the
+server accumulates into its own row per the ordinary upsert above; no merge across the two
+revisions is attempted (§8.8's reasoning: real content differences between revisions make blind
+carry-forward unsafe, unlike the one narrow, safe exception in state 3 of §8.8's list).
+
+### 9.7 Relationship validation, not only row ownership
+
+Every write in §9.3/§9.4/§9.6 validates, server-side, before accepting:
+
+| Check | Enforced by |
+|---|---|
+| Round belongs to the calling user and the claimed video | `fn_record_*` functions, `WHERE user_id = auth.uid() AND youtube_video_id = :videoId` on the locked round row |
+| Segment belongs to the round's pinned transcript | `segment_id` resolved via `(transcript_id, segment_index)` lookup inside the same function, not trusted as a bare client-supplied FK |
+| Study session belongs to the calling user, the claimed video, and (when set) a compatible round | `fn_get_or_create_study_session`/`fn_flush_study_activity` check `study_sessions.user_id = auth.uid() AND youtube_video_id = :videoId`; if the session has a non-null `round_id`, it must equal the round the current write targets — a stale `studySessionId` from a since-force-closed session (§5.3 rule 4) is rejected, not silently reattached |
+| Attempt belongs to the expected round/study session | `study_session_id` (when present) checked via `ownsStudySession` (mirroring `ownsSession`/`ownsAttempt`, `src/lib/supabase/ownership.ts`) |
+| Round-less Listening writes validate without requiring a round | `fn_flush_study_activity`'s listening kind checks `auth.uid()` + `youtube_video_id` + (when present) `study_session_id`/`transcript_id` directly against `listening_progress`'s own identity — it never looks up or requires a `learning_sessions` row, matching the product rule that Listening coverage doesn't require a round (§5.5/§6.3/R24) |
+| Reference text for Azure resolved server-side | §9.4 — never accepted from the client payload |
+| Provider-issued scores only writable by the server itself | §9.9 — no owner-write RLS policy exists on `shadowing_attempts` at all; writes are `SECURITY DEFINER`-function-only |
+| Direct-client bypass of every check above | §9.9 — RLS on `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` is owner-SELECT-only; none of these checks can be skipped by calling PostgREST directly instead of the intended function |
+
+### 9.8 Reliable-writes mechanisms — summary
 
 | Requirement | Mechanism |
 |---|---|
 | Stable attempt identifiers | Client-generated `clientAttemptId` (UUID v4), one per logical submit, reused across network retries of that same submit |
-| Idempotent writes | `insert ... on conflict (round/segment/clientAttemptId) do nothing returning *` |
-| Unique constraints | §8.4/§8.5 idempotency indexes |
-| Transactions / conditional updates | Attempt insert + §6.5 completion check run as one server-side Postgres function invoked via `.rpc()`, not two separate HTTP round-trips — the minimum needed to avoid a read-then-write race between concurrent tabs |
-| Server timestamps | `created_at`/`updated_at` always `now()` server-side — already the existing pattern, unchanged |
+| Idempotent writes | Explicit lock-then-lookup-then-insert (§6.5) — no `ON CONFLICT ... DO UPDATE` self-touch, since `attempt_logs` has no `updated_at` column to touch; the unique index remains as a defense-in-depth backstop only (§9.3) |
+| Idempotency-key reuse with a different payload | Rejected with `409`, not silently accepted (§9.3) |
+| Unique constraints | §8.6/§8.7 idempotency indexes |
+| Retry-safe additive counters, with payload-mismatch rejection | `activity_flush_log` dedup + `payload_fingerprint`, applied inside one transaction alongside the interval merge/counter update itself, not as a separate call (§6.3b/§8.10/§9.6, R27) |
+| Transactions / locking | `SELECT ... FOR UPDATE` on the round row before insert, inside one Postgres function (§6.5/§8.12) — the mechanism that actually closes the concurrent-completion race, not just "one transaction" |
+| Server timestamps | `created_at` (and `updated_at` where the table actually has one, e.g. `shadowing_attempts`) always `now()` server-side — already the existing pattern, unchanged; retries never touch either (§6.5) |
 | Version checks | §9.5's stale-revision rejection |
-| Bounded local buffering | Listening's ≤15s interval delta buffer only — no general offline queue |
-| Async result → original attempt | §7.4 — PATCH by server-assigned `attemptId`, never by "currently visible" state |
-| Concurrent tabs/devices | Naturally handled: attempts are a set (union), not a scalar overwrite; completion's `WHERE completed_at IS NULL` guard makes a two-tab race a no-op on the loser |
+| Anti-staleness for async results | `azure_eval_request_seq` (§9.4) — a stale evaluation response can never overwrite a newer one |
+| Bounded local buffering | Listening/activity flush buffers, worst-case bounded to `MAX_PENDING_BUFFER_SEC` (300s) under sustained failure — not a general offline queue |
+| Async result → original attempt | §7.4 — PATCH by server-assigned `attemptId` **and** current `azure_eval_request_seq`, never by "currently visible" state |
+| Concurrent tabs/devices | Attempts are a set (union), not a scalar overwrite; completion's row lock (§6.5) makes a two-tab race resolve correctly rather than merely "not error"; cross-session time dedup via §6.3b's account-level union |
+| Abandoned/completed rounds | `WHERE status='active' AND completed_at IS NULL` guard — a delayed request can still write its attempt but never resurrects round state |
 | Session expiration mid-write | 401 surfaces a "sign back in to save this" toast; the client retains the unsent attempt in its existing local buffer (already-present `sessionPersistence.ts` pattern) for a retry after re-auth — no new offline-sync system |
+| Direct-client-write bypass of the above | Closed by §9.9's RLS tightening — none of this table's guarantees would hold if a client could reach `attempt_logs`/`shadowing_attempts`/etc. directly via PostgREST, which this app's existing client-side Supabase client makes possible unless explicitly closed (R28) |
 
 Deliberately **not** built: event sourcing, a general offline-sync engine, or a client-side
 conflict-resolution UI — the task explicitly asks to avoid these unless the existing architecture
-makes them necessary, and none of the 20 acceptance scenarios (§13) require them.
+makes them necessary, and none of the acceptance scenarios (§13) require them. **Real PostgreSQL
+integration tests are required for the concurrency properties in this table** (§13) — the existing
+mocked-Supabase-client Jest suite cannot exercise row locking or advisory locks meaningfully.
+
+### 9.9 Execution identity and write authorization
+
+**The gap this closes, verified against actual policies, not assumed.** Every check described in
+§9.7/§9.8 lives inside a Postgres function or a Next.js route handler — but this app's practice
+page already ships a client-side Supabase client authenticated with the user's own JWT
+(`src/lib/supabase/client.ts`, confirmed), and the *actual* policies on `learning_sessions` today
+are, verified directly against `supabase/migrations/001_initial.sql:156-157`:
+```sql
+create policy "sessions_owner"       on learning_sessions for all using (auth.uid() = user_id);
+create policy "sessions_anon_insert" on learning_sessions for insert with check (user_id is null);
+```
+— i.e. an authenticated owner has full `for all` access with no `with check` at all (so *every*
+column, including `status`, `transcript_id`, `provenance`, `accuracy`, `required_sentence_count`,
+`completed_at`, and `round_number`, is directly writable via a raw PostgREST call), **and** an
+*unauthenticated* caller may insert a row with `user_id is null` outright. `attempt_logs` had the
+same shape (`attempts_owner`, `001_initial.sql:160-161`), already fixed in §8.6. **`learning_sessions`
+was left out of that fix in the prior revision despite being identified as the same class of
+bypass** — this section closes it, and is the reason this table's RLS work now moves into the
+cutover migration (§8.14) rather than Phase 1, per §12's revised sequencing (issue group 2 below).
+
+**Two different execution models, not one blanket rule.** The prior revision's claim that "every
+function is invoked via the caller's own RLS-respecting client, never the service-role key" was
+too broad — it correctly describes most functions but is actively wrong for shared-content
+publication and provider-result persistence, which have no per-user actor to check against and
+must not be reachable by a browser at all. The matrix below is the actual, function-by-function
+model; nothing here is a blanket default.
+
+**Every function below is `SECURITY DEFINER`, owned by the table owner (`postgres`), which bypasses
+RLS on the tables it touches (RLS applies to the owner only under `FORCE ROW LEVEL SECURITY`,
+which none of these tables set) — always declared with an explicit, pinned `search_path`:**
+```sql
+create or replace function fn_record_dictation_attempt(...) returns ... as $$
+  ...
+$$ language plpgsql
+   security definer
+   set search_path = public, pg_temp;  -- every SECURITY DEFINER function in this plan pins this,
+   -- closing search_path-hijacking: without it, a role that can create objects earlier in its own
+   -- search_path could shadow an unqualified table/function reference the function body uses.
+```
+
+#### Per-function permission matrix
+
+| Function | Purpose | Allowed caller | Execution role | Actor identity source | Client inputs | Checks enforced inside | Tables/fields it may modify |
+|---|---|---|---|---|---|---|---|
+| `fn_create_or_get_active_round` | Idempotently resolve or create the current round for `(user, video)` | Authenticated user (own client) | `SECURITY DEFINER`, owned by `postgres` | `auth.uid()` inside the function — never a request parameter | `youtube_video_id` | Existing-active-round lookup; if none, resolves `is_current AND status='ready'` transcript **server-side** (never client-supplied), computes `required_sentence_count`, allocates `round_number` | `learning_sessions` INSERT only (new row); no UPDATE of an existing row's authoritative fields |
+| `fn_update_resume_position` | Save "resume where you left off" convenience state | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `videoCurrentTimeSec` | `WHERE id = :roundId AND user_id = auth.uid()` | `learning_sessions.current_segment_index`, `.video_current_time`, `.updated_at` **only** — cannot touch `status`/`transcript_id`/`provenance`/`accuracy`/`completed_at`/`required_sentence_count`/`round_number` (not in its parameter list at all, not merely unchecked) |
+| `fn_restart_round` | "Practice again" — abandon current round, create a new one, force-close the study session | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `youtube_video_id` | `WHERE user_id = auth.uid()` on both the abandon and the create step, inside one transaction | `learning_sessions` (UPDATE `status='abandoned'` on the old row, INSERT the new one), `study_sessions` (force-close, §5.3 rule 4) |
+| `fn_record_dictation_attempt` / `fn_record_shadowing_attempt` | Locked, idempotent attempt recording + completion check | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `clientAttemptId`, mode-specific payload, `transcriptId` (validated, not trusted — §9.5) | Round lock + ownership/video match (§9.7); stale-revision check; idempotency-key lookup/mismatch (§6.5) | `attempt_logs`/`shadowing_attempts` INSERT only (never UPDATE an existing row's content); `learning_sessions.status`/`.completed_at` (completion transition only, guarded) |
+| `fn_get_or_create_study_session` | Session start/resume/force-close | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `youtube_video_id`, current round id (if any) | Advisory lock; §5.3 rules | `study_sessions` INSERT/UPDATE |
+| `fn_flush_study_activity` | Atomic Listening/activity flush | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `kind`, `studySessionId`, `flushBatchId`, raw interval payload, `transcriptId` (Listening only) | Session lock + ownership (§9.7); fingerprint mismatch check (§9.6) | `study_sessions.activity_intervals`/counters, `listening_progress`, `activity_flush_log` |
+| **`fn_publish_transcript_revision`** | Atomic transcript-revision publish (writer side of §6.9) | **Backend only — the `/api/transcript/generate` route, via the service-role client** | `SECURITY DEFINER` | **None** — there is no per-user actor to check; see "backend-mediated functions," below | `youtubeVideoId`, `language`, `source`, full text + segments, fingerprint | Advisory lock; fingerprint match; row-lock-and-reverify on promotion (§6.9's coordination protocol, issue group 3) | `transcripts`, `transcript_segments` |
+| **`fn_persist_azure_result`** / **`fn_persist_word_match_result`** | Persist a provider's result, by id + sequence | **Backend only — `/api/practice/evaluate` and its recovery endpoint, via the service-role client** | `SECURITY DEFINER` | **None** — see below | `attemptId`, `seq`, scores | `WHERE id = :attemptId AND azure_eval_request_seq = :seq` (staleness) | `shadowing_attempts`' provider-result columns only |
+| `fn_delete_transcript_revision` | Reference-checked revision deletion | Authenticated user (own client) — has a real per-user actor (the admin performing the deletion), unlike publish/persist above | `SECURITY DEFINER` | `auth.uid()`, checked against `users.is_admin` inside the function body | `transcriptId` | `is_admin`; every retention condition, re-checked under lock (§6.9) | `transcripts`, cascade-deleted children |
+
+**`EXECUTE` grants match the caller column above exactly, not a blanket "authenticated":**
+```sql
+-- User-actor functions: authenticated only, never anon.
+revoke execute on function fn_create_or_get_active_round from public;
+grant  execute on function fn_create_or_get_active_round to authenticated;
+-- ...same two lines, repeated per user-actor function in the table above (fn_update_resume_position,
+-- fn_restart_round, fn_record_dictation_attempt, fn_record_shadowing_attempt,
+-- fn_get_or_create_study_session, fn_flush_study_activity, fn_delete_transcript_revision).
+
+-- Backend-mediated functions: service_role only. EXECUTE is revoked from BOTH anon and
+-- authenticated -- an authenticated browser client calling .rpc('fn_publish_transcript_revision', ...)
+-- gets a permission-denied error from PostgREST, the same as an anonymous one. This is what
+-- "a browser must not be able to bypass API verification by calling the underlying RPC directly"
+-- means concretely for these two functions.
+revoke execute on function fn_publish_transcript_revision from public, authenticated;
+grant  execute on function fn_publish_transcript_revision to service_role;
+revoke execute on function fn_persist_azure_result from public, authenticated;
+grant  execute on function fn_persist_azure_result to service_role;
+revoke execute on function fn_persist_word_match_result from public, authenticated;
+grant  execute on function fn_persist_word_match_result to service_role;
+```
+
+**Backend-mediated functions, and why `auth.uid()` cannot be trusted for them (resolving the
+service-role/actor-identity question directly, not by assumption):** a Postgres connection made
+with the service-role key carries **no JWT claims at all** — `auth.uid()` evaluates to `NULL` under
+that connection, regardless of which browser user's action triggered the server-side call. This is
+the opposite of the user-actor functions above, where the caller's own RLS-respecting client
+carries the real JWT and `auth.uid()` genuinely resolves to them. Concretely, for
+`fn_publish_transcript_revision`: `/api/transcript/generate`'s route handler first uses the
+caller's own RLS-respecting client to confirm the request is from a signed-in user (today's actual
+authorization level for this endpoint — no stricter check exists or is added by this plan for who
+may *request* a generation), then performs the fetch/parse work, then calls
+`fn_publish_transcript_revision` via the **service-role** client — the function itself never
+receives or checks a user identity, because publication is a shared-content operation with no
+per-user ownership to check (§4/§6.9). For `fn_persist_azure_result`: `/api/practice/evaluate`'s
+route handler first uses the caller's own RLS-respecting client to confirm `auth.uid()` owns the
+`attemptId` being evaluated (an ordinary `ownsAttempt`-style check, before Azure is ever called),
+then calls Azure, then calls `fn_persist_azure_result` via the service-role client with just
+`attemptId`/`seq`/scores. **The user-ownership check happens in the route, using the user's own
+client, before any service-role call — never inside the service-role-executed function, and never
+assumed from the service-role connection itself.**
+
+**Resolving the Azure recovery-token contradiction — exactly where each check happens:**
+1. **Signature and expiry** — verified in `POST /api/practice/evaluate/persist-recovery`'s route
+   handler, in plain application code, using the server-only `AZURE_RECOVERY_SIGNING_SECRET` (an
+   HMAC check is not naturally a SQL concern and doesn't need to be one — this route is already a
+   trust boundary, the same as every other Next.js route in this app).
+2. **User identity** — the *same* route handler reads `auth.uid()` from the caller's own
+   RLS-respecting client and compares it against the token's embedded `userId`; a token issued for
+   a different user is rejected here, before any database call.
+3. **Attempt and evaluation-sequence staleness** — enforced by `fn_persist_azure_result` itself
+   (`WHERE id = :attemptId AND azure_eval_request_seq = :seq`), called from the route with the
+   service-role client only *after* steps 1–2 pass.
+4. **No alternate callable path exists**: `shadowing_attempts` has no owner-INSERT/UPDATE RLS
+   policy at all (below), and `fn_persist_azure_result`'s `EXECUTE` is revoked from `authenticated`
+   — a browser cannot reach step 3's guarantee by any route other than the one performing steps
+   1–2 first. (The service-role key itself is the backend's root of trust, the same as for every
+   other server-side call in this app — protecting against "an attacker already has the
+   service-role key" is out of scope, identical to protecting against "an attacker already has
+   root on the server.")
+5. **No repeated Azure call on retry**: the recovery endpoint never calls Azure — it only verifies
+   and relays an already-obtained result, so persistence can be retried within
+   `AZURE_RECOVERY_TOKEN_TTL_SEC` without spending additional quota (§9.4, unchanged).
+
+**Self-`is_admin`-grant is blocked by a trigger, not by RLS alone.** The existing
+`users_self_update` policy (`001_initial.sql:153`, `for update using (auth.uid() = id)`, no `with
+check`) already lets a user update *any* column on their own row — adding `is_admin` without
+closing this would let a user grant themselves admin via a direct PostgREST PATCH. RLS's `with
+check` can express "the new row still satisfies X," but not cleanly "this specific column must
+equal its *previous* value" without re-deriving the old row inside the policy itself; the standard,
+simpler fix is a trigger (added in `029_admin_and_size_estimate_columns.sql`, §8.11):
+```sql
+create or replace function prevent_self_admin_grant() returns trigger as $$
+begin
+  if auth.role() <> 'service_role' then
+    new.is_admin := old.is_admin;  -- silently ignore any client-attempted change
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public, pg_temp;
+
+create trigger users_prevent_self_admin_grant
+  before update on users for each row execute function prevent_self_admin_grant();
+```
+An ordinary user's PATCH to their own `is_admin` field succeeds (RLS still permits the row update)
+but silently has no effect on that column — granting `is_admin` remains reachable only via a
+direct service-role operation (a manual, out-of-band action this plan does not automate), never
+through the app.
+
+**RLS summary, corrected (supersedes §8.17's table for the tables it lists) — now including
+`learning_sessions`, and `app_write_gate`'s own protection:**
+
+| Table | Owner may | Writes otherwise reachable via |
+|---|---|---|
+| `learning_sessions` | SELECT only — **new in this revision**, `sessions_owner`/`sessions_anon_insert` both dropped (see above); tightened in the cutover migration, §8.14/§12, not Phase 1 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_record_dictation_attempt`/`fn_record_shadowing_attempt`'s completion step |
+| `attempt_logs` | SELECT only (tightened from the existing `for all`, §8.6) | `fn_record_dictation_attempt` |
+| `shadowing_attempts` | SELECT only (Revision 3's owner-insert removed, §8.7) | `fn_record_shadowing_attempt`, `fn_persist_azure_result`, `fn_persist_word_match_result` |
+| `study_sessions` | SELECT only | `fn_get_or_create_study_session`, `fn_flush_study_activity` |
+| `listening_progress` | SELECT only | `fn_flush_study_activity` |
+| `activity_flush_log` | SELECT only | `fn_flush_study_activity` (internal dedup record, never client-writable at all) |
+| `user_videos` | Full owner access (deliberate exception, §8.9) | — (no scoring data lives here) |
+| `transcripts`/`transcript_segments` | Public SELECT (unchanged, existing pattern) | `fn_publish_transcript_revision` (service-role only), `fn_delete_transcript_revision` (authenticated, admin-checked) |
+| `users.is_admin` | Not writable by the owner (trigger above) | Service-role only, out of band |
+| **`app_write_gate`** | **None at all** — RLS enabled, zero permissive policies for `authenticated`/`anon` (§8.11); a client cannot read or write this table by any means | Service-role (bypasses RLS, used only by whoever runs the cutover runbook, §8.14) and the `SECURITY DEFINER` functions that check it inside their own transactions |
+
+The Phase-3 cutover mechanism (its fencing, not just a flag check) is specified in §8.14/§12,
+resolving issue group 2.
 
 ---
 
@@ -1137,31 +3034,82 @@ card, not a duplicate — no new dedupe logic needed beyond what `upsert(...,
 
 ### 10.2 `GET /api/videos/library` — aggregation shape
 
-One row per distinct video the user has touched, computed as:
+Anchored by `user_videos` — a LEFT JOIN onto the authoritative tables, **not** a derived-only
+query (correcting Revision 1, which literally could not represent "added, not started"):
 
 ```
-latest_round(video)      = learning_sessions row with max(started_at) for (user, video)
-listening(video)         = listening_progress row for (user, video, latest_round.transcript_id)
-last_activity(video)     = max(latest_round.updated_at, listening.updated_at)
+FOR EACH user_videos row (user_id, youtube_video_id):
+  latest_round(video)   = learning_sessions row with max(started_at) for (user, video)  -- may be none
+  current_transcript_id = transcripts.id WHERE youtube_video_id = video AND is_current AND status='ready'
+                           (may be none, if the video has no ready transcript yet)
+  listening(video)      = listening_progress row for (user, video, current_transcript_id)
+                           -- falls back to the row WHERE transcript_id IS NULL when
+                           -- current_transcript_id is none (no transcript exists yet); may be none
+                           -- either way. RESOLVED INDEPENDENTLY OF latest_round — a Listening-only
+                           -- video (no round at all) still resolves correctly, which the review
+                           -- correctly flagged the prior `latest_round.transcript_id` join as
+                           -- unable to do (undefined result when latest_round is null).
+  has_listening_history(video) = EXISTS(SELECT 1 FROM listening_progress
+                                         WHERE user_id = :userId AND youtube_video_id = video)
+                           -- ACROSS EVERY transcript_id ever tracked for this video, not just the
+                           -- current one. This is what keeps a video the user genuinely studied
+                           -- under a now-superseded revision from being misreported as "not
+                           -- started" the moment a new revision becomes current with zero coverage
+                           -- of its own (§9.5/§8.8's state 4 — no carry-forward across real
+                           -- revisions, by design, but that must not collapse into "never
+                           -- studied"). listening(video) above answers "how much of the CURRENT
+                           -- revision has been heard"; has_listening_history answers "has this
+                           -- video been studied at all" — two different questions, never merged
+                           -- into one flag.
+  last_activity(video)  = max(user_videos.last_activity_at, latest_round.updated_at, listening.updated_at)
 ```
+
+**Why Listening resolution must not route through `latest_round`:** a round's `transcript_id` is
+whatever revision *that round* pinned, potentially long superseded; Listening coverage, by product
+rule, is tracked independently of any round and against the video's *current* transcript (§6.3).
+Joining through `latest_round.transcript_id` — the prior design — produced no row at all for a
+video with no round yet (exactly the Listening-only state this table exists to represent) and, for
+a video *with* a round, could show coverage against a stale, round-pinned revision instead of the
+one Listening is actually accumulating against. The fixed query resolves `listening(video)`
+directly from the video's own current transcript (or the null-transcript row), with `latest_round`
+consulted only for the separate practice-coverage fields below — the two resolutions are
+independent, matching §6.3's product rule that Listening coverage doesn't require a round.
+
+A video with a `user_videos` row but no `latest_round`/`listening` match is exactly the "added,
+not started" state (§5.6) — it still produces a card, with empty coverage, because the anchor row
+exists independent of any activity. A video with `listening` populated but no `latest_round` is
+the "Listening-only" state (§10.3) — also now correctly representable end-to-end.
 
 Response per card:
 ```json
 {
   "videoId": "abc123", "title": "…", "lastActivityAt": "…", "lastMode": "shadowing",
-  "roundStatus": "active", "coverage": { "overall": 0.7, "dictation": 0.5, "shadowing": 0.3 },
-  "listenedThrough": false, "currentRoundId": "uuid"
+  "roundStatus": "active", "roundProvenance": "current",
+  "coverage": { "overall": 0.7, "dictation": 0.5, "shadowing": 0.3 },
+  "listening": { "coverageRatio": 0.0, "listenedThrough": false, "hasHistory": true },
+  "currentRoundId": "uuid", "hasCompletedRound": true
 }
 ```
+`hasCompletedRound` is independent of `roundStatus` — per §6.8's correction, a video can have a
+completed round in its history *and* a newer active round at the same time; both facts are
+surfaced rather than one silently overwriting the other. **`listening.hasHistory` is independent of
+`listening.coverageRatio`** — `coverageRatio` answers "how much of the *currently selected*
+revision has been heard" (may legitimately be 0 for a video the user extensively listened to under
+a now-superseded revision, §9.5/§8.8's no-carry-forward rule); `hasHistory` answers "has this video
+been listened to at all, under any revision" (`has_listening_history(video)` above). The Library
+card and `GET /api/session/resume`'s `listening` object (§9.2, same two fields added there) both
+use this pair so neither the Library nor the resume response ever silently reports a genuinely-
+studied video as untouched merely because the current revision changed.
 
 ### 10.3 Card states
 
 | State | Trigger | Card shows |
 |---|---|---|
-| Not started | Video resolved, no round/listening activity yet | Title, thumbnail, "Start" (defaults to last-used mode preference) |
-| In progress | Active round, `overall_coverage` between 0 and 1 | "`{practiced}/{required} sentences practiced`" (§6.4's numerator/denominator, never accuracy), last mode, "Continue" |
-| Completed | Round `status='completed'` | "Practice complete" badge + `dictation_accuracy`/`shadowing_summary` shown as a **separate** line, never blended into the coverage figure; "Practice again" action (§10.5) alongside "Review" |
-| Listening-only | No round activity, but `listening_progress` exists | "Listened `{coverage_ratio*100}%`" or "Listened through" badge — visually distinct from the practice-coverage badge above, never implying practice completion |
+| Not started | `user_videos` row exists, no round/listening activity **and no `listening.hasHistory`** | Title, thumbnail, "Start" (defaults to last-used mode preference) |
+| In progress | Active round, `overall_coverage` between 0 and 1 | "`{practiced}/{required} sentences practiced`" (§6.4's numerator/denominator, never accuracy), last mode, "Continue" — plus a small "completed before" note if `hasCompletedRound` |
+| Completed | Round `status='completed'`, no newer active round | "Practice complete" badge + sentence-accuracy/Shadowing summaries shown as **separate** lines, never blended into the coverage figure; "Practice again" action (§10.5) alongside "Review" |
+| Listening-only, current revision | No round activity, `listening.coverageRatio > 0` for the current revision | "Listened `{coverageRatio*100}%`" or "Listened through" badge — visually distinct from the practice-coverage badge above, never implying practice completion |
+| Listening-only, prior revision | No round activity, `listening.coverageRatio = 0` for the current revision **but `listening.hasHistory = true`** | "Previously listened (transcript updated)" — distinct copy from both "Not started" and a literal "Listened 0%," since the video genuinely has history, just not against the revision now selected (§9.5/§8.8's no-carry-forward rule) |
 
 No card ever shows accuracy as its primary progress signal (closing D5), and no card is cluttered
 with raw technical metadata (round ids, transcript ids stay in the API response only).
@@ -1177,20 +3125,31 @@ with raw technical metadata (round ids, transcript ids stay in the API response 
 `GET /api/history/sessions` response per entry:
 ```json
 {
-  "studySessionId": "uuid", "videoId": "…", "date": "…", "activeDurationSec": 1320,
+  "studySessionId": "uuid", "videoId": "…", "date": "…",
+  "elapsedSpanSec": 1500, "activePracticeSec": 1320,
   "modesUsed": ["dictation", "shadowing"],
   "dictationSentencesPracticed": 8, "shadowingSentencesPracticed": 5, "overlapCount": 3,
   "uniquePracticedThisSession": 10, "newlyCoveredInRound": 6,
-  "listeningIntervalsSec": 240,
-  "dictationResults": { "accuracy": 0.72 }, "shadowingResults": { "evaluatedCoverage": 0.4 }
+  "listeningObservedSec": 240, "listeningNewlyCoveredSec": 95,
+  "dictationResults": { "sentenceAccuracy": 0.72 },
+  "shadowingResults": { "azureEvaluatedCoverage": 0.4, "wordMatchCoverage": 0.6 }
 }
 ```
-Reproducing the brief's worked example exactly: Dictation 8, Shadowing 5, overlap 3 ⇒
+`elapsedSpanSec` (session bookkeeping span) and `activePracticeSec` (§6.3b's estimated engaged
+time) are shown as two distinct numbers, never conflated — the direct fix for the review's core
+finding. `listeningObservedSec` (raw playback time this session, replay-inclusive) and
+`listeningNewlyCoveredSec` (this session's actual contribution to lifetime coverage) are likewise
+two distinct numbers (§5.3) — a session that mostly re-listens to already-covered material shows
+a large `listeningObservedSec` and a small `listeningNewlyCoveredSec`, which is the honest
+picture. Reproducing the brief's worked example exactly: Dictation 8, Shadowing 5, overlap 3 ⇒
 `uniquePracticedThisSession = 10` (8+5−3); `newlyCoveredInRound` is the same set **minus**
-whatever the round had already covered *before this study session started* — computed as
-`|session_segments \ round_segments_covered_before(session.started_at)|`, so a session that
-revisits already-covered sentences correctly reports a smaller "newly covered" number than
-"unique practiced this session."
+whatever the round had already covered *before this study session started*, using deterministic
+first-credit attribution: `ROW_NUMBER() OVER (PARTITION BY round_id, segment_index ORDER BY
+created_at) = 1` identifies which single attempt across the *whole round's* history gets credited
+as "first covered this segment," computed lazily at read time — so two study sessions racing to
+practice the same new sentence concurrently never both claim its first-coverage credit; whichever
+attempt actually committed first (by `created_at`) gets it, and the other session's "newly
+covered" count for that segment is correctly zero.
 
 ### 10.5 "Practice again" — explicit, non-destructive
 
@@ -1198,9 +3157,11 @@ A dedicated action (not implicit in reopening a video or switching its mode — 
 "simply reopening... must not silently reset progress" requirement). `POST /api/session/restart`
 now creates a genuinely new round: current active round (if any) → `status='abandoned'`; new row
 inserted with `round_number = max(round_number for this video) + 1`, fresh `transcript_id` = the
-current canonical transcript revision. All prior rounds' `attempt_logs`/`shadowing_attempts` rows
-are untouched and remain queryable via their own `round_id` — nothing is deleted, matching "old
-results preserved."
+current `is_current` transcript revision (§6.9 — not merely "highest version"). Per §5.3/§7.2's
+force-close rule, this also always stamps `ended_at` on whatever study session is currently open
+and starts a fresh one attached to the new round, regardless of the 30-minute inactivity window.
+All prior rounds' `attempt_logs`/`shadowing_attempts` rows are untouched and remain queryable via
+their own `round_id` — nothing is deleted, matching "old results preserved."
 
 Reopening a completed video (no explicit action) or switching its mode always resumes the
 existing round/state — `GET /api/session/resume` behavior for a completed round is unchanged
@@ -1212,11 +3173,37 @@ nothing in this design ever did reset on mere reopen — this was already true a
 - **D17 fix:** switching `inputMode` now resets `uxState` away from `session_completed` back to
   the appropriate paused/ready state for the new mode, so the Settings-drawer mode switch always
   visibly takes effect.
+- **Mode switch is an explicit write**, not just a client-side state change — `ModeSwitcher`'s
+  `onSelectMode` now also fires `POST /api/videos/[videoId]/mode` (§9.1) so `last_mode` is
+  accurate even when the switch isn't immediately followed by a submission.
 - **Progress readout** in `ControlBar` gains the coverage fraction (already text-only, no visual
   regression) alongside the existing `{idx+1}/{total}` position counter — two different, clearly
   labeled numbers, not one conflated bar.
 - All three modes remain available from the practice page's existing `ModeSwitcher`/Settings
   drawer — no structural change to that UI, only to what it's connected to underneath.
+
+### 10.7 Script Versions dialog
+
+Placement: a "Script versions" entry in the video's existing actions menu, and the same view
+reachable from the Script tab's own overflow menu if one exists — a compact dialog/drawer sized
+for both desktop and iPhone widths, not a new permanent practice-page tab (§6.9's placement
+requirement).
+
+Per-revision row, sourced from `GET /api/transcripts/[videoId]/versions`: version/label,
+`created_at`, source, status, sentence count, the size-estimate breakdown (§6.9, clearly labeled
+as an estimate — text/segments/translations/highlights, each shown, plus "eligible for removal"
+computed client-side from the retention reason), an `is_current` badge, a "used by your round"
+indicator (viewer's own association only — never another user's), a plain-language retention
+reason string the API computes from §6.9's classification (e.g. "eligible for cleanup after
+`<date>`"), a read-only **Preview** action (`GET .../preview`, never touches `is_current` or any
+round's pinned `transcript_id` — a pure fetch), and a **Delete** action rendered only when the
+viewer is `is_admin` (checked via the session, not just hidden client-side — the DELETE route
+itself re-verifies via `fn_delete_transcript_revision`'s own `409` on a lost race, §8.16). A
+non-admin viewer sees every revision's information but no working delete control.
+
+A **Remove from my library** action lives on the video's card/menu, not in this dialog — it calls
+`DELETE /api/videos/library/[videoId]` (§10.2) and is explicitly a different, always-available,
+non-destructive action distinct from admin-only revision deletion (§6.9/§C.5's separation).
 
 ---
 
@@ -1233,36 +3220,59 @@ same `enabled: !!userId` gating.
 | Data | Query key | Endpoint | Used by |
 |---|---|---|---|
 | Video library | `["video-library", userId]` | `GET /api/videos/library` | Dashboard Library section |
-| Round state | `["round", userId, videoId]` | `GET /api/session/resume` | Practice page, Continue Learning |
-| Listening progress | `["listening-progress", userId, videoId]` | `GET /api/listening/progress` | Practice page (Listening mode) |
+| Current round state | `["round", userId, videoId]` | `GET /api/session/resume` | Practice page, Continue Learning — always "the current round for this video" |
+| Historical round detail | `["round-detail", userId, roundId]` | `GET /api/session/resume?roundId=` | Round Details view (§10.4) — a specific, possibly non-current, round; kept as a **separate** key from `["round", ...]` so viewing history never evicts or races the live practice page's cache |
+| Listening progress | `["listening-progress", userId, videoId, transcriptId]` | `GET /api/listening/progress` | Practice page (Listening mode) — scoped by revision, not just video, so a regeneration doesn't serve stale coverage for the new transcript |
 | Study-session history | `["history-sessions", userId, filters]` | `GET /api/history/sessions` | History page (`useInfiniteQuery`, same `keepPreviousData` pattern as `historyMistakes.ts`) |
 | Dashboard summary | `["dashboard-summary", userId]` | `GET /api/dashboard/summary` | Unchanged key, corrected formulas underneath |
+| Script Versions | `["transcript-versions", videoId]` | `GET /api/transcripts/[videoId]/versions` | Script Versions dialog — **not** userId-keyed, since transcripts are shared/global (§6.9); the dialog's per-viewer "used by your round" field is derived client-side from the already-fetched `["round", userId, videoId]` data, not baked into this shared query |
 
 All new keys follow the exact file/hook shape of `src/lib/queries/dashboard.ts` and
-`historyMistakes.ts` — one new file, `src/lib/queries/videoLibrary.ts` and
-`src/lib/queries/practiceRound.ts`, each exporting `keys`, a `useXQuery` hook, and an
-`invalidateXQueries(queryClient, userId, ...)` helper, matching the existing convention exactly.
+`historyMistakes.ts` — new files `src/lib/queries/videoLibrary.ts`, `src/lib/queries/practiceRound.ts`,
+`src/lib/queries/historySessions.ts`, `src/lib/queries/transcriptVersions.ts`, each exporting
+`keys`, a `useXQuery` hook, and an `invalidateXQueries(queryClient, userId, ...)` helper, matching
+the existing convention exactly.
 
 ### 11.2 Mutation-to-cache-invalidation matrix
 
 This is the primary gap closed relative to today (§2.4/D18 — currently **zero** invalidation is
-wired to any session/practice mutation):
+wired to any session/practice mutation). **Two distinct techniques, chosen per mutation, not one
+rule applied uniformly (R25 — corrects several places Revision 3 still gated ordinary partial
+progress behind a milestone):**
 
-| Mutation | Call site | Invalidates |
-|---|---|---|
-| Add a video | `POST /api/video/resolve` success | `["video-library", userId]` |
-| Start/resume a round | `GET /api/session/resume` (read, not a mutation) | — |
-| Submit Dictation | `POST /api/dictation/check` success | `["round", userId, videoId]`; if `roundCompleted:true` also `["video-library", userId]` + `["dashboard-summary", userId]` |
-| Complete a valid Shadowing recording | `POST /api/practice/attempt` success | `["round", userId, videoId]`; same completion cascade as above when applicable |
-| Receive evaluation results | `POST /api/practice/evaluate` success/failure | `["round", userId, videoId]` (so the attempt's updated eval status is visible without a full page reload) |
-| Synchronize Listening coverage | `POST /api/listening/sync` success | `["listening-progress", userId, videoId]`; on `listenedThrough` flipping true, also `["video-library", userId]` + `["dashboard-summary", userId]` |
-| Complete a round | (bundled into the Dictation/Shadowing mutation above via `roundCompleted`) | `["video-library", userId]`, `["dashboard-summary", userId]`, `["history-sessions", userId, *]` |
-| Start another round ("Practice again") | `POST /api/session/restart` success | `["round", userId, videoId]`, `["video-library", userId]` |
-| Regenerate a transcript | `POST /api/transcript/generate` success | `["round", userId, videoId]` (so a stale pinned-revision banner, if shown, clears) — does **not** invalidate other users'/videos' caches |
+- **Direct cache patch** (`queryClient.setQueryData`) — for a mutation whose response already
+  contains everything the affected query needs, patched in place with no network refetch. Cheap
+  enough to do on every call; used for high-frequency mutations where triggering a full
+  refetch-on-invalidate every time would be wasteful.
+- **Invalidate** (`queryClient.invalidateQueries`) — for a mutation whose effect on a query can't
+  be computed purely from the mutation's own response (e.g. Dashboard's aggregate stats depend on
+  data outside what a single Dictation submission returns). Marks the query stale; it refetches
+  next time it's actively observed, not necessarily immediately.
 
-Every invalidation is scoped to the one or two keys actually affected — nothing invalidates
-Dashboard/History as a side effect of an unrelated mutation, matching the discipline already
-established for vocabulary/bookmarks in this codebase.
+| Mutation | Call site | Direct patch | Invalidates |
+|---|---|---|---|
+| Add a video | `POST /api/video/resolve` success | — | `["video-library", userId]` |
+| Start/resume a round | `GET /api/session/resume` (read, not a mutation) | — | — |
+| Switch mode | `POST /api/videos/[videoId]/mode` success (§10.6) | `["round", userId, videoId]`'s `lastMode` field | `["video-library", userId]` (so the Library card's mode badge updates) |
+| Submit Dictation | `POST /api/dictation/check` success | `["round", userId, videoId]` — coverage/`currentSegmentIndex` patched from the response directly, every submission, not gated on completion | `["video-library", userId]`, `["dashboard-summary", userId]` unconditionally (R25 — Revision 3 already did this for these two; unchanged here); additionally `["history-sessions", userId, *]` only via the session-boundary row below, **not** on `roundCompletedByThisRequest` (a round completing mid-session doesn't mean the *session* closed — conflating the two was itself a small inconsistency, corrected here) |
+| Complete a valid Shadowing recording | `POST /api/practice/attempt` success | `["round", userId, videoId]`, same as Dictation | Same as Dictation above |
+| Receive evaluation results | `POST /api/practice/evaluate` success/failure, or the recovery endpoint (§9.4) | `["round", userId, videoId]` | `["history-sessions", userId, *]` **added (R25)** — History's per-session `shadowingResults` (§10.4) would otherwise show stale evaluation coverage until the session closes or `staleTime` lapses |
+| Synchronize Listening coverage | `POST /api/listening/sync` success | `["listening-progress", userId, videoId, transcriptId]` from the response directly, every flush | `["video-library", userId]` **on every successful flush where `coveredSec` increased (R25, corrected)** — the Library card shows a live `coverage_ratio` percentage (§10.3), not just a listened-through boolean, so gating it behind the threshold (Revision 3's rule) left ordinary partial Listening progress invisible on Library; `["dashboard-summary", userId]` stays gated on `listenedThrough` flipping true, since Dashboard only ever shows a *count* of listened-through videos, not a per-video percentage — no benefit to invalidating it more often |
+| Generic activity-pulse flush | `POST /api/study-session/activity` success | — | **Nothing directly** — still deliberately not invalidated on every 15-20s flush (excessive refetching while a session is merely open); superseded by the navigation-boundary flush (§11.6, R25) for the "return to Dashboard mid-session" case Revision 3 left unhandled |
+| Study session opened / force-closed by a new round | `fn_get_or_create_study_session` boundary events | — | `["history-sessions", userId, *]` — this is where a just-closed session's final numbers actually need to appear |
+| Navigate away from the practice page (route change or tab-hide) | Navigation-boundary flush, owned by a module-level coordinator, not a component effect (§11.6) | — | `["dashboard-summary", userId]`, `["video-library", userId]`, `["history-sessions", userId, *]` — **only after the flush's own request resolves successfully** (an optional, non-authoritative early invalidation may also fire immediately, but the post-success one is what guarantees a destination-page fetch never caches pre-flush data, §11.6) |
+| Complete a round | (bundled into the Dictation/Shadowing mutation above via `roundCompletedByThisRequest`) | — | Same keys as the triggering mutation — completion adds no *additional* invalidation beyond what every submission already does, now that partial progress is no longer gated |
+| Start another round ("Practice again") | `POST /api/session/restart` success | — | `["round", userId, videoId]`, `["video-library", userId]`, `["history-sessions", userId, *]` (the force-closed prior session becomes visible) |
+| Regenerate a transcript | `POST /api/transcript/generate` success | — | `["round", userId, videoId]` (so a stale pinned-revision banner, if shown, clears), `["transcript-versions", videoId]` — does **not** invalidate other users'/videos' caches |
+| Delete a transcript revision (admin) | `DELETE /api/transcripts/versions/[transcriptId]` success | — | `["transcript-versions", videoId]` only |
+| Remove a video from the library | `DELETE /api/videos/library/[videoId]` success | — | `["video-library", userId]` |
+
+Every invalidation is scoped to the keys actually affected — nothing invalidates Dashboard/History
+as a side effect of an unrelated mutation, matching the discipline already established for
+vocabulary/bookmarks in this codebase. The remaining deliberate exception to "reflect immediately"
+is the generic activity flush's *direct* effect (still batched, not invalidated per-flush) — but
+unlike Revision 3, its *eventual* visibility on Dashboard/Library no longer depends solely on the
+session closing; §11.6's navigation-boundary flush covers the gap in between.
 
 ### 11.3 Keeping content visible during background refresh
 
@@ -1281,122 +3291,397 @@ mechanism, just two more adopters of an already-working hook.
 
 ### 11.5 Account scoping
 
-Every new key includes `userId` and is `enabled: !!userId`, matching the existing convention.
-`auth.tsx`'s `signOut` already calls `queryClient.clear()` (confirmed implemented, §2.4) — no
-change needed there; the new keys are covered automatically since `clear()` wipes the whole cache.
-New `sessionStorage` view-state keys follow the same `{namespace}:{userId}` scoping already
-established, so a second user signing in on the same tab never inherits the first user's filters.
+Every new key includes `userId` and is `enabled: !!userId` — **except** `["transcript-versions",
+videoId]`, which is deliberately not userId-scoped since transcripts are shared/global (§6.9);
+its data is safe to share across users by construction (no per-user learning details live in it),
+and the per-viewer "used by your round" field is composed client-side from the userId-scoped
+`["round", ...]` query instead. `auth.tsx`'s `signOut` already calls `queryClient.clear()`
+(confirmed implemented, §2.4) — no change needed there; the new userId-scoped keys are covered
+automatically since `clear()` wipes the whole cache. New `sessionStorage` view-state keys follow
+the same `{namespace}:{userId}` scoping already established, so a second user signing in on the
+same tab never inherits the first user's filters. The local Shadowing-evaluation recovery cache
+(§9's local-cache scoping fix, extending `shadowingEvaluationPersistence.ts`'s key to include
+`userId`/`roundId`) is explicitly cleared, by key prefix, in the same `signOut()` change — clearing
+`queryClient` alone does not clear `sessionStorage`, which the review correctly flagged.
+
+### 11.6 Navigation-boundary flush — ordered so a destination fetch cannot cache stale data
+
+**The gap this section closes (two, corrected together):** (1) `pagehide`/`visibilitychange`(hidden)
+fire on tab close or backgrounding, but not on an in-app Next.js route transition — relying on them
+alone leaves a user who practices for several minutes and clicks straight to Dashboard seeing stale
+data, since neither a completion nor a session-boundary event fired. (2) **A prior draft's fix for
+(1) invalidated Dashboard/Library *before* the forced flush had confirmed success** — if the
+destination page's own fetch (triggered by that early invalidation) resolves before the flush's
+write actually commits, TanStack Query caches the **stale** pre-flush response, and nothing further
+corrects it, since no *later* invalidation was ever scheduled. An early, optimistic invalidation is
+fine as an early refresh; it must never be the *only* one.
+
+**Where the flush lifecycle is owned — not a component effect that can unmount mid-flight.** A
+`usePathname` effect inside the practice page's component tree is unsuitable on its own: React
+unmounts that component (and, with it, any hook state a `.then()`/`onSuccess` callback might
+close over) the moment the route actually changes, which can happen before a network response
+lands. The flush is instead owned by a **module-level coordinator**
+(`src/lib/practiceFlushCoordinator.ts`), instantiated once and never tied to any component's
+lifecycle — the same pattern already used for the app's single, app-lifetime `queryClient`
+(`src/components/Providers.tsx`):
+- The practice page's top-level component registers/unregisters its current buffered state with
+  the coordinator on mount/unmount, and calls `coordinator.requestFlush('navigation')` from a
+  `usePathname`-based effect the moment it detects outbound navigation — but the effect only
+  *triggers* the request; it does not own completion handling.
+- `requestFlush` fires the flush as `fetch(url, { method: 'POST', body, keepalive: true })` —
+  `keepalive: true` is the standard web-platform mechanism for a request that must survive the
+  initiating document/component going away (the same primitive analytics beacons use for
+  exactly this "fire on navigate/unload, don't get cancelled" case) — and its `.then()`/`.catch()`
+  chain operates only on the module-level `queryClient` singleton, never on component state, so it
+  keeps running and completes its work regardless of whether the practice page has since unmounted.
+
+**The corrected sequence:**
+1. On detecting outbound navigation, `coordinator.requestFlush('navigation')` sends the buffered
+   activity/Listening intervals via the `keepalive` fetch above.
+2. **Optional, immediate:** the effect may *also* call `queryClient.invalidateQueries(...)` right
+   away, purely as an early-refresh nicety — this is allowed to race and serve stale data; it is
+   never relied on for correctness (this is the "treat immediate invalidation as optional early
+   refresh" requirement, satisfied by demoting it, not by removing it).
+3. **After the flush's `fetch` promise resolves successfully**, the coordinator itself (not the
+   possibly-unmounted component) invalidates `["dashboard-summary", userId]`, `["video-library",
+   userId]`, and `["history-sessions", userId, *]` (added — partial practice and active-time
+   updates belong in History too, not only Dashboard/Library). This second invalidation is the one
+   that actually guarantees correctness: any refetch it triggers happens strictly after the flush's
+   write committed, so it cannot observe pre-flush data. The route response for `POST
+   /api/listening/sync`/`/api/study-session/activity` is used only for this trigger, not for a
+   direct cache patch — a single flush response does not carry the account-wide aggregates
+   `dashboard-summary`/`video-library` need, so patching from it would mean inventing values it
+   doesn't provide (§11.2's "align mutation responses with cache patches" rule); invalidate-and-
+   refetch is the correct choice here, not a corner cut.
+4. **On flush failure** (network error, non-2xx response): the coordinator does **not** invalidate
+   or patch anything, and does **not** discard the locally-buffered data — it stays marked
+   unflushed so the *next* trigger (the ordinary periodic cadence, the next navigation, or
+   `pagehide`) resends it. Nothing is presented to the user as confirmed/saved until a flush
+   actually succeeds.
+5. `pagehide`/`visibilitychange`(hidden) remain wired as **independent** triggers into the same
+   `coordinator.requestFlush('visibility')` call — covering tab close/backgrounding, which no
+   in-app route-change event can see. Both triggers funnel through the same coordinator, so the
+   success/failure handling in steps 3–4 is identical regardless of which one fired.
+
+This stays "invalidate at most once per navigation, not once per 15-20 seconds of continuous
+practice" (§11.2's rate discipline) — step 3 fires once per completed flush, not on a timer — while
+no longer risking a stale cache from the race in the prior draft. Cached content stays visible
+throughout, per §11.3 — none of this clears a query's data before its replacement is ready, only
+marks it stale and lets the existing background-refetch behavior take over.
 
 ---
 
 ## 12. Implementation phases
 
-Each phase is independently shippable and testable; later phases depend only on earlier ones,
-never the reverse. File paths are exact, based on the audited current tree.
+**Correcting Revision 1's overclaim:** phases are **not** all independently shippable in
+isolation — several genuinely depend on earlier ones (a completion function cannot be written
+before the table it queries exists; the Dictation cutover and the provenance backfill must ship
+together, not separately). What *is* true, and is the actual guarantee this plan makes: **no
+phase's migration or function references a table/column that doesn't yet exist** — the numbering
+in §8.1 and the phase order below are now the same order, by construction. File paths are exact,
+based on the audited current tree.
 
-### Phase 0 — Transcript revision integrity (prerequisite for everything else)
+**Migration renumbering in this revision (R21):** the duplicate-active-round reconciliation
+migration (formerly `034`, formerly "Phase 7") moves to `030`, immediately after Phase 1's schema
+and before Phase 2's functions — because §9.2's `round` resolution and the client's cached
+`roundId` both implicitly assume "the round" for a `(user, video)` is unambiguous, an assumption
+Phase 2's functions start relying on the moment they ship. Running the reconciliation *after*
+Phase 6 (its old position) would mean every one of Phase 2–6's phases operated under an invariant
+that hadn't actually been established yet. Migrations `030`–`032` (the RPC functions) and `033`
+(the provenance backfill) are renumbered up by one accordingly; `035` (revision deletion) is
+unaffected. The Phase-7 slot is retired rather than reused, so Phase 8 (Retirement) and Phase 9
+(Script Versions) keep their existing numbers — avoiding a second, unrelated renumbering of every
+cross-reference to those two phases elsewhere in this document.
 
-Must land first: every later phase's attempt/coverage tables assume transcript revisions are
-immutable once created.
+### Phase 0 — Transcript revision integrity and identity: writer AND reader
+
+Must land first, **as one deploy covering both the writer and every reader that assumes "the
+video's current transcript"** — not the writer alone (R21). The writer fix alone would immediately
+break every in-progress round: `fetchTranscript` (`src/app/dictation/[videoId]/api.ts:11-12`,
+confirmed) always fetches whichever transcript is current for the video, with no way to request a
+specific pinned revision, and `learning_sessions.transcript_id` is itself client-supplied and
+unverified today (`save-progress/route.ts:87,116`, confirmed). The moment regeneration starts
+producing a genuinely new, separate revision instead of mutating in place, an existing round
+pinned to revision A would start rendering revision B's text on its next load. Full detail in
+§6.9's "Reader paths" subsection.
 
 - **Modify:** `src/app/api/transcript/generate/route.ts` — stop hard-deleting/reusing on
-  regeneration (§8.4); insert a new `transcripts` row (`version = previous + 1`) and leave the old
-  row + its segments/translations/highlights untouched.
-- **Migrate:** `020_practice_round_columns.sql`, `025_transcript_revision_index.sql`.
+  regeneration; call `fn_publish_transcript_revision` (§8.3) instead of sequential REST calls, so
+  publication is atomic and duplicate/current-revision logic is applied correctly from day one.
+- **Modify:** `src/app/api/transcript/[videoId]/route.ts` — accept optional `?transcriptId=`;
+  serve that exact revision's segments when present, `is_current` when absent.
+- **Modify:** `src/app/api/session/resume/route.ts` — **moved here from Phase 6**, since Phase 0's
+  own client logic (below) directly depends on it: `round` becomes nullable (a video with no
+  `learning_sessions` row returns `round: null` instead of erroring or omitting the field — the
+  route today already returns nothing to resume for a never-touched video, so this is a response-
+  shape clarification, not new backward-incompatible behavior) and includes `transcriptId` when
+  non-null. Only this minimal slice ships in Phase 0 — the full §9.2 shape (`listening`'s
+  independent resolution, `lastMode` from `user_videos`, `hasHistory`) still depends on Phase 1's
+  new tables and ships with Phase 6 as before; Phase 0 only needs the round part, which needs no
+  new schema at all.
+- **Modify:** `src/app/dictation/[videoId]/api.ts`'s `fetchTranscript` — optional `transcriptId`
+  parameter.
+- **Modify:** `src/app/dictation/[videoId]/useDictationSession.ts` — transcript query branches on
+  `GET /api/session/resume`'s (now-nullable) `round`: pinned fetch when a round exists, `is_current`
+  fetch otherwise; query key changes from `["transcript", videoId]` to `["transcript", videoId,
+  transcriptId ?? "current"]`.
+- **Modify:** round-creation path (wherever a new `learning_sessions` row is inserted, currently
+  `save-progress/route.ts`'s insert branch, moving under Phase 3's RPC cutover for its actual
+  write path) — resolves `transcript_id` server-side from `is_current`, never from a client-
+  supplied value, for *new* rounds specifically.
+- **Migrate:** `020_transcript_revision_identity.sql`, `021_fn_publish_transcript_revision.sql`.
 - **Test:** extend `src/__tests__/transcript-generate-route.test.ts` — regenerating a video with
   an existing round in progress leaves the old transcript/segments queryable and does not mutate
-  their ids.
+  their ids; regenerating identical content reuses the existing revision and flips `is_current`
+  rather than inserting a duplicate; two concurrent regenerate calls (simulated) produce one
+  outcome, not two rows. New `src/__tests__/transcript-pinned-revision-route.test.ts` —
+  `?transcriptId=` returns a specific non-current revision's segments; a round created before B's
+  publication still renders A's text after B becomes current (acceptance scenario #1).
 
-### Phase 1 — Practice round + study session schema
+### Phase 1 — All new schema, plus duplicate-active-round reconciliation
 
-- **Migrate:** `021_study_sessions.sql`, `022_attempt_logs_extensions.sql`,
-  `026_practice_round_backfill.sql`, `027_practice_round_active_uniqueness.sql`.
-- **New:** `src/lib/supabase/studySession.ts` (get-or-create-current-study-session helper, §5.3
-  rules — the one piece of genuinely new server logic this phase adds).
+Every table any later function will reference is created here, in one batch, closing the
+dependency-ordering bug the review found — **and** the round-uniqueness invariant Phase 2's
+functions will assume is established here too, before anything depends on it (R21, moved from the
+old "Phase 7").
+
+- **Migrate:** `022_practice_round_columns.sql`, `023_study_sessions.sql`,
+  `024_attempt_logs_extensions.sql` (includes tightening the existing `attempts_owner` RLS policy,
+  §8.6/§9.9), `025_shadowing_attempts.sql`, `026_listening_progress.sql`, `027_user_videos.sql`,
+  `028_activity_flush_log.sql`, `029_admin_and_size_estimate_columns.sql` (also creates
+  `app_write_gate` with RLS enabled and zero permissive policies, and the
+  `users_prevent_self_admin_grant` trigger, §8.11/§9.9/§8.14), `030_practice_round_active_uniqueness.sql`
+  (audit-logged reconciliation + the one-active-round unique index, §8.15 — run last within this
+  phase, since it's the one migration here that touches *existing* rows rather than only adding
+  schema). **`learning_sessions`' RLS is deliberately NOT touched in this phase** — see Phase 2/3
+  below for why (issue group 2: the existing `save-progress`/`session/restart` routes still depend
+  on its current, permissive policies until their replacements exist and are deployed).
 - **Modify:** `src/lib/supabase/ownership.ts` — add `ownsStudySession`, matching the existing
   `ownsSession`/`ownsAttempt` shape.
-- **Test:** new `src/__tests__/studySession.test.ts` covering the 30-minute boundary rule.
+- **Test:** schema-level tests confirming every new FK/check constraint (nullable `hint_level_used`,
+  nullable `study_sessions.round_id`, the two partial unique indexes on `listening_progress`, the
+  one-active-round-per-video partial unique index); a test confirming `attempts_owner`'s
+  replacement policy actually blocks a direct owner INSERT/UPDATE via the RLS-respecting client.
 
-### Phase 2 — Dictation attempt idempotency + completion
+### Phase 2 — Concurrency-safe RPC functions, and gate-aware bridges for the existing writers
+
+Safe now that every table these functions touch exists, and round uniqueness is established
+(Phase 1). **`learning_sessions`' actual writer identity was verified before sequencing this
+(issue group 2):** `save-progress/route.ts` and `session/restart/route.ts` both write via the
+caller's own RLS-respecting client (`createClient()`, confirmed by direct read of both files),
+depending on the `sessions_owner`/`sessions_anon_insert` policies §9.9 identifies as the bypass —
+so those two routes would break the moment those policies are dropped, unless their replacement
+(the real RPC functions below) exists **and** they are already calling something gate-aware
+**before** the drop happens. (`dictation/check/route.ts`'s `attempt_logs` insert, by contrast,
+already uses the *service-role* client today — confirmed by direct read — so it was never actually
+dependent on `attempts_owner`'s policy, and Phase 1's tightening of that table did not break it.)
+
+- **Migrate:** `031_fn_record_dictation_attempt.sql`, `032_fn_record_shadowing_attempt.sql`,
+  `033_fn_session_activity_and_evaluation_functions.sql` (bundles `fn_create_or_get_active_round`,
+  `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`,
+  `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result`, and the
+  temporary `fn_legacy_save_progress`/`fn_legacy_restart_round` bridges — §8.13/§9.9).
+- **Modify:** `src/app/api/session/save-progress/route.ts` — its *existing* create/update logic is
+  changed to call `fn_legacy_save_progress` (via `.rpc()`) instead of raw `.from('learning_sessions')`
+  calls, with **no behavior change** beyond gaining the gate check — still exactly as permissive/
+  client-trusting as today. This is the "compatible application path prepared before access is
+  removed" the review asked for.
+- **Modify:** `src/app/api/session/restart/route.ts` — same treatment, calling
+  `fn_legacy_restart_round`.
+- **New:** `src/lib/supabase/studySession.ts` (thin wrapper calling the RPC, §5.3 rules).
+- **Test:** **real PostgreSQL integration tests** (not the mocked-Supabase-client Jest suite) for
+  the row-locking completion race (§6.5's worked scenario: two concurrent submissions of the
+  round's last two required sentences), the explicit lookup-then-insert idempotency contract
+  (`wasInserted` correctness on a genuine retry, no timestamp mutation), idempotency-key reuse
+  rejection with a different payload, the flush-batch fingerprint-mismatch rejection (R27), and a
+  new one: `fn_legacy_save_progress` correctly blocks while `app_write_gate` is held `FOR UPDATE`
+  by a concurrent transaction, not merely when `completion_writes_paused` happens to already be
+  `true` (the fencing property, not just the flag).
+
+### Phase 3 — Dictation route cutover, via a genuine write-fence, not a bare "same deploy" claim
+
+**Corrects two things a prior pass got wrong:** (1) "ships as one deploy" named a goal without a
+mechanism; (2) the mechanism that followed only gated `save-progress`'s *completion* branch, so an
+old writer could still create a round or save a resume position — including inserting a fresh
+`learning_sessions` row with the default `provenance='current'` via a client-supplied, unverified
+`transcript_id` — after `cutover_at`, which the backfill's timestamp bound alone could not detect.
+**Full mechanism, replacing both gaps, specified in §8.14** — summarized here as the phase's task
+list; the row-lock fence (not the timeout) is what makes it correct, and `CUTOVER_DRAIN_WINDOW_SEC`
+is a deploy-verification budget, not the guarantee.
+
+1. Run §8.14 Part A (the `app_write_gate` row-lock fence) — genuinely blocks every write through
+   `fn_legacy_save_progress`/`fn_legacy_restart_round`, not just the completion-claiming ones.
+2. Run §8.14 Part B (the bounded backfill) — correct because of the fence.
+3. Run §8.14 Part C (`learning_sessions`' RLS tightening — `sessions_owner`/`sessions_anon_insert`
+   dropped, SELECT-only policy created) — safe now, since the fence already blocks the only
+   remaining write path.
+4. Deploy Phase 3's real application code (below).
+5. Confirm 100% live via the deploy platform (budgeted, not timed) before reopening the gate.
+6. `UPDATE app_write_gate SET completion_writes_paused = false`; drop the now-unreachable
+   `fn_legacy_*` functions.
+
+**Legacy active rounds with uncertain segment identity, resolved explicitly:** a round's
+`provenance` is set once, at this backfill, and is **never re-promoted to `'current'`** afterward —
+not even when a user resumes an old, still-`active` legacy round and adds new, individually-
+`verified` attempts to it post-cutover (via the new RPC). The round-level flag reflects "was this
+round's *origin* fully verified," which adding a new attempt cannot retroactively fix; only that
+new attempt row itself carries `segment_identity_provenance = 'verified'`. Coverage's numerator
+(`count(distinct segment_index)`) does not filter by provenance — a legacy round can still
+complete through ordinary practice — but the Dashboard's headline stat (§6.8) gates on the
+**round's** `provenance = 'current'`, so a completed legacy round always surfaces only in the
+"legacy completions" stat, never the primary one, regardless of how many new, verified attempts it
+later accumulates. **Because the fence now genuinely blocks the legacy writer, this rule applies
+only to rounds that existed *before* the fence — it is no longer possible for a post-fence legacy
+write to create a fresh `provenance='current'` row at all** (the specific gap the review flagged).
 
 - **Modify:** `src/app/api/dictation/check/route.ts` — accept `clientAttemptId`/`hintLevelUsed`/
-  `studySessionId`; switch the insert to `on conflict ... do nothing returning *`; add the §6.5
-  completion check (as a small Postgres function invoked via `.rpc()`, per §9.7); return
-  `roundCompleted`.
-- **New:** SQL function migration `028_fn_record_dictation_attempt.sql`.
+  `studySessionId`/`transcriptId` (all optional, §14.3's compatibility policy for this route);
+  call `fn_record_dictation_attempt`; return `wasInserted`/`roundCompletedByThisRequest`/`roundStatus`.
+- **Modify:** `src/app/api/session/save-progress/route.ts` — replace the `fn_legacy_save_progress`
+  call from Phase 2 with `fn_update_resume_position` (resume convenience only) and
+  `fn_create_or_get_active_round` (first-touch round creation) — the transitional bridge is fully
+  retired here, not merely bypassed.
+- **Modify:** `src/app/api/session/restart/route.ts` — replace `fn_legacy_restart_round` with
+  `fn_restart_round`.
+- **Migrate:** `034_provenance_backfill_and_completion_cutover.sql`, run per the bounded, fenced
+  runbook in §8.14, not as an ordinary "just apply it" migration.
 - **Modify:** `src/app/dictation/[videoId]/useDictationSession.ts` — generate/attach
-  `clientAttemptId` per submit; stop relying solely on the client-tallied `sessionStore` accuracy
-  for anything persisted (keep it only as an optimistic local display value).
+  `clientAttemptId` per submit; switch the optimistic accuracy display from a running tally to the
+  `Map<segmentIndex, isCorrect>` model (§6.6).
 - **Test:** extend `src/__tests__/dictation-check-route.test.ts` — duplicate `clientAttemptId`
-  produces one row; completion fires exactly once across two racing requests.
+  produces one row; a legacy-provenance round's completed-videos contribution shows up only in
+  the "legacy completions" stat, never the primary one, even after a new verified attempt is added
+  to it. New `src/__tests__/cutover-write-gate.integration.test.ts` (real-Postgres tier) — the
+  bounded backfill does not relabel a row created after `cutover_at`; **and a new scenario: a call
+  to `fn_legacy_save_progress` attempting to create a round *after* the fence closes is rejected
+  outright (never inserted, never classified as anything), distinct from a pre-fence row that is
+  correctly tagged legacy** (acceptance scenario #61).
 
-### Phase 3 — Shadowing server-side persistence
+### Phase 4 — Shadowing server-side persistence
 
-- **New:** `src/app/api/practice/attempt/route.ts` (`POST`), `src/app/api/practice/attempt/[attemptId]/word-match/route.ts` (`PATCH`).
-- **Modify:** `src/app/api/practice/evaluate/route.ts` — require `attemptId`, PATCH by id.
-- **Migrate:** `023_shadowing_attempts.sql`, `029_fn_record_shadowing_attempt.sql`.
+- **New:** `src/app/api/practice/attempt/route.ts` (`POST`),
+  `src/app/api/practice/attempt/[attemptId]/word-match/route.ts` (`PATCH`),
+  `src/app/api/practice/attempt/[attemptId]/route.ts` (`GET`).
+- **Modify:** `src/app/api/practice/evaluate/route.ts` — require `attemptId` only (server resolves
+  reference text), increment/check `azure_eval_request_seq`, service-role PATCH.
 - **Modify:** `src/app/dictation/[videoId]/useShadowingEvaluations.ts` — on a finalized valid
-  recording, POST to `/api/practice/attempt` immediately (practice credit), keep the existing
-  sessionStorage mirror as a fast local cache/recovery layer (not the source of truth anymore);
-  wire the Word Match PATCH and the evaluate-by-id flow.
+  recording, POST to `/api/practice/attempt` immediately (practice credit); keep the existing
+  sessionStorage mirror as a fast local cache/recovery layer, rescoped to include `userId`/
+  `roundId` in its key (not the source of truth anymore).
 - **Modify:** `src/app/dictation/[videoId]/shadowingEvaluationPersistence.ts` — becomes a
-  reconciliation cache seeded from the server on load, rather than the only copy of the data.
+  reconciliation cache seeded from the server on load.
+- **Modify:** `src/context/auth.tsx` `signOut` — add prefix-scoped `sessionStorage` cleanup for
+  the Shadowing recovery cache, alongside the existing `queryClient.clear()`.
 - **Test:** new `src/__tests__/practice-attempt-route.test.ts`,
-  `src/__tests__/practice-evaluate-attempt-scoped.test.ts` (mocks Azure — no quota consumed).
+  `src/__tests__/practice-evaluate-attempt-scoped.test.ts` (mocks Azure — no quota consumed,
+  including a simulated stale/superseded evaluation response).
 
-### Phase 4 — Listening coverage
+### Phase 5 — Listening coverage
 
-- **New:** `src/app/api/listening/sync/route.ts`, `src/app/api/listening/progress/route.ts`.
-- **Migrate:** `024_listening_progress.sql`.
+- **New:** `src/app/api/listening/sync/route.ts`, `src/app/api/listening/progress/route.ts`,
+  `src/app/api/study-session/activity/route.ts` (generic cross-mode activity pulse, §6.3b).
 - **Delete:** `src/app/api/listening-session/resume/route.ts`,
   `src/app/api/listening-session/save-progress/route.ts` (confirmed dead code, §2.1).
-- **Modify:** `src/components/YouTubePlayer.tsx` — add a `BUFFERING` branch that closes the open
-  interval; `src/app/dictation/[videoId]/useDictationSession.ts` — replace the ad hoc
-  `triggerAutoSave` call for Listening with the new interval-accumulation + 15s flush logic; wire
-  the existing `visibilitychange`/`pagehide` listener to force-flush.
-- **New:** `src/app/dictation/[videoId]/useListeningCoverage.ts` (client-side interval buffer +
-  merge-before-flush, mirroring `sessionPersistence.ts`'s existing local-buffer idiom).
-- **Test:** new `src/__tests__/listening-sync-route.test.ts` covering the merge/gap-tolerance/
-  seek-to-end/replay scenarios from §13.
+- **Modify:** `src/components/YouTubePlayer.tsx` — add a `BUFFERING` branch and the rate-aware
+  discontinuity check (§6.3); `src/app/dictation/[videoId]/useDictationSession.ts` — replace the
+  ad hoc `triggerAutoSave` call for Listening with interval-accumulation + flush logic; wire the
+  existing `visibilitychange`/`pagehide` listener, **plus a new route-change (navigation-boundary)
+  listener (§11.6, R25)**, to force-flush both Listening and generic activity buffers and
+  invalidate Dashboard/Library on outbound navigation.
+- **New:** `src/app/dictation/[videoId]/useListeningCoverage.ts`,
+  `src/app/dictation/[videoId]/useActivityPulse.ts` — client-side buffers that keep **two**
+  representations, not one merged one: the raw, unmerged list of observed spans (sent as-is in
+  `intervals`, §9.6, so the server can compute replay-inclusive `listening_observed_sec` from the
+  true unmerged payload) and, separately, an optional locally-merged preview used only for the
+  client's own on-screen coverage estimate before the server confirms it — the two are never
+  conflated, and the raw list is what actually gets sent. `flushBatchId` generation per batch.
+- **Test:** new `src/__tests__/listening-sync-route.test.ts` covering the corrected
+  denominator/discontinuity/threshold scenarios (§13); new `src/__tests__/activity-flush-log.test.ts`
+  covering retry-safe dedup and cross-session union deduplication.
 
-### Phase 5 — Dashboard, Library, History rewrite
+### Phase 6 — Dashboard, Library, History rewrite
 
-- **New:** `src/app/api/videos/library/route.ts`, `src/app/api/history/sessions/route.ts`.
-- **Modify:** `src/app/api/dashboard/summary/route.ts` — apply §6.8 formulas (dedupe accuracy by
-  video, fix practice-time to use `study_sessions`, fix streak to include all three modes).
-- **Modify:** `src/app/api/session/resume/route.ts`, `src/app/api/session/restart/route.ts`,
-  `src/app/api/session/[sessionId]/report/route.ts` — extend per §9.2/§10.5, add Shadowing/
-  Listening sections to the report.
+- **New:** `src/app/api/videos/library/route.ts`, `src/app/api/videos/library/[videoId]/route.ts`
+  (`DELETE`), `src/app/api/videos/[videoId]/mode/route.ts`, `src/app/api/history/sessions/route.ts`.
+- **Modify:** `src/app/api/dashboard/summary/route.ts` — apply §6.8 formulas (in-progress/completed
+  no longer mutually exclusive, legacy-completions split, practice time from §6.3b's account-level
+  union, streak to include all three modes).
+- **Modify:** `src/app/api/session/resume/route.ts` — the *remaining* §9.2 fields only (`listening`'s
+  independent resolution/`hasHistory`, `lastMode`), since Phase 0 already shipped the nullable
+  `round` slice; `src/app/api/session/restart/route.ts` — now calls `fn_restart_round` (§8.13,
+  replacing Phase 2's transitional `fn_legacy_restart_round`); `src/app/api/session/[sessionId]/report/route.ts`
+  — extend per §10.5, add Shadowing/Listening sections to the report, force-close the study
+  session on restart.
 - **New:** `src/lib/queries/videoLibrary.ts`, `src/lib/queries/practiceRound.ts`,
   `src/lib/queries/historySessions.ts` (mirrors `historyMistakes.ts` exactly).
 - **Modify:** `src/app/dashboard/page.tsx` — video-first layout (§10.1), library cards (§10.3).
 - **Modify:** `src/app/history/page.tsx` — add the History-sessions view alongside the existing
   Mistakes panel; wire the mutation-invalidation matrix (§11.2) into the practice-page mutations.
-- **Modify:** `src/app/dictation/[videoId]/page.tsx` — D17 fix (reset `uxState` on mode switch);
-  `ControlBar.tsx` — add the coverage readout.
-- **Test:** extend `src/__tests__/error-patterns-route.test.ts`-style route tests for the two new
-  routes; new `src/__tests__/dashboard-summary-formulas.test.ts` seeding fixtures across all four
-  D5/D8/D9/D10 defect scenarios to lock in the corrected formulas.
+- **Modify:** `src/app/dictation/[videoId]/page.tsx` — D17 fix (reset `uxState` on mode switch),
+  wire the explicit mode-switch ping; `ControlBar.tsx` — add the coverage readout.
+- **Test:** new `src/__tests__/dashboard-summary-formulas.test.ts` seeding fixtures across all
+  D5/D8/D9/D10 defect scenarios *and* the review's R11/R16 scenarios (in-progress+completed
+  coexisting, cross-session time dedup) to lock in the corrected formulas.
 
-### Phase 6 — Legacy backfill and cleanup
+### Phase 7 — retired (merged into Phase 1, R21)
 
-- **Migrate:** the `listening_sessions` backfill portion of `024_listening_progress.sql` (can run
-  as part of Phase 4 or deferred here if a production data review is wanted first — see §14).
+This slot previously held duplicate-active-round cleanup. That migration now runs inside Phase 1
+(`030_practice_round_active_uniqueness.sql`), before Phase 2's functions can depend on round
+uniqueness — see the renumbering note at the top of this section. The slot is left here,
+explicitly marked retired, rather than reused, so Phase 8 and Phase 9 below keep their existing
+numbers and every cross-reference to them elsewhere in this document (§5.7, §6.9, §10.7, §13,
+§15, the Review-resolution table's R20) stays correct without a second, unrelated renumbering.
+
+### Phase 8 — Retirement
+
+- **Delete:** any remaining references to the pre-cutover client-trusted `status` write path.
 - **Optional, not required for v1:** physical rename of `learning_sessions` → `practice_rounds`
   (§4) — mechanical, touches every file listed in §2.1/§2.2, zero behavior change, purely a
   later-readability cleanup.
 
-### Dependency summary
+### Phase 9 — Script Versions
+
+**Depends on Phase 0 AND Phase 1 (corrected — R21), not "only Phase 0"**: deletion's retention
+classification (§6.9) reads `learning_sessions.transcript_id` (any status), `attempt_logs.transcript_id`,
+`shadowing_attempts.transcript_id`, `listening_progress.transcript_id`, and `users.is_admin` — all
+Phase 1 additions — and revision *listing* needs the same tables for accurate, non-misleading
+retention reasons, not just for gating delete. Only the `content_fingerprint`/`is_current` identity
+underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase's functionality
+needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
+Phase 0.
+
+- **Migrate:** `035_fn_delete_transcript_revision.sql`.
+- **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
+  `src/app/api/transcripts/[videoId]/versions/[transcriptId]/preview/route.ts` (`GET`),
+  `src/app/api/transcripts/versions/[transcriptId]/route.ts` (`DELETE`, admin-gated, disabled by
+  default behind its own flag until its release gate is met, §6.9).
+- **New:** `src/lib/queries/transcriptVersions.ts`; a Script Versions dialog component reachable
+  from the video actions menu / Script tab overflow (§10.7). (The `?transcriptId=` reader change
+  itself already shipped in Phase 0, §12 above — this phase only adds the management UI on top of
+  it.)
+- **Test:** new `src/__tests__/transcript-versions-route.test.ts` covering retention
+  classification (every round status, not only active — R28's `learning_sessions.transcript_id`
+  fix), the publish-vs-delete and direct-reference-vs-delete races (§13, real-Postgres tier), and non-admin viewers never
+  seeing a working delete action. Deletion specifically gated on passing this test tier before
+  release (§6.9's explicit release gate) — listing/preview/size-estimates/duplicate-prevention are
+  not gated on it.
+
+### Dependency graph
 
 ```
-Phase 0 (transcript integrity)
-   └─ Phase 1 (round + study session schema)
-        ├─ Phase 2 (dictation idempotency/completion)
-        ├─ Phase 3 (shadowing persistence)
-        └─ Phase 4 (listening coverage)
-             └─ Phase 5 (dashboard/library/history) — depends on 2, 3, and 4 all landing
-                  └─ Phase 6 (legacy backfill / optional rename)
+Phase 0 (transcript revision identity + atomic publish + pinned-revision reader, R21)
+   └─ Phase 1 (all new schema + duplicate-round reconciliation, R21)
+        ├─ Phase 2 (concurrency-safe RPC functions — needs Phase 1's tables AND round uniqueness)
+        │    ├─ Phase 3 (Dictation cutover via the write-gate runbook + provenance backfill, R23)
+        │    ├─ Phase 4 (Shadowing persistence cutover)
+        │    └─ Phase 5 (Listening coverage cutover)
+        │         └─ Phase 6 (Dashboard/Library/History — needs 3, 4, and 5 all landed)
+        │              └─ Phase 8 (retirement / optional rename)
+        └─ Phase 9 (Script Versions — depends on Phase 0 AND Phase 1, corrected from "Phase 0 only")
 ```
+
+(Phase 7 is retired — see above; it is not a gap in this graph, its content simply moved inside
+Phase 1.)
 
 ---
 
@@ -1407,41 +3692,97 @@ All automated tests mock Azure/Gemini and consume no quota, per existing convent
 test`) is listed separately from browser/device checks, which are explicitly manual/runtime —
 none of the jsdom tests below are described as real-device verification.
 
-| # | Scenario | Mechanism | Test |
-|---|---|---|---|
-| 1 | Dictation all required sentences, imperfect accuracy: practice complete, score imperfect | §6.5 coverage-only completion; §6.6 accuracy computed independently | `dictation-check-route.test.ts` (extend) |
-| 2 | Dictation 1–6 + Shadowing 7–10: overall complete, neither mode complete | §6.4 worked example | new `roundCoverage.test.ts` |
-| 3 | Same sentence in both modes: counts once overall | §6.4 set union | `roundCoverage.test.ts` |
-| 4 | Jump to last sentence without earlier ones: incomplete | §6.5 `count(distinct...) >= required` guard | `roundCoverage.test.ts` |
-| 5 | Listening through the video: Listening completion only | §6.3, never sets round `status` | `listening-sync-route.test.ts` |
-| 6 | Seek to end: no full coverage | §6.3 "seeking never credits the skipped interval" | `listening-sync-route.test.ts` |
-| 7 | Replay an interval: no duplicate coverage | §6.3 server-side interval union | `listening-sync-route.test.ts` |
-| 8 | Valid Shadowing recording + Azure quota failure: practice retained, assessment unavailable | §6.2/§7.3 — credit at insert, eval status independent | `practice-attempt-route.test.ts` |
-| 9 | Empty/cancelled recording: no credit | §6.2 validity gate (non-empty blob + duration floor) | `practice-attempt-route.test.ts` |
-| 10 | Mode switch during pending evaluation: result attaches to original attempt | §7.4/§9.4 PATCH-by-`attemptId` | `practice-evaluate-attempt-scoped.test.ts` |
-| 11 | Round spans multiple days: sessions distinct, round continues | §5.3 study-session boundary; round has no time limit | `studySession.test.ts` |
-| 12 | Reopen a completed video: no automatic reset | §10.5 — resume is always non-destructive | `session-resume-route.test.ts` (new) |
-| 13 | Explicit "Practice again": new round, old results preserved | §10.5, `round_number` increment | `session-restart-route.test.ts` (extend) |
-| 14 | Multiple completed rounds/modes for one video: counted once | §6.8 `count(distinct youtube_video_id)` | `dashboard-summary-formulas.test.ts` |
-| 15 | Duplicate submission delivery: no duplicate credit | §9.7 idempotency via `clientAttemptId` | `dictation-check-route.test.ts`, `practice-attempt-route.test.ts` |
-| 16 | Refresh/navigation/another device: progress resumes correctly | Server-authoritative round/attempt/coverage tables, §5–§6 | `session-resume-route.test.ts` |
-| 17 | Transcript regeneration: no misapplied old attempts | §8.4 immutable-revision fix + §9.5 stale-revision rejection | `transcript-generate-route.test.ts` (extend) |
-| 18 | Legacy records with insufficient evidence: no fabricated coverage | §8.6 backfill — `legacy_source` tag, empty `covered_intervals`, no `listened_through` claim | `listening-progress-backfill.test.ts` (new, migration-level) |
-| 19 | Partial assessment: missing scores not zeros | §6.7 "excluded from average, never zeroed" (already-correct existing logic, re-verified) | extend `videoPracticeSummary.test.ts`-equivalent for the server-side port |
-| 20 | Dashboard/History update after mutations, no reload/empty-state flash | §11.2 invalidation matrix + §11.3 stale-while-revalidate | new `dashboard-cache-invalidation.test.tsx` |
+| # | Scenario | Mechanism | Test | Tier |
+|---|---|---|---|---|
+| 1 | Dictation all required sentences, imperfect accuracy: practice complete, score imperfect | §6.5 coverage-only completion; §6.6 sentence accuracy computed independently | `dictation-check-route.test.ts` (extend) | Unit |
+| 2 | Dictation 1–6 + Shadowing 7–10: overall complete, neither mode complete | §6.4 worked example | new `roundCoverage.test.ts` | Unit |
+| 3 | Same sentence in both modes: counts once overall | §6.4 set union | `roundCoverage.test.ts` | Unit |
+| 4 | Jump to last sentence without earlier ones: incomplete | §6.5 `count(distinct...) >= required` guard | `roundCoverage.test.ts` | Unit |
+| 5 | Listening through the video: Listening completion only | §6.3, never sets round `status` | `listening-sync-route.test.ts` | Unit |
+| 6 | Seek to end: no full coverage | §6.3 rate-aware discontinuity detection | `listening-sync-route.test.ts` | Unit |
+| 7 | Replay an interval: no duplicate coverage | §6.3 server-side exact interval union | `listening-sync-route.test.ts` | Unit |
+| 8 | Valid Shadowing recording + Azure quota failure: practice retained, assessment unavailable | §6.2/§7.3 — credit at insert, eval status independent | `practice-attempt-route.test.ts` | Unit |
+| 9 | Empty/cancelled recording: no credit | §6.2 validity gate (non-empty blob + duration floor) | `practice-attempt-route.test.ts` | Unit |
+| 10 | Mode switch during pending evaluation: result attaches to original attempt | §7.4/§9.4 PATCH-by-`attemptId`+seq | `practice-evaluate-attempt-scoped.test.ts` | Unit |
+| 11 | Round spans multiple days: sessions distinct, round continues | §5.3 study-session boundary; round has no time limit | `studySession.test.ts` | Unit |
+| 12 | Reopen a completed video: no automatic reset | §10.5 — resume is always non-destructive | `session-resume-route.test.ts` (new) | Unit |
+| 13 | Explicit "Practice again": new round, old results preserved | §10.5, `round_number` increment, force-closes prior session | `session-restart-route.test.ts` (extend) | Unit |
+| 14 | Multiple completed rounds/modes for one video: counted once | §6.8 `count(distinct youtube_video_id)` | `dashboard-summary-formulas.test.ts` | Unit |
+| 15 | Duplicate submission delivery: no duplicate credit | §9.8 idempotency via `clientAttemptId`, corrected upsert | `dictation-check-route.test.ts`, `practice-attempt-route.test.ts` | Unit + Integration |
+| 16 | Refresh/navigation/another device: progress resumes correctly | Server-authoritative round/attempt/coverage tables, §5–§6 | `session-resume-route.test.ts` | Unit |
+| 17 | Transcript regeneration: no misapplied old attempts | §8.3 immutable-revision fix + §9.5 stale-revision rejection | `transcript-generate-route.test.ts` (extend) | Unit |
+| 18 | Legacy records with insufficient evidence: no fabricated coverage | §8.8 backfill — `legacy_source` tag, empty `covered_intervals`, no `listened_through` claim | `listening-progress-backfill.test.ts` (new, migration-level) | Unit |
+| 19 | Partial assessment: missing scores not zeros | §6.7 "excluded from average, never zeroed," per-source (Azure/Word Match never blended) | extend `videoPracticeSummary.test.ts`-equivalent for the server-side port | Unit |
+| 20 | Dashboard/History update after mutations, no reload/empty-state flash | §11.2 invalidation matrix + §11.3 stale-while-revalidate | new `dashboard-cache-invalidation.test.tsx` | Unit |
+| 21 | Add a video without starting practice: visible in that user's library only | §5.6/§9.1 `user_videos` + `POST /api/video/resolve` upsert | `video-resolve-route.test.ts` (extend) | Unit |
+| 22 | Listening-only session without a practice round | §5.3 nullable `study_sessions.round_id` | `studySession.test.ts` | Unit |
+| 23 | Two concurrent final-sentence submissions complete the round reliably | §6.5 row-lock race fix | `fn_record_dictation_attempt.integration.test.ts` | **Real Postgres** |
+| 24 | Successful write followed by lost response: retry returns the same attempt, with unchanged timestamps and no repeated side effect | §6.5/§9.3 corrected explicit lookup-then-insert flow (R26 — no `updated_at` self-touch) | `practice-attempt-route.test.ts` | Unit + Integration |
+| 25 | A 25-minute inactive gap is not counted as active practice | §6.3b bounded-gap rule, `activity_intervals` never bridges a real gap | new `activityIntervals.test.ts` | Unit |
+| 26 | Retried activity/listening flush does not double-count | §6.3b `activity_flush_log` dedup | `listening-sync-route.test.ts`, `activity-flush-log.test.ts` | Unit + Integration |
+| 27 | Overlapping tabs/devices do not double-count active time | §6.3b account-level cross-session union | `dashboard-summary-formulas.test.ts` | Unit |
+| 28 | Activity before the first Dictation submission is credited | §6.3b keystroke/segment-play pulses, not just submissions | `activityIntervals.test.ts` | Unit |
+| 29 | Reusing an idempotency key with different content is rejected | §9.3 `409 idempotency_key_reused_with_different_payload` | `practice-attempt-route.test.ts` | Unit |
+| 30 | Concurrent Listening updates preserve both contributions | §6.3/§8.8 atomic `ON CONFLICT DO UPDATE` merge | `listening-sync-route.test.ts` | **Real Postgres** |
+| 31 | Word-Match-only sentences never enter the Azure aggregate | §6.7 fully independent `azurePronunciationSummary`/`wordMatchSummary` | new `shadowingAggregation.test.ts` | Unit |
+| 32 | Historical completion without sufficient evidence remains unverified | §5.7/§6.8 `provenance='legacy_unverified'`, separate Dashboard stat | `dashboard-summary-formulas.test.ts` | Unit |
+| 33 | Legacy hint usage remains unknown | §8.6 nullable `hint_level_used`, no fabricated default | `attempt-logs-backfill.test.ts` (migration-level) | Unit |
+| 34 | An old round loads its old revision (A) and submits against it after a new revision (B) is published | §6.9/§12 Phase 0's pinned `transcript_id` resume path, `?transcriptId=` reader, query-key split (R21) | `transcript-pinned-revision-route.test.ts` (new), `session-resume-route.test.ts` | Unit |
+| 35 | Failed/in-progress regeneration does not replace the usable transcript | §8.3 atomic publish — a `processing`/`failed` row never becomes `is_current` | `transcript-generate-route.test.ts` | Unit |
+| 36 | Direct player seeking and small repeated gaps do not fabricate coverage | §6.3 corrected denominator + rate-aware discontinuity detection | `listening-sync-route.test.ts` | Unit |
+| 37 | Missing transcript identity cannot create duplicate Listening rows | §8.8 two partial unique indexes | `listening_progress_uniqueness.integration.test.ts` | **Real Postgres** |
+| 38 | Ordinary partial practice updates Dashboard, Library, and History | §11.2 unconditional per-mutation invalidation | `dashboard-cache-invalidation.test.tsx` | Unit |
+| 39 | A previously completed video with a new active round remains resumable and in-progress | §6.8/§10.3 in-progress/completed non-exclusivity | `dashboard-summary-formulas.test.ts` | Unit |
+| 40 | Closing the tab during assessment does not leave an attempt permanently pending | §9.5's `EVAL_PENDING_TIMEOUT_SEC` lazy expiry | `practice-evaluate-attempt-scoped.test.ts` | Unit |
+| 41 | Cross-user, same-user/wrong-round, and same-user/wrong-video associations are all rejected | §9.7 relationship-validation checklist — round↔user/video checked in one locked statement | `fn_record_shadowing_attempt.integration.test.ts` | **Real Postgres** |
+| 42 | Old client requests cannot restore the old completion rules | §12 Phase 3 — `save-progress` ignores client `status:'completed'` post-cutover | `session-save-progress-route.test.ts` (extend) | Unit |
+| 43 | Sign-out/account switching does not expose another user's local recovery state | §11.5 prefix-scoped `sessionStorage` cleanup in `signOut()` | new `auth-signout-cleanup.test.tsx` | Unit (DOM) |
+| 44 | Rollout and rollback preserve historical data | §8.18 — rollback never drops populated tables | Manual rollout rehearsal against a staging copy | **Runtime** |
+| 45 | Regenerating identical content reuses the existing revision, doesn't duplicate | §6.9/§8.3 fingerprint match reuses and re-promotes | `transcript-generate-route.test.ts` | Unit |
+| 46 | Deleting a revision still referenced by a round/attempt is refused | §6.9 retention classification | `transcript-versions-route.test.ts` | Unit |
+| 47 | A reference created between the dialog's read and the delete request blocks deletion | §6.9/§8.16 `fn_delete_transcript_revision`'s re-check-under-lock | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
+| 48 | Removing a video from the personal library never deletes the shared transcript | §10.7/§C.5 separation of library-removal from admin deletion | `video-library-route.test.ts` | Unit |
+| 49 | Listening-only video (no round ever created) appears correctly on the Library page with a live coverage percentage | §5.5/§6.3/§10.2 round-independent Listening resolution (R24 — corrects the `latest_round.transcript_id` bug) | `video-library-route.test.ts` | Unit |
+| 50 | A video's observed-but-transcript-less Listening intervals are credited (intersected, not discarded) the moment a transcript first becomes available; a legacy position-only backfill row contributes zero credit under the same rule | §8.8's corrected transition rule (intersection with the new transcript's valid-segment union) | new `listening-transcript-transition.test.ts` | Unit |
+| 51 | Replaying the same interval twice within one flush batch increases `listening_observed_sec` by the full replay-inclusive amount but `coveredSec` by only the unique amount | §5.3/§9.6 raw-sum-vs-merged-union calculation from one unmerged payload | `listening-sync-route.test.ts` | Unit |
+| 52 | Practicing several sentences and navigating to Dashboard (no completion, no tab close) shows the new progress immediately | §11.6 navigation-boundary flush + invalidation, not just `pagehide` | new `navigation-boundary-flush.test.tsx` | Unit (DOM) |
+| 53 | A flush that fails partway through leaves neither a dedup marker nor a partial interval/counter update — a genuine retry of the same batch still applies fully | §9.6/§8.13 `fn_flush_study_activity`'s single-transaction atomicity (R27) | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
+| 54 | A direct PostgREST write to `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` (bypassing the intended route) is rejected by RLS; a direct PATCH attempting to set `users.is_admin` on one's own row silently has no effect | §9.9 — owner-SELECT-only RLS + `users_prevent_self_admin_grant` trigger (R28) | new `direct-write-bypass.integration.test.ts` | **Real Postgres** |
+| 55 | A tampered or expired Azure-recovery token is rejected; a valid, unexpired one persists the result without a new Azure call | §9.4/§9.9 signed recovery token, HMAC + `expiresAt` + `azure_eval_request_seq` checks | new `evaluate-recovery-token.test.ts` | Unit |
+| 56 | A completed (or abandoned) round with no linked `attempt_logs`/`shadowing_attempts` rows still protects its pinned transcript revision from deletion | §6.9's retention check against `learning_sessions.transcript_id` directly, for every round status (R28 — not dependent on `attempt_logs.transcript_id` being populated) | `transcript-versions-route.test.ts` | Unit |
+| 57 | A video with any existing `vocabulary_items`/`bookmarks` row refuses deletion outright (pre-existing-row check, not a concurrency claim — §6.9 corrects a prior draft's false claim that `SERIALIZABLE` isolation alone detects a concurrent, lower-isolation insert) | §6.9's indirect-reference block, verified as a plain existence check | `transcript-versions-route.test.ts` | Unit |
+| 58 | Publication finding a fingerprint-matching older revision A, racing a concurrent deletion of A, never leaves the video without a current revision — publication's row lock on the candidate, re-verified before retiring the old current, falls back to inserting fresh content if A is gone | §6.9's publish-vs-delete coordination protocol | `fn_publish_transcript_revision.integration.test.ts` (new) | **Real Postgres** |
+| 59 | A deletion refused mid-transaction (any protection condition trips) leaves the target revision, its segments, and every round/attempt/listening-progress row referencing it completely unchanged | §6.9/§8.16 — refusal is a clean transaction abort, not a partial cascade | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
+| 60 | The write-gate cutover runbook, run against a staging copy with simulated in-flight requests, produces the exact legacy/current split the bounded backfill promises; a run interrupted mid-runbook recovers cleanly by reopening the gate | §8.14/§12 Phase 3/§14.2's runbook | `cutover-write-gate.integration.test.ts` | **Real Postgres** + manual staging rehearsal |
+| 61 | A call to `fn_legacy_save_progress` attempting to create a round *after* the `app_write_gate` fence closes is genuinely blocked — not merely rejected by a flag check that a concurrent write could race — distinct from a pre-fence row, which is correctly tagged legacy by the bounded backfill | §8.14's `FOR UPDATE`/`FOR SHARE` row-lock fence, the correctness mechanism, not the 30s timeout | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
+| 62 | Duplicate-active-round cleanup's rollback runs in the correct order (drop index, then restore) and is refused/fails safely if attempted in the wrong order | §8.15/§8.18 corrected rollback ordering | new `migration-030-rollback.integration.test.ts` | **Real Postgres** |
+| 63 | An already-open Listening session's buffered observations survive a concurrent regeneration in another tab — the pending flush still credits the *original* `transcriptId` the observations were made under, never silently reassigned and never dropped | §9.5/§9.6's explicit concurrent-regeneration rule | new `listening-open-session-regeneration.test.ts` | Unit |
+| 64 | Both `listening_progress` upsert branches (`transcript_id IS NOT NULL` and `transcript_id IS NULL`) correctly target their respective partial unique index under real concurrent writers | §8.8/§9.6's corrected `ON CONFLICT ... WHERE ...` predicates | `listening_progress_uniqueness.integration.test.ts` (extend) | **Real Postgres** |
+| 65 | Navigating away before a flush completes: the destination page's own fetch may return pre-flush data, but once the pending flush commits, Dashboard/Library/History subsequently reflect it without a manual reload | §11.6's post-success (not pre-emptive) invalidation | new `navigation-flush-ordering.test.tsx` | Unit (DOM) |
 
 ### Runtime / real-device verification (not achievable in jsdom)
 
-- iPhone Safari/PWA: `visibilitychange`/`pagehide` firing reliably for the Listening flush and
-  study-session `ended_at` stamp; Safari's lack of `SpeechRecognition` correctly degrading Word
-  Match to "unsupported" without blocking practice credit (§6.2 — practice credit never depends on
-  Word Match succeeding).
-- Real Supabase project: confirm all 19+8 migrations apply cleanly against production, RLS
-  actually enforced at runtime (§2.5), and the §8.9 duplicate-active-round cleanup affects the
+- iPhone Safari/PWA: `visibilitychange`/`pagehide` firing reliably for the Listening/activity
+  flush and study-session `ended_at` stamp; Safari's lack of `SpeechRecognition` correctly
+  degrading Word Match to "unsupported" without blocking practice credit (§6.2 — practice credit
+  never depends on Word Match succeeding).
+- Real Supabase project: confirm all 19 original + 16 new migrations (`020`–`035`) apply cleanly
+  against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
+  `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
+  the §8.15 duplicate-active-round cleanup (migration `030`, run early in Phase 1) affects the
   expected (small) number of rows before the unique index is added.
 - Real Azure calls (manual, outside the automated suite, quota-aware): one end-to-end Evaluate
-  click to confirm the `attemptId`-scoped PATCH lands on the correct row under real network
+  click to confirm the `attemptId`+seq-scoped PATCH lands on the correct row under real network
   latency, not just the mocked test.
+- **Real PostgreSQL integration tests** (scenarios #23, #26, #30, #37, #41, #47, #53, #54, #58,
+  #59, #60, #61, #62, #64) are a genuinely separate tier from the existing mocked-Supabase-client
+  Jest suite — row locking (including the publish-vs-delete and cutover-fence coordination
+  protocols), advisory locks, `SECURITY DEFINER`/RLS interaction, and partial-unique-index behavior
+  cannot be exercised meaningfully against a mock. These run against a local Supabase/Postgres
+  instance (`supabase start` or equivalent), not production, and are not part of the existing
+  `npm test` mocked-route suite.
+- No paid-provider test is run as part of this planning task, and none of the above list should be
+  executed while producing this plan — they are the acceptance procedure for whoever implements it.
 
 ---
 
@@ -1450,79 +3791,265 @@ none of the jsdom tests below are described as real-device verification.
 ### 14.1 Scope preservation — explicitly confirmed unaffected
 
 Per the task's scope boundary, this plan does not touch: Dictation input behavior/shortcuts,
-Listening's continuous-play mechanics beyond the coverage-tracking additions in Phase 4, Shadowing
-recording/per-sentence evaluation UX, the Word Match vs. Azure separation, all vocabulary
-data/translation/image/canonical-form/pronunciation-caching machinery, vocabulary SRS, transcript
-translation/highlight engines (only their integration point with transcript revision identity
-changes — §8.4 — the engines themselves are untouched), and existing auth/RLS conventions (every
-new table follows the exact `using (auth.uid() = user_id)` pattern already in use). No new paid
-provider, no long-term recording storage (confirmed absent from every new table in §8), no
-unrelated UI redesign.
+Listening's continuous-play mechanics beyond the coverage-tracking additions in Phase 5, Shadowing
+recording/per-sentence evaluation UX, the Word Match vs. Azure separation (now made *stricter*,
+not looser — §6.7), all vocabulary data/translation/image/canonical-form/pronunciation-caching
+machinery, vocabulary SRS, transcript translation/highlight engines (only their integration point
+with transcript revision identity changes — §8.3 — the engines themselves are untouched), and
+existing auth/RLS conventions where they remain adequate: every new table still uses
+`auth.uid() = user_id` as its ownership predicate, and `user_videos` alone keeps the exact
+`for all` shape already in use elsewhere in this schema (§8.9/§9.9). Every other new table
+narrows that same predicate to SELECT-only, with writes routed through `SECURITY DEFINER`
+functions (§9.9) — a deliberate, motivated departure from blanket `for all`, not a break from the
+ownership *model* itself, made necessary by guarantees (round-locking, idempotency, relationship
+validation) that RLS alone cannot express. No new paid provider, no long-term recording storage
+(confirmed absent from every new table in §8, including the Script Versions size estimates, which
+are metadata only), no unrelated UI redesign. Script Versions is additive UI, not a redesign of
+the existing Script tab.
 
-### 14.2 Compatibility
+### 14.2 Practical rollout sequence
 
-- Every migration is additive; no existing column is dropped, renamed, or retyped.
+**Corrected from Revision 3's "same deploy" claim (R23), which named a goal without a mechanism.**
+A concrete ordering, including the actual coordination primitive (`app_write_gate`) and its
+recovery path, not merely "ship the phases in order":
+
+1. **Compatible schema and reader preparation** (Phase 0–1 migrations, including the
+   `app_write_gate` table and duplicate-round reconciliation). Every new table/column exists;
+   nothing reads or writes to it yet except the reconciliation itself, which is a one-time,
+   audit-logged, reversible cleanup (§8.15) — not a no-op, but a bounded, tested one. Fully safe to
+   deploy otherwise — a no-op from the rest of the running application's perspective.
+2. **New authoritative write paths land behind the old ones, and the old path learns to check the
+   gate** (Phase 2). The new RPC functions and routes exist and are tested (including the
+   real-Postgres integration tier, §13); `save-progress`'s completion branch gains the
+   `app_write_gate` check (still a no-op — the gate defaults closed/open, i.e.
+   `completion_writes_paused = false`). This step must fully roll out and soak *before* step 3
+   flips the gate, so every instance in rotation has the check.
+3. **The cutover itself — the concrete runbook (§12 Phase 3, R23):** pause via the gate, drain
+   `CUTOVER_DRAIN_WINDOW_SEC`, run the bounded provenance backfill keyed to the captured
+   `cutover_at`, deploy the Phase 3 code that removes the old completion branch entirely, reopen
+   the gate. Recovery at each step is specified in §12 Phase 3 — every failure mode short of "the
+   Phase 3 code deploy itself failed" is a same-session, non-destructive reopen-the-gate operation.
+4. **Client and UI cutover** (Phase 4–6's frontend changes ship together with their backend
+   counterparts, per phase). Dashboard/Library/History switch to the new formulas and queries.
+5. **Validation/reconciliation.** Confirm via the real-Postgres integration tests (§13, including
+   the new cutover-runbook and RLS-bypass scenarios, #54/#58) and a staging rehearsal that
+   concurrent-submission completion, idempotent retries, and cross-session time dedup behave as
+   designed before treating production as settled.
+6. **Optional later cleanup** (Phase 8's optional physical rename, Script Versions' automatic-
+   cleanup cron — explicitly **not** enabled by this plan, §6.9). Phase 7 (the old duplicate-round
+   cleanup slot) is retired — its work already happened in step 1.
+
+### 14.3 Compatibility
+
+- Schema is additive; no existing column is dropped, renamed, or retyped. **Permissions are not
+  purely additive** — `learning_sessions`/`attempt_logs`/`shadowing_attempts` each lose an existing
+  or would-be-permissive direct-write RLS policy (§9.9/§8.14) as part of this plan, a deliberate,
+  necessary behavior change, not an oversight to reconcile with the schema-additivity claim above.
 - `learning_sessions`/`attempt_logs` keep their physical names and all existing columns — any
-  code not yet migrated to the new fields continues to function against the old ones during a
-  staged rollout.
-- The `/api/listening-session/*` routes are safe to delete outright (Phase 4) since they are
+  code not yet migrated to the new fields continues to function against the old ones during the
+  staged rollout above.
+- The `/api/listening-session/*` routes are safe to delete outright (Phase 5) since they are
   confirmed unreachable dead code — no client anywhere calls them.
+- **Two distinct request-contract compatibility strategies (R21/R23's review, not a blanket
+  "additive" claim — the review correctly rejected that framing):**
+  - **Dictation submit and Shadowing attempt** (`/api/dictation/check`, `/api/practice/attempt`):
+    every new request field (`clientAttemptId`, `hintLevelUsed`, `studySessionId`, `transcriptId`)
+    is **optional**, with a safe, non-guessing server-side fallback for an old client that omits
+    it — a server-generated `clientAttemptId` (that one request simply loses retry-idempotency, no
+    worse than today's pre-existing D12 behavior), the round's own stored `transcript_id` used
+    directly in place of a client-supplied one (skipping only the extra staleness cross-check, not
+    round resolution itself), a missing `studySessionId` simply meaning the attempt isn't
+    attributed to a specific study session for History granularity. Chosen because this is the
+    highest-frequency, most disruptive-to-break mutation, and every field has a safe default.
+  - **`POST /api/practice/evaluate`**: `attemptId` is **required**, with **no** fallback — there is
+    no safe way to guess which attempt an old, pre-Phase-4 request (one that predates the
+    `attemptId` concept entirely) refers to, and fabricating one would misattribute a score to
+    history the user never produced through this flow. An old request gets a stable `409
+    stale_client_version`, not a guess (§9.4/§14.3's earlier note).
+  - Every other changed request/response contract in §9 was reviewed against this same question
+    (does an old value have a safe interpretation?) and found additive — this section names the
+    two exceptions explicitly rather than asserting "all changes are additive" as a blanket claim.
+- **Already-open old browser tabs**, addressed explicitly per the review's request: every extended
+  API **response** in §9 is additive-only, so a stale client-side bundle keeps working against the
+  field set it already reads. The one deliberate **request**-side behavior change (beyond the two
+  contract changes above) is that `save-progress` stops *honoring* an old tab's client-supplied
+  `status:'completed'` once the write-gate runbook (§12 Phase 3) completes — it's silently ignored
+  (200 response, no completion side effect), not rejected with an error, so an old tab can still
+  save its resume position without a broken UX; it simply can no longer self-declare completion,
+  which is the entire point of the cutover. During the runbook's brief pause window, this is
+  already true, not merely "eventually true" once the deploy finishes.
 
-### 14.3 Rollback
+### 14.4 Rollback
 
-Covered per-migration in §8.11. At the application layer, each phase (§12) is independently
-revertable by redeploying the previous version of just its own files — phases don't share
-mutable state in a way that makes a partial rollback unsafe, because every new table is additive
-and nothing in an earlier phase depends on a later phase's tables existing.
+Full mechanics in §8.18 (correcting Revision 1's overclaim that every phase is independently
+revertible where a real dependency exists — Phase 2's functions genuinely need Phase 1's tables,
+for instance, so "roll back Phase 1 alone" is not a coherent operation once Phase 2 is live).
+The load-bearing rules, stated once here: **rollback never prescribes dropping a populated
+table** — reverting means reverting the application routes to prior behavior and leaving new
+tables/data in place; and **Phase 0's transcript-immutability change (writer and reader together,
+R21) is a one-way commitment** once Phase 1+ has shipped — reverting it afterward would silently
+corrupt every pinned `transcript_id`/`segment_id` reference created since. Migration `030`'s
+(duplicate-round reconciliation, moved into Phase 1 by R21) cleanup is reversible via its own
+audit-log table (§8.15), **but only in the correct order — drop the unique index before restoring
+rows, and only cleanly before Phase 2 ships** (§8.18's corrected version, R23). Migration `034`'s
+(provenance backfill) rollback is bounded and technically possible but not recommended once Phase
+3 is live, for the reasons §8.18 states — recovery from a *failed* cutover uses the runbook's own
+steps (§12 Phase 3), not a migration-level reversal after the fact.
 
-### 14.4 Known, accepted limitations
+### 14.5 Known, accepted limitations
 
 - **Existing Listening/Shadowing sessions currently misfiled as low-accuracy Dictation rounds
   (D1) cannot be algorithmically reclassified.** Retroactively guessing which historical
   `learning_sessions` rows were "really" Listening or Shadowing would fabricate provenance the
-  task explicitly forbids. They remain visible in History exactly as they are today; only new
-  activity after Phase 3/4 ship is correctly attributed.
-- **`completed_at` backfill (§8.8) is an approximation** (`= updated_at`) for rows completed
-  before this migration — stated as such, not presented as a verified timestamp.
+  task explicitly forbids. They remain visible in History exactly as they are today, tagged
+  `provenance='legacy_unverified'` (§5.7/§8.14) and excluded from the primary "Completed videos"
+  stat; only new activity after Phase 3/4/5 ship is correctly attributed and counted as `current`.
+- **`completed_at` backfill (§8.14) is an approximation** (`= updated_at`) for rows completed
+  before this migration — stated as such via `provenance`, not presented as a verified timestamp.
+- **`hint_level_used`/`segment_identity_provenance` are genuinely unknown for legacy attempts** —
+  `NULL`, never a fabricated default, per §8.6.
 - **The 90% "listened through" threshold (§6.3) cannot detect inattention** — it measures
-  media-timeline traversal, not comprehension or attention, and says so in its own UI copy.
+  media-timeline traversal, not comprehension or attention, and says so in its own UI copy. This
+  is a stated product tolerance, not a measurement-precision artifact.
 - **Azure quota remains global, not per-user** (unchanged from today, out of scope for this
   redesign — a product/infra decision independent of the data model).
 - **`videos.title`/`duration_sec` remain frequently null** unless a future, separate change
   populates them more reliably during transcript generation — this plan's Listening-denominator
-  logic (§6.3) already accounts for that by falling back to the transcript's own span.
+  logic (§6.3) already accounts for that by falling back to the transcript's own valid-segment
+  union or omitting a completion badge entirely.
+- **`vocabulary_items`/`bookmarks` have no `transcript_id` column** (pre-existing gap, not
+  introduced or worsened here) — Script Versions' retention check (§6.9) mitigates this with a
+  coarser, video-level guard rather than leaving revisions with vocabulary references unprotected;
+  a saved vocab item's "jump to source" can still drift after a transcript regeneration, which
+  this plan does not fully close (explicitly deferred, §5.7).
+- **The account-level cross-session time union (§6.3b)** assumes a user's total study-session
+  count stays in the "low hundreds" range this app's stated scale implies; if that assumption
+  changes materially, the live union-at-read-time approach would need revisiting (an incremental
+  materialized total, computed at flush time instead of read time) — not needed for v1.
 
-### 14.5 No parallel sources of truth
+### 14.6 No parallel sources of truth
 
 Every metric in §6 has exactly one authoritative computation path: coverage and scores are always
 derived from `attempt_logs`/`shadowing_attempts`/`listening_progress`, never re-derived
 differently in two places the way today's client-tallied `sessionStore` accuracy and the
-report-page's `attempt_logs` recompute currently disagree (D14). The client-side `sessionStore`
-tally is kept only as an *optimistic, non-authoritative* display value between a submit and its
-server response — it is never written back to any table as the score of record.
+report-page's `attempt_logs` recompute currently disagree (D14). `user_videos` (§5.6) and
+`activity_flush_log` (§8.10) are the two tables added by this revision that could be mistaken for
+competing sources of truth — both are explicitly documented as *not* that: `user_videos` is never
+read for scoring, and `activity_flush_log` holds no scoring data at all, only idempotency markers.
+The client-side `sessionStore`/optimistic display is kept only as a *non-authoritative* value
+between a submit and its server response, computed with the same rule as the server (§6.6) — it
+is never written back to any table as the score of record.
 
 ---
 
 ## 15. Readiness assessment
 
 **Ready to implement now**, with no open product questions:
-- Phase 0 (transcript revision fix) — a clear, self-contained bug fix with an obvious correct
-  behavior, blocking nothing else conceptually but blocking everything else *safely*.
-- Phases 1–3 (round/study-session schema, Dictation idempotency, Shadowing persistence) — every
-  formula, validity rule, and API contract in §6/§9 is fully specified; no ambiguity remains.
-- Phase 5's Dashboard/Library/History formulas — fully specified in §6.8/§10.
+- Phase 0 (transcript revision identity + atomic publish + the pinned-revision **reader** path,
+  R21) — a clear, self-contained fix with an obvious correct behavior, blocking nothing else
+  conceptually but blocking everything else *safely*; the Script Versions duplicate-detection logic
+  it establishes is fully specified (§6.9).
+- Phase 1 (all new schema, plus duplicate-round reconciliation, R21) — every table, index, and RLS
+  policy for the tables Phase 1 itself creates (§9.9), and the reconciliation's corrected, ordered
+  rollback (§8.18), are fully specified. **`learning_sessions`' own RLS tightening is deliberately
+  *not* part of Phase 1** — it ships in the Phase 3 cutover instead, once its replacement functions
+  exist and the existing routes have been made gate-aware, per the sequencing correction in this
+  pass (issue group 2).
+- Phase 2 (concurrency-safe RPC functions, plus the transitional `fn_legacy_*` gate-aware bridges
+  for the *existing* `save-progress`/`session/restart` routes) — every function's locking strategy,
+  execution identity (§9.9's per-function permission matrix), and idempotency mechanism is fully
+  specified (§6.5's worked concurrency scenario, §8's DDL), including the corrected explicit
+  lookup-then-insert flow (R26), atomic flush function (R27), and the round-lifecycle functions
+  this pass added (`fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`).
+- Phase 3–5 (Dictation/Shadowing/Listening cutovers) — every formula, validity rule, and API
+  contract in §6/§9 is fully specified, including the corrected idempotency contract, the
+  interval-tracking redesign (now with Listening's own, round-independent stale-revision exemption
+  spelled out separately from round-based writes, issue group 4), and — for Phase 3 specifically —
+  a genuine write-fence cutover mechanism (§8.14/§12/§14.2) whose correctness comes from a
+  Postgres row lock, not from `CUTOVER_DRAIN_WINDOW_SEC`'s elapsed time, which is now only an
+  operational budget.
+- Phase 6's Dashboard/Library/History formulas — fully specified in §6.8/§10, with the earlier
+  draft's internal contradiction (accuracy dedup scope) resolved to one unambiguous rule, and the
+  Library/resume "historical evidence of study" signal (§10.2/§9.2) added this pass so a revision
+  change never misreports a studied video as untouched.
+- Phase 9 (Script Versions) — listing/preview/size-estimates/duplicate-prevention are fully
+  specified and independently releasable. **Deletion specifically ships disabled by default**,
+  behind its own release gate (§6.9): its direct-reference concurrency-safety (the row-lock
+  coordination with publication, §6.9) is fully specified, but its indirect vocabulary/bookmark
+  check has no available concurrency-safety mechanism and keeps deletion refused for any video
+  with such activity — stated as a standing scope limitation, not something "ready" in the same
+  sense as the rest of this phase. Depends on **both** Phase 0 and Phase 1 (corrected — §12's
+  dependency graph), not Phase 0 alone.
 
 **Needs runtime confirmation before or during rollout** (not blocking, but should happen early in
-Phase 0/1):
-- Actual production row counts for duplicate active `learning_sessions`, so the §8.9 cleanup's
-  blast radius is known in advance rather than discovered at migration time.
+Phase 0/1, and is exactly the kind of thing the real-Postgres integration tests in §13 exist to
+catch before production):
+- Actual production row counts for duplicate active `learning_sessions`, so migration `030`'s
+  (duplicate-round reconciliation, now run inside Phase 1, R21) cleanup blast radius is known in
+  advance rather than discovered at migration time.
 - Whether migration `012_listening_sessions.sql` is actually applied in the live project, and how
   many real pre-merge `listening_sessions` rows exist to backfill.
 - Confirming `SUPABASE_SERVICE_ROLE_KEY`/RLS behave in the live project exactly as the migration
-  text declares (§2.5) — standard pre-flight for any schema change, not specific to this redesign.
+  text declares (§2.5) — standard pre-flight for any schema change, and specifically load-bearing
+  here for §9.9's owner-SELECT-only/`SECURITY DEFINER`-write split (applied to every scoring-
+  relevant new table, not only `shadowing_attempts`) actually being enforced as designed, and for
+  the `users_prevent_self_admin_grant` trigger actually firing.
+- The real-world row-count growth rate of `activity_flush_log` and `study_sessions.activity_intervals`/
+  `listening_progress.covered_intervals` at this app's actual usage level — the design assumes
+  "small," consistent with the app's stated scale, but this is an assumption worth confirming
+  against real data before it's load-bearing for query performance.
+- How often, in practice, publication's row-lock-and-reverify fallback (§6.9) actually triggers —
+  i.e. how frequently a fingerprint-matched revision is deleted out from under a concurrent
+  publish at this app's real usage level; expected to be rare, worth confirming rather than
+  assuming.
 
-**Genuinely blocking issues: none found.** Every defect in §3 has a concrete, additive fix in this
-plan; every product rule in the brief has a precise formula in §6; the one behavior that must
-actually *change* (transcript regeneration's in-place hard-delete, D15/§8.4) is isolated to Phase
-0 and has no other correct implementation given the round/attempt model's requirements. The
-redesign can proceed directly from this document into Phase 0 implementation.
+**This document does not claim every ambiguity is resolved, and this revision found real defects,
+not only remaining ambiguity — both are stated honestly rather than smoothed over.** Two items
+remain genuine, stated product judgment calls rather than technical requirements: (1) whether
+"Remove from library" (§10.7/§C.5) should also delete the caller's own rounds/attempts, versus this
+plan's chosen default of leaving them intact for a possible future re-add — reversible, but a real
+product decision; (2) the exact `REVISION_GRACE_PERIOD_DAYS` (30) and `LISTENED_THROUGH_THRESHOLD`
+(90%) values are defensible defaults with stated rationale, not derived from any data this audit
+had access to. A third, new item from this revision is a **standing limitation, not a judgment
+call awaiting a decision**: indirect vocabulary/bookmark reference-checking for Script Versions
+deletion (§6.9) has **no available concurrency-safety mechanism at all** within this plan's scope —
+not a narrowed-but-imperfect one — without also gating the (explicitly out-of-scope, per §14.1)
+vocabulary feature's own writes. Deletion stays refused for any video with vocabulary/bookmark
+activity as a direct consequence, and this document does not claim otherwise.
+
+**This revision's own review process found concrete, previously-unnoticed defects — not just
+underspecified ambiguity — and this document does not describe them as "no blockers were ever
+present."** Among them: an idempotent-retry SQL pattern referencing a column
+(`attempt_logs.updated_at`) that does not exist in the actual schema; a transcript-promotion
+pseudocode that violated its own unique-current index; a Library query with no defined result for
+a real, reachable state (Listening-only, no round); an RLS gap that would have let an authenticated
+client grant themselves `is_admin` or write fabricated Shadowing scores directly, bypassing every
+guarantee this plan's functions establish; and a revision-deletion safety check that silently
+depended on a column legacy rows are never populated with. Each is fixed in the sections cited by
+R21–R28 in the review-resolution table, and each fix is reflected consistently across every
+formula, schema block, API example, phase, and test this document contains — verified by the
+consistency pass summarized in this document's final section below the review-resolution table.
+
+**A fifth review pass found a second layer of the same kind of defect, one level deeper: places
+where the *fix* for a prior finding was itself incomplete or factually wrong.** `learning_sessions`
+was identified as needing the same RLS treatment as `attempt_logs` but never actually received it;
+the cutover's "pause" flag was checked but never actually fenced concurrent writes, leaving a
+timing gap the bounded-backfill timestamp alone couldn't close; a claim that `SERIALIZABLE`
+isolation alone protects against a concurrent lower-isolation write was simply incorrect about how
+Postgres works; §9.5 and §9.7 stated contradictory rules for the same class of write; and the
+navigation-flush fix introduced its own ordering bug (invalidating before the flush it was
+supposed to reflect had committed). Each is corrected in place — not layered with another paragraph
+of caveats — in the sections this pass's edits touch.
+
+**No unresolved blocking issue remains *for beginning implementation*, distinct from the standing
+limitations named above.** Two of those three are genuine, reversible product judgment calls; the
+third (indirect vocabulary/bookmark reference-checking for deletion) is a real, named scope
+limitation with a working mitigation (refuse deletion outright) — grouped with the other two only
+as "not blocking implementation," never described as an accepted tradeoff on its own terms. Every
+defect in §3 has a concrete, additive fix in this plan; every product rule in the brief — and every
+finding across all five review rounds — has a precise, schema-or-formula-level resolution, not just a
+paragraph of intent (the review-resolution table traces each one to its updated sections). The one
+behavior that must actually *change* (transcript regeneration's in-place hard-delete, D15/§8.3,
+together with the reader-path fix R21 moved into the same phase) is isolated to Phase 0 and has no
+other correct implementation given the round/attempt model's requirements. The redesign can
+proceed directly from this document into Phase 0 implementation.

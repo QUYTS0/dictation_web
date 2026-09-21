@@ -3,6 +3,7 @@
 import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { clsx } from "clsx";
 import {
   Calendar,
   CheckCircle2,
@@ -14,6 +15,7 @@ import {
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
+import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { usePersistedViewState } from "@/hooks/usePersistedViewState";
 import { useDashboardSummaryQuery } from "@/lib/queries/dashboard";
@@ -95,7 +97,13 @@ function HistoryPageContent() {
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="history" />
 
-        <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-8">
+        <main
+          className={clsx(
+            "mx-auto flex w-full flex-1 flex-col gap-8 py-8",
+            PAGE_WIDTH_CLASS.narrow,
+            PAGE_PADDING_CLASS.narrow
+          )}
+        >
           {loading ? (
             <p className="text-sm text-slate-500">Loading…</p>
           ) : !user ? (
@@ -398,7 +406,13 @@ function HistoryPageFallback() {
     <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="history" />
-        <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-4 py-8">
+        <main
+          className={clsx(
+            "mx-auto flex w-full flex-1 flex-col gap-8 py-8",
+            PAGE_WIDTH_CLASS.narrow,
+            PAGE_PADDING_CLASS.narrow
+          )}
+        >
           <p className="text-sm text-slate-500">Loading…</p>
         </main>
       </div>

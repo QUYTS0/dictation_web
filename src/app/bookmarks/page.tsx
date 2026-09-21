@@ -3,12 +3,14 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { clsx } from "clsx";
 import { MapPin, Search, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
 import { usePersistedViewState } from "@/hooks/usePersistedViewState";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
+import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import {
   useBookmarksQuery,
   useDeleteBookmarkMutation,
@@ -112,7 +114,13 @@ function BookmarksPageContent() {
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="bookmarks" />
 
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-8">
+        <main
+          className={clsx(
+            "mx-auto flex w-full flex-1 flex-col gap-8 py-8",
+            PAGE_WIDTH_CLASS.wide,
+            PAGE_PADDING_CLASS.wide
+          )}
+        >
           {loading ? null : !user ? (
             <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Bookmarks</h1>
@@ -203,7 +211,7 @@ function BookmarksPageContent() {
                       </button>
                     </section>
                   ) : (
-                    <section className="grid gap-6 pb-12 sm:grid-cols-2 lg:grid-cols-3">
+                    <section className="grid gap-6 pb-12 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
                       {filteredItems.map((item, idx) => {
                         const isDeleting = deleteMutation.isPending && deleteMutation.variables === item.id;
                         const isSavingNote = updateNoteMutation.isPending && editingId === item.id;
@@ -214,7 +222,7 @@ function BookmarksPageContent() {
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: idx * 0.05 }}
                             key={item.id}
-                            className="group flex h-full flex-col rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1"
+                            className="group flex h-full w-full max-w-[400px] flex-col rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1"
                           >
                             <div className="mb-3 flex items-start justify-between gap-2">
                               <div>
@@ -304,7 +312,13 @@ function BookmarksPageFallback() {
     <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="bookmarks" />
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-8">
+        <main
+          className={clsx(
+            "mx-auto flex w-full flex-1 flex-col gap-8 py-8",
+            PAGE_WIDTH_CLASS.wide,
+            PAGE_PADDING_CLASS.wide
+          )}
+        >
           <p className="text-sm text-slate-500">Loading…</p>
         </main>
       </div>

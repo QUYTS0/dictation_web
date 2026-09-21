@@ -9,18 +9,15 @@ import {
   Clock,
   Download,
   Filter,
-  Pencil,
   Search,
   Sparkles,
-  Trash2,
-  Volume2,
   X,
 } from "lucide-react";
-import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
-import { VocabularyEditForm } from "@/components/VocabularyEditForm";
+import { VocabularyCard } from "./components/VocabularyCard";
+import { VocabularyDetailDrawer } from "./components/VocabularyDetailDrawer";
 import { useAuth } from "@/context/auth";
-import { usePronunciationPlayback } from "@/hooks/usePronunciationPlayback";
+import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import {
   useVocabularyItemsQuery,
   useVocabularyStatsQuery,
@@ -28,102 +25,11 @@ import {
   useDeleteVocabularyItemMutation,
 } from "@/lib/queries/vocabulary";
 import {
-  canonicalFormDiffersFromSurface,
   getVocabularyLearningStatus,
   inferVocabularyItemKind,
   type VocabularyLearningStatus,
 } from "@/lib/utils/vocabulary";
 import type { VocabularyItem } from "@/lib/types";
-
-/** Speaker button for one vocabulary card — mirrors the dictation page's
- *  PronunciationButton (see VocabularyDetailDialog.tsx) but styled for this
- *  page's own Tailwind slate palette rather than the dictation route's
- *  CSS-variable theme; both share the same usePronunciationPlayback state
- *  machine. Always rendered: every saved item (word or phrase) is a
- *  pronunciation candidate now, via known dictionary audio or on-demand
- *  Azure synthesis. */
-function VocabularyCardPronunciationButton({ item }: { item: VocabularyItem }) {
-  const { status, errorMessage, toggle, canRecoverWithGenerated, requestGeneratedAlternative } = usePronunciationPlayback({
-    itemId: item.id,
-    knownAudioUrl: item.audio_url,
-    term: item.term,
-    canonicalForm: item.canonical_form,
-  });
-
-  const label =
-    status === "playing"
-      ? `Stop pronunciation for ${item.term}`
-      : status === "ready"
-      ? `Tap to play pronunciation for ${item.term}`
-      : `Play pronunciation for ${item.term}`;
-
-  return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-label={label}
-        className={clsx(
-          "rounded-md border p-1 shadow-sm transition-colors",
-          status === "playing" || status === "ready"
-            ? "border-primary-200 bg-primary-50 text-primary-600"
-            : "border-white/40 bg-white/50 text-slate-400 hover:text-primary-500"
-        )}
-      >
-        {status === "loading" ? (
-          <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
-        ) : (
-          <Volume2 size={14} />
-        )}
-      </button>
-      {status === "error" && (
-        <span role="status" className="flex items-center gap-1.5 text-[11px] text-red-500">
-          {errorMessage ?? "Couldn't play pronunciation."}
-          {canRecoverWithGenerated && (
-            <button
-              type="button"
-              onClick={requestGeneratedAlternative}
-              className="font-semibold text-primary-600 underline hover:text-primary-700"
-            >
-              Use generated pronunciation
-            </button>
-          )}
-        </span>
-      )}
-    </span>
-  );
-}
-
-const STATUS_LABEL: Record<VocabularyLearningStatus, string> = {
-  new: "New",
-  learning: "Learning",
-  due: "Due for review",
-};
-
-const STATUS_BADGE_CLASS: Record<VocabularyLearningStatus, string> = {
-  new: "bg-slate-100 text-slate-600",
-  learning: "bg-indigo-100 text-indigo-700",
-  due: "bg-amber-100 text-amber-700",
-};
-
-/** Truthful replacement for the old note-based "Mastery %" bar — status is
- *  derived purely from the item's SM-2 review fields via
- *  getVocabularyLearningStatus (src/lib/utils/vocabulary.ts), never from
- *  whether it happens to have a personal note. */
-function VocabularyStatusBadge({ item }: { item: VocabularyItem }) {
-  const status = getVocabularyLearningStatus(item);
-  return (
-    <span
-      data-testid="vocab-status-badge"
-      className={clsx(
-        "rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide",
-        STATUS_BADGE_CLASS[status]
-      )}
-    >
-      {STATUS_LABEL[status]}
-    </span>
-  );
-}
 
 function VocabularyStatChip({
   icon,
@@ -236,7 +142,8 @@ export default function VocabularyPage() {
   const reviewableCount = stats?.reviewable;
 
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [drawerMode, setDrawerMode] = useState<"view" | "edit">("view");
   const [editingTerm, setEditingTerm] = useState("");
   const [editingSentenceContext, setEditingSentenceContext] = useState("");
   const [editingNote, setEditingNote] = useState("");
@@ -256,9 +163,31 @@ export default function VocabularyPage() {
   const [typeFilter, setTypeFilter] = useState<TypeFilterValue>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>("all");
 
+  const selectedItem = useMemo(
+    () => items.find((i) => i.id === selectedItemId) ?? null,
+    [items, selectedItemId]
+  );
+
+  const handleSelect = (id: string) => {
+    setSelectedItemId(id);
+    setDrawerMode("view");
+  };
+
+  const handleCloseDrawer = () => {
+    setSelectedItemId(null);
+    setDrawerMode("view");
+    cancelEdit();
+  };
+
   const handleDelete = (id: string) => {
     setError(null);
     deleteMutation.mutate(id, {
+      onSuccess: () => {
+        if (selectedItemId === id) {
+          setSelectedItemId(null);
+          setDrawerMode("view");
+        }
+      },
       onError: (err) => {
         const message = err instanceof Error && err.message ? err.message : "Failed to delete vocabulary item.";
         setError(message);
@@ -267,7 +196,6 @@ export default function VocabularyPage() {
   };
 
   const beginEdit = (item: VocabularyItem) => {
-    setEditingId(item.id);
     setEditingTerm(item.term);
     setEditingSentenceContext(item.sentence_context);
     setEditingNote(item.note ?? "");
@@ -278,7 +206,6 @@ export default function VocabularyPage() {
   };
 
   const cancelEdit = () => {
-    setEditingId(null);
     setEditingTerm("");
     setEditingSentenceContext("");
     setEditingNote("");
@@ -288,12 +215,18 @@ export default function VocabularyPage() {
     setEditingDefinition("");
   };
 
+  const openForEdit = (item: VocabularyItem) => {
+    setSelectedItemId(item.id);
+    setDrawerMode("edit");
+    beginEdit(item);
+  };
+
   const handleUpdate = () => {
-    if (!editingId) return;
+    if (!selectedItemId) return;
     setError(null);
     updateMutation.mutate(
       {
-        id: editingId,
+        id: selectedItemId,
         term: editingTerm,
         sentenceContext: editingSentenceContext,
         note: editingNote,
@@ -303,7 +236,7 @@ export default function VocabularyPage() {
         definition: editingDefinition,
       },
       {
-        onSuccess: () => cancelEdit(),
+        onSuccess: () => setDrawerMode("view"),
         onError: (err) => {
           const message = err instanceof Error && err.message ? err.message : "Failed to update vocabulary item.";
           setError(message);
@@ -357,7 +290,13 @@ export default function VocabularyPage() {
           <AppHeader active="vocabulary" />
         </div>
 
-        <main className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-6 px-4 py-6">
+        <main
+          className={clsx(
+            "mx-auto flex w-full min-h-0 flex-1 flex-col gap-6 py-6",
+            PAGE_WIDTH_CLASS.wide,
+            PAGE_PADDING_CLASS.wide
+          )}
+        >
         {loading ? null : !user ? (
           <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Vocabulary Bank</h1>
@@ -498,8 +437,30 @@ export default function VocabularyPage() {
               )}
             </div>
 
+            {/* Outer workspace: sizing + a positioning anchor for the detail
+                drawer, and (at xl+, only when an item is selected) a real
+                2-column split that docks the inspector instead of floating
+                it. Not itself scrollable — the inner div below is the
+                actual (unchanged) scroll container, so the drawer, whether
+                floating (below xl) or docked (xl+, a normal grid cell), is
+                excluded from the inner div's scrollable-overflow entirely:
+                it can't add a second scrollbar and stays anchored to the
+                cards-viewport regardless of list scroll position.
+                `grid-rows-[minmax(0,1fr)]` is required, not decorative: a
+                bare `auto` row would size to its (near-zero, since both
+                children are overflow-y-auto scroll containers) children's
+                automatic minimum instead of actually filling the available
+                height, which would starve both scroll regions of a real
+                height to scroll within. */}
+            <div
+              data-testid="vocabulary-workspace"
+              className={clsx(
+                "relative grid min-h-0 flex-1 gap-6 grid-rows-[minmax(0,1fr)]",
+                selectedItem && "xl:grid-cols-[minmax(0,1fr)_420px]"
+              )}
+            >
             {/* Only this region scrolls. */}
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="h-full min-h-0 overflow-y-auto overscroll-contain">
               {isTrueFirstLoad ? (
                 <p className="text-sm text-slate-500">Loading vocabulary…</p>
               ) : itemsQuery.isError && items.length === 0 ? (
@@ -529,141 +490,53 @@ export default function VocabularyPage() {
                   </button>
                 </section>
               ) : (
-                <section className="grid gap-6 pb-12 sm:grid-cols-2 lg:grid-cols-3">
+                <section className="grid items-start gap-6 pb-12 grid-cols-[repeat(auto-fill,minmax(280px,1fr))]">
                   {filteredItems.map((item, idx) => {
                     const isDeleting = deleteMutation.isPending && deleteMutation.variables === item.id;
-                    const isUpdating = updateMutation.isPending && editingId === item.id;
+                    const isUpdating = updateMutation.isPending && updateMutation.variables?.id === item.id;
 
                     return (
-                      <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.05 }}
+                      <VocabularyCard
                         key={item.id}
-                        data-testid="vocab-card"
-                        data-item-id={item.id}
-                        className="group flex h-full flex-col rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1"
-                      >
-                        <div className="mb-4 flex items-start justify-between">
-                          <div className="flex items-start gap-3">
-                            {item.image_thumbnail_url && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={item.image_thumbnail_url}
-                                alt=""
-                                className="h-12 w-12 shrink-0 rounded-xl object-cover"
-                              />
-                            )}
-                            <div>
-                              <h3 className="text-xl font-bold text-slate-900 transition-colors group-hover:text-primary-600">
-                                {item.canonical_form ?? item.term}
-                              </h3>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                              <VocabularyCardPronunciationButton item={item} />
-                              {item.phonetic && (
-                                <span className="text-xs text-slate-500">{item.phonetic}</span>
-                              )}
-                              {item.part_of_speech && (
-                                <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-700">
-                                  {item.part_of_speech}
-                                </span>
-                              )}
-                              <span className="rounded-md border border-emerald-200/50 bg-emerald-100/50 px-2 py-0.5 text-xs font-bold text-emerald-600">
-                                Saved
-                              </span>
-                            </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => beginEdit(item)}
-                              disabled={isDeleting || isUpdating}
-                              className="rounded-xl border border-white/60 bg-white/50 p-2 transition-colors hover:bg-white/80 disabled:opacity-40"
-                              aria-label={`Edit vocabulary ${item.term}`}
-                            >
-                              <Pencil size={16} className="text-slate-500" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(item.id)}
-                              disabled={isDeleting || isUpdating}
-                              className="rounded-xl border border-white/60 bg-white/50 p-2 transition-colors hover:bg-red-50 disabled:opacity-40"
-                              aria-label={isDeleting ? `Removing vocabulary ${item.term}` : `Remove vocabulary ${item.term}`}
-                            >
-                              <Trash2 size={16} className="text-slate-500" />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="mb-4 flex-1">
-                          {editingId === item.id ? (
-                            <VocabularyEditForm
-                              term={editingTerm}
-                              onTermChange={setEditingTerm}
-                              sentenceContext={editingSentenceContext}
-                              onSentenceContextChange={setEditingSentenceContext}
-                              translation={editingTranslation}
-                              onTranslationChange={setEditingTranslation}
-                              phonetic={editingPhonetic}
-                              onPhoneticChange={setEditingPhonetic}
-                              partOfSpeech={editingPartOfSpeech}
-                              onPartOfSpeechChange={setEditingPartOfSpeech}
-                              definition={editingDefinition}
-                              onDefinitionChange={setEditingDefinition}
-                              note={editingNote}
-                              onNoteChange={setEditingNote}
-                              onSave={handleUpdate}
-                              onCancel={cancelEdit}
-                              saving={isUpdating}
-                              autoFocusTerm
-                            />
-                          ) : (
-                            <>
-                              {item.definition ? (
-                                <p className="text-sm leading-relaxed text-slate-600">{item.definition}</p>
-                              ) : null}
-                              {item.translation ? (
-                                <p className="mt-1 font-medium leading-relaxed text-slate-700">{item.translation}</p>
-                              ) : null}
-                              {item.learning_pattern ? (
-                                <div className="mt-1">
-                                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Pattern</p>
-                                  <p className="text-sm leading-relaxed text-slate-600">{item.learning_pattern}</p>
-                                </div>
-                              ) : null}
-                              {item.note ? (
-                                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-500">
-                                  📝 {item.note}
-                                </p>
-                              ) : null}
-                              {canonicalFormDiffersFromSurface(item.canonical_form, item.term) && (
-                                <p className="mt-1 text-xs text-slate-400">In this sentence: {item.term}</p>
-                              )}
-                              <div className="mt-3 rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
-                                <p className="line-clamp-3 text-sm italic leading-relaxed text-slate-500">
-                                  &quot;{item.sentence_context}&quot;
-                                </p>
-                              </div>
-                            </>
-                          )}
-                        </div>
-
-                        <div className="mt-auto border-t border-white/40 pt-4">
-                          <div className="mb-3 flex items-center justify-between">
-                            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Status</span>
-                            <VocabularyStatusBadge item={item} />
-                          </div>
-                          <Link
-                            href={`/dictation/${item.video_id}`}
-                            className="inline-block text-xs font-semibold text-primary-600 underline hover:text-primary-700"
-                          >
-                            Open source video
-                          </Link>
-                        </div>
-                      </motion.div>
+                        item={item}
+                        index={idx}
+                        isSelected={selectedItemId === item.id}
+                        isDeleting={isDeleting}
+                        isUpdating={isUpdating}
+                        onSelect={handleSelect}
+                        onEdit={openForEdit}
+                        onDelete={handleDelete}
+                      />
                     );
                   })}
                 </section>
               )}
+            </div>
+              <VocabularyDetailDrawer
+                item={selectedItem}
+                mode={drawerMode}
+                onClose={handleCloseDrawer}
+                onEdit={() => selectedItem && openForEdit(selectedItem)}
+                onDelete={handleDelete}
+                isDeleting={deleteMutation.isPending && deleteMutation.variables === selectedItemId}
+                isSaving={updateMutation.isPending}
+                term={editingTerm}
+                onTermChange={setEditingTerm}
+                sentenceContext={editingSentenceContext}
+                onSentenceContextChange={setEditingSentenceContext}
+                translation={editingTranslation}
+                onTranslationChange={setEditingTranslation}
+                phonetic={editingPhonetic}
+                onPhoneticChange={setEditingPhonetic}
+                partOfSpeech={editingPartOfSpeech}
+                onPartOfSpeechChange={setEditingPartOfSpeech}
+                definition={editingDefinition}
+                onDefinitionChange={setEditingDefinition}
+                note={editingNote}
+                onNoteChange={setEditingNote}
+                onSave={handleUpdate}
+                onCancelEdit={cancelEdit}
+              />
             </div>
           </div>
         )}

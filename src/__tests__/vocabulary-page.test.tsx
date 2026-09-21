@@ -26,6 +26,7 @@ jest.mock("next/link", () => {
 });
 
 import { vocabularyKeys } from "@/lib/queries/vocabulary";
+import { PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import VocabularyPage from "@/app/vocabulary/page";
 
 const NOW = Date.now();
@@ -304,5 +305,235 @@ describe("VocabularyPage", () => {
 
     // No scroll:* key is ever written for this route.
     expect(window.sessionStorage.getItem("scroll:/vocabulary:user-1")).toBeNull();
+  });
+
+  it("uses the shared wide width primitive for its <main> content", async () => {
+    mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+    expect(screen.getByRole("main").className).toContain(PAGE_WIDTH_CLASS.wide);
+  });
+
+  describe("detail drawer", () => {
+    function mockViewport(isDesktop: boolean) {
+      (window.matchMedia as jest.Mock).mockImplementation((query: string) => ({
+        matches: query === "(min-width: 1024px)" ? isDesktop : false,
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
+      }));
+    }
+
+    it("opens the drawer with the clicked item's details, including a drawer-only field", async () => {
+      mockViewport(true);
+      mockFetchFor(
+        [makeItem({ id: "item-1", term: "reimburse", definition: "to pay back money" })],
+        { ...STATS_ZERO, total: 1 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Open details for reimburse" }));
+
+      const drawer = await screen.findByRole("dialog");
+      expect(within(drawer).getByText("reimburse")).toBeInTheDocument();
+      expect(within(drawer).getByText("to pay back money")).toBeInTheDocument();
+    });
+
+    it("switches to a different item without closing when another card is clicked", async () => {
+      mockViewport(true);
+      mockFetchFor(
+        [makeItem({ id: "a", term: "alpha" }), makeItem({ id: "b", term: "beta" })],
+        { ...STATS_ZERO, total: 2 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(2));
+
+      await user.click(screen.getByRole("button", { name: "Open details for alpha" }));
+      expect(await screen.findByRole("dialog")).toHaveTextContent("alpha");
+
+      await user.click(screen.getByRole("button", { name: "Open details for beta" }));
+      const drawer = screen.getByRole("dialog");
+      expect(drawer).toHaveTextContent("beta");
+      expect(drawer).not.toHaveTextContent("alpha");
+    });
+
+    it("closes on Escape and via the close button", async () => {
+      mockViewport(true);
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Close vocabulary details" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("renders no empty placeholders for an item with every optional field null", async () => {
+      mockViewport(true);
+      mockFetchFor(
+        [
+          makeItem({
+            term: "bare",
+            phonetic: null,
+            definition: null,
+            note: null,
+            part_of_speech: null,
+            learning_pattern: null,
+            translation: null,
+            image_thumbnail_url: null,
+          }),
+        ],
+        { ...STATS_ZERO, total: 1 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for bare" }));
+
+      const drawer = await screen.findByRole("dialog");
+      expect(within(drawer).queryByText("Definition")).not.toBeInTheDocument();
+      expect(within(drawer).queryByText("Pattern")).not.toBeInTheDocument();
+      expect(within(drawer).queryByText("—")).not.toBeInTheDocument();
+    });
+
+    it("reflects an edit made through the drawer without keeping a stale copy", async () => {
+      mockViewport(true);
+      const item = makeItem({ id: "item-1", term: "postpone", translation: "hoãn lại" });
+      let currentItems = [item];
+      global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.startsWith("/api/vocabulary/stats")) return jsonResponse({ ...STATS_ZERO, total: 1 });
+        if (url.startsWith("/api/vocabulary") && method === "PATCH") {
+          const body = JSON.parse(init!.body as string);
+          const updated = { ...item, translation: body.translation };
+          currentItems = [updated];
+          return jsonResponse({ item: updated });
+        }
+        if (url.startsWith("/api/vocabulary")) return jsonResponse({ items: currentItems });
+        return Promise.reject(new Error(`Unhandled fetch in test: ${url}`));
+      }) as unknown as typeof fetch;
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Edit vocabulary postpone" }));
+      const drawer = await screen.findByRole("dialog");
+      const translationInput = within(drawer).getByPlaceholderText("Translation");
+      await user.clear(translationInput);
+      await user.type(translationInput, "trì hoãn");
+      await user.click(within(drawer).getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(within(screen.getByRole("dialog")).getByText("trì hoãn")).toBeInTheDocument());
+      // The card in the grid also reflects the update (same cache).
+      expect(within(screen.getByTestId("vocab-card")).getByText("trì hoãn")).toBeInTheDocument();
+    });
+
+    it("closes the drawer when the selected item is deleted", async () => {
+      mockViewport(true);
+      mockFetchFor([makeItem({ id: "item-1", term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      const drawer = await screen.findByRole("dialog");
+      await user.click(within(drawer).getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("keeps the drawer open for a selected item that a filter/search subsequently hides", async () => {
+      mockViewport(true);
+      mockFetchFor(
+        [makeItem({ id: "a", term: "alpha" }), makeItem({ id: "b", term: "beta" })],
+        { ...STATS_ZERO, total: 2 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(2));
+
+      await user.click(screen.getByRole("button", { name: "Open details for alpha" }));
+      expect(await screen.findByRole("dialog")).toHaveTextContent("alpha");
+
+      await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "beta");
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      expect(screen.getByRole("dialog")).toHaveTextContent("alpha");
+    });
+
+    it("does not issue any extra network requests when opening, switching, or closing the drawer", async () => {
+      mockViewport(true);
+      mockFetchFor(
+        [makeItem({ id: "a", term: "alpha" }), makeItem({ id: "b", term: "beta" })],
+        { ...STATS_ZERO, total: 2 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(2));
+      const callsAfterLoad = (global.fetch as jest.Mock).mock.calls.length;
+
+      await user.click(screen.getByRole("button", { name: "Open details for alpha" }));
+      await screen.findByRole("dialog");
+      await user.click(screen.getByRole("button", { name: "Open details for beta" }));
+      await user.click(screen.getByRole("button", { name: "Close vocabulary details" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+      expect((global.fetch as jest.Mock).mock.calls.length).toBe(callsAfterLoad);
+    });
+
+    it("is a non-modal panel on desktop and a modal sheet below the lg breakpoint", async () => {
+      mockViewport(true);
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      const { unmount } = renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      const desktopDrawer = await screen.findByRole("dialog");
+      expect(desktopDrawer).toHaveAttribute("aria-modal", "false");
+      expect(screen.queryByTestId("vocab-drawer-backdrop")).not.toBeInTheDocument();
+      unmount();
+
+      mockViewport(false);
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      const modalDrawer = await screen.findByRole("dialog");
+      expect(modalDrawer).toHaveAttribute("aria-modal", "true");
+      expect(screen.getByTestId("vocab-drawer-backdrop")).toBeInTheDocument();
+    });
+
+    it("does not reserve a docked xl inspector column when nothing is selected, and adds it once an item is selected", async () => {
+      mockViewport(true);
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      const workspace = screen.getByTestId("vocabulary-workspace");
+      expect(workspace.className).not.toContain("xl:grid-cols-");
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      await screen.findByRole("dialog");
+      expect(workspace.className).toContain("xl:grid-cols-[minmax(0,1fr)_420px]");
+
+      await user.click(screen.getByRole("button", { name: "Close vocabulary details" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(workspace.className).not.toContain("xl:grid-cols-");
+    });
   });
 });
