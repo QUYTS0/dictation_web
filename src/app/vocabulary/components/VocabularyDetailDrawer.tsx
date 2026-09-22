@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Pencil, Trash2, X } from "lucide-react";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
-import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
+import { canonicalFormDiffersFromSurface, getVocabularyLearningStatus } from "@/lib/utils/vocabulary";
 import type { VocabularyItem } from "@/lib/types";
 import { VocabularyPronunciationButton } from "./VocabularyPronunciationButton";
 import { VocabularyStatusBadge } from "./VocabularyStatusBadge";
@@ -45,7 +45,19 @@ export interface VocabularyDetailDrawerProps {
   mode: "view" | "edit";
   onClose: () => void;
   onEdit: () => void;
-  onDelete: (id: string) => void;
+  /** Requests confirmation before deleting — the caller (page.tsx) owns the
+   *  actual confirm dialog and delete mutation; see `modalSuspended` below
+   *  for why this indirection exists. */
+  onRequestDelete: () => void;
+  /** True while a page-level ConfirmDialog (single- or bulk-delete) is open
+   *  on top of this drawer. On mobile the drawer is itself a modal with its
+   *  own window-level Escape/Tab handling (below) — without this flag,
+   *  pressing Escape to dismiss the confirmation would *also* close this
+   *  drawer in the same keystroke, since both listeners live on `window`
+   *  and both would fire. Suspending only the handlers' *behavior* (via a
+   *  ref, not tearing the effects down) avoids re-running this drawer's own
+   *  mount-time focus capture/placement while merely suspended. */
+  modalSuspended: boolean;
   isDeleting: boolean;
   isSaving: boolean;
   term: string;
@@ -90,7 +102,8 @@ export function VocabularyDetailDrawer({
   mode,
   onClose,
   onEdit,
-  onDelete,
+  onRequestDelete,
+  modalSuspended,
   isDeleting,
   isSaving,
   term,
@@ -114,10 +127,24 @@ export function VocabularyDetailDrawer({
   const containerRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  // Escape closes at every breakpoint, in both view and edit mode.
+  // Read inside handlers via a ref rather than adding `modalSuspended` to
+  // the effects' own dependency arrays below — that would tear the effects
+  // down and re-run them (re-capturing `previousFocusRef` and re-focusing
+  // the drawer's first focusable element) every time a ConfirmDialog
+  // opens/closes, fighting with the dialog's own focus management. A ref
+  // lets the handlers no-op while suspended without disturbing either
+  // effect's mount-time setup or unmount-time focus restoration.
+  const modalSuspendedRef = useRef(modalSuspended);
+  useEffect(() => {
+    modalSuspendedRef.current = modalSuspended;
+  }, [modalSuspended]);
+
+  // Escape closes at every breakpoint, in both view and edit mode — unless
+  // a ConfirmDialog is on top, in which case Escape belongs to it alone.
   useEffect(() => {
     if (!item) return;
     function handleKeyDown(e: KeyboardEvent) {
+      if (modalSuspendedRef.current) return;
       if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -134,6 +161,7 @@ export function VocabularyDetailDrawer({
     initialFocusable?.[0]?.focus();
 
     function handleTab(e: KeyboardEvent) {
+      if (modalSuspendedRef.current) return;
       if (e.key !== "Tab" || !container) return;
       const nodes = Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
       if (nodes.length === 0) return;
@@ -160,6 +188,12 @@ export function VocabularyDetailDrawer({
   const sourceHref = `/dictation/${item.video_id}?segment=${item.segment_index}`;
   const lastReviewed = formatDate(item.last_reviewed_at);
   const nextReview = formatDate(item.next_review_at);
+  // `next_review_at` is a NOT NULL column defaulted to now() at insert time
+  // (see getVocabularyLearningStatus's own comment), so it's always present
+  // even for a never-reviewed item — showing it unconditionally would read
+  // as a contradictory "NEW, but next review already scheduled". Gate the
+  // review-timing line on the computed status instead of raw field presence.
+  const status = getVocabularyLearningStatus(item);
 
   return (
     <>
@@ -177,7 +211,7 @@ export function VocabularyDetailDrawer({
         role="dialog"
         aria-modal={isDesktop ? "false" : "true"}
         aria-label="Vocabulary details"
-        className="fixed inset-0 z-[75] flex flex-col overflow-y-auto border border-white/60 bg-white/95 shadow-2xl backdrop-blur-xl sm:inset-6 sm:rounded-3xl lg:absolute lg:left-auto lg:right-4 lg:top-4 lg:bottom-4 lg:w-[420px] lg:max-w-[calc(100%-2rem)] lg:rounded-3xl xl:static xl:inset-auto xl:h-full xl:w-auto xl:max-w-none xl:min-h-0"
+        className="app-scrollbar fixed inset-0 z-[75] flex flex-col overflow-y-auto border border-white/60 bg-white/95 shadow-2xl backdrop-blur-xl sm:inset-6 sm:rounded-3xl lg:absolute lg:left-auto lg:right-4 lg:top-4 lg:bottom-4 lg:w-[420px] lg:max-w-[calc(100%-2rem)] lg:rounded-3xl xl:static xl:inset-auto xl:h-full xl:w-auto xl:max-w-none xl:min-h-0"
       >
         <div className="flex items-start justify-between gap-3 border-b border-white/40 p-5">
           <div className="flex min-w-0 items-start gap-3">
@@ -266,6 +300,12 @@ export function VocabularyDetailDrawer({
                 <p className="text-sm italic leading-relaxed text-slate-500">&quot;{item.sentence_context}&quot;</p>
               </div>
 
+              {/* Review-timing status. A future "Mastery" concept (New/
+                  Learning/Mastered) is a separate, orthogonal dimension from
+                  this review-timing status (Due/Scheduled) — a future item
+                  could be Mastered *and* Due at once, so any future mastery
+                  display belongs in its own sibling `border-t pt-4` section
+                  below this one, never merged into it or into `status`. */}
               <div className="flex items-center justify-between border-t border-white/40 pt-4">
                 <div>
                   <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Status</p>
@@ -273,7 +313,9 @@ export function VocabularyDetailDrawer({
                 </div>
                 <div className="text-right text-xs text-slate-400">
                   {lastReviewed && <p>Last reviewed {lastReviewed}</p>}
-                  {nextReview && <p>Next review {nextReview}</p>}
+                  {status === "new" && <p>Not reviewed yet</p>}
+                  {status === "learning" && nextReview && <p>Next review {nextReview}</p>}
+                  {status === "due" && <p>Due now</p>}
                 </div>
               </div>
 
@@ -299,7 +341,7 @@ export function VocabularyDetailDrawer({
             </button>
             <button
               type="button"
-              onClick={() => onDelete(item.id)}
+              onClick={onRequestDelete}
               disabled={isDeleting}
               className="flex items-center gap-1.5 rounded-xl border border-white/60 bg-white/50 px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-red-50 disabled:opacity-40"
             >

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { VocabularyItem, VocabularyStatsResponse } from "@/lib/types";
@@ -27,6 +27,7 @@ jest.mock("next/link", () => {
 
 import { vocabularyKeys } from "@/lib/queries/vocabulary";
 import { PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
+import { MAX_BULK_SELECTABLE_ITEMS } from "@/lib/utils/vocabulary";
 import VocabularyPage from "@/app/vocabulary/page";
 
 const NOW = Date.now();
@@ -79,6 +80,7 @@ function mockFetchFor(items: VocabularyItem[], stats: VocabularyStatsResponse) {
   global.fetch = jest.fn((input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.startsWith("/api/vocabulary/stats")) return jsonResponse(stats);
+    if (url.startsWith("/api/vocabulary/bulk-delete")) return jsonResponse({ deletedIds: [] });
     if (url.startsWith("/api/vocabulary")) return jsonResponse({ items });
     return Promise.reject(new Error(`Unhandled fetch in test: ${url}`));
   }) as unknown as typeof fetch;
@@ -143,7 +145,7 @@ describe("VocabularyPage", () => {
     expect(within(withNote).getByTestId("vocab-status-badge").textContent).toBe("New");
   });
 
-  it("renders the stat header and the review-session count from server-computed stats", async () => {
+  it("renders the stat strip from server-computed stats", async () => {
     mockFetchFor([makeItem()], { total: 10, new: 4, learning: 3, due: 3, reviewable: 7 });
 
     renderPage();
@@ -152,31 +154,43 @@ describe("VocabularyPage", () => {
     expect(screen.getByTestId("vocab-stat-new")).toHaveTextContent("4");
     expect(screen.getByTestId("vocab-stat-learning")).toHaveTextContent("3");
     expect(screen.getByTestId("vocab-stat-due")).toHaveTextContent("3");
-    expect(screen.getByRole("link", { name: /Start review session \(7\)/ })).toBeInTheDocument();
   });
 
-  it("status filter shows only cards matching the selected status", async () => {
+  it("never prints a session-size count or an ordering claim on the primary CTA", async () => {
+    mockFetchFor([makeItem()], { total: 254, new: 232, learning: 0, due: 22, reviewable: 254 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("22 words are due")).toBeInTheDocument());
+    const cta = screen.getByRole("link", { name: "Start review" });
+    expect(cta).toBeInTheDocument();
+    expect(screen.queryByText(/\(\d+\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/prioriti/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/due first/i)).not.toBeInTheDocument();
+  });
+
+  it("clicking the Due metric shows only cards matching due status", async () => {
     mockFetchFor(
       [
         makeItem({ id: "new-1", term: "alpha", last_reviewed_at: null }),
         makeItem({ id: "learning-1", term: "beta", last_reviewed_at: PAST(5), next_review_at: FUTURE(5) }),
         makeItem({ id: "due-1", term: "gamma", last_reviewed_at: PAST(5), next_review_at: PAST(1) }),
       ],
-      { ...STATS_ZERO, total: 3 }
+      { ...STATS_ZERO, total: 3, new: 1, learning: 1, due: 1, reviewable: 2 }
     );
 
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
 
-    await user.click(screen.getByRole("button", { name: /^Filter$/ }));
-    await user.click(screen.getByRole("button", { name: "Due" }));
+    await user.click(screen.getByTestId("vocab-stat-due"));
 
     await waitFor(() => {
       const cards = screen.getAllByTestId("vocab-card");
       expect(cards).toHaveLength(1);
       expect(cards[0]).toHaveAttribute("data-item-id", "due-1");
     });
+    expect(screen.getByTestId("vocab-stat-due")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("vocab-stat-total-words")).toHaveAttribute("aria-pressed", "false");
   });
 
   it("type filter uses the shared word/phrase inference and shows only matching cards", async () => {
@@ -206,6 +220,17 @@ describe("VocabularyPage", () => {
     });
   });
 
+  it("no longer renders a Status pill group inside the Filter panel — Status lives in the metric strip", async () => {
+    mockFetchFor([makeItem()], { ...STATS_ZERO, total: 1 });
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: /^Filter$/ }));
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
+  });
+
   it("distinguishes a genuinely empty account from a filtered-to-empty result", async () => {
     mockFetchFor([], STATS_ZERO);
     renderPage();
@@ -218,6 +243,7 @@ describe("VocabularyPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
+    await user.click(screen.getByRole("button", { name: "Search" }));
     await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "zzz-no-match");
 
     await waitFor(() => expect(screen.getByText("No results match your search or filters.")).toBeInTheDocument());
@@ -237,9 +263,11 @@ describe("VocabularyPage", () => {
 
     renderPage(queryClient);
 
-    // Cached content renders immediately; no "Loading vocabulary…" flash.
+    // Cached content renders immediately; no "Loading vocabulary…" flash,
+    // and no hero-loading skeleton either (stats already has cached data).
     expect(screen.getByText("cached-word")).toBeInTheDocument();
     expect(screen.queryByText("Loading vocabulary…")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("vocab-hero-loading")).not.toBeInTheDocument();
     expect(screen.getByTestId("vocab-stat-total-words")).toHaveTextContent("1");
   });
 
@@ -249,6 +277,7 @@ describe("VocabularyPage", () => {
     const { unmount } = renderPage();
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
+    await user.click(screen.getByRole("button", { name: "Search" }));
     await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "postpone");
     expect((screen.getByPlaceholderText("Search words, notes, or sentences...") as HTMLInputElement).value).toBe(
       "postpone"
@@ -260,7 +289,7 @@ describe("VocabularyPage", () => {
     unmount();
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
-    expect((screen.getByPlaceholderText("Search words, notes, or sentences...") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByPlaceholderText("Search words, notes, or sentences...")).not.toBeInTheDocument();
   });
 
   it("resets Type and Status filters to All on remount, even though the underlying query cache stays warm", async () => {
@@ -270,15 +299,14 @@ describe("VocabularyPage", () => {
         makeItem({ id: "new-1", term: "alpha", last_reviewed_at: null }),
         makeItem({ id: "due-1", term: "gamma", last_reviewed_at: PAST(5), next_review_at: PAST(1) }),
       ],
-      { ...STATS_ZERO, total: 2 }
+      { ...STATS_ZERO, total: 2, new: 1, due: 1, reviewable: 2 }
     );
 
     const user = userEvent.setup();
     const { unmount } = renderPage(queryClient);
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(2));
 
-    await user.click(screen.getByRole("button", { name: /^Filter$/ }));
-    await user.click(screen.getByRole("button", { name: "Due" }));
+    await user.click(screen.getByTestId("vocab-stat-due"));
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
     unmount();
@@ -288,14 +316,13 @@ describe("VocabularyPage", () => {
 
     // Cached data renders immediately (no fetch needed — see the
     // background-refetch test above for the no-cache-yet case), but the
-    // filter selection itself is not remembered: both filters are back to
-    // "All" and both items are visible again.
+    // filter selection itself is not remembered: Status is back to "all"
+    // (Total Words active, not Due) and both items are visible again.
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(2));
+    expect(screen.getByTestId("vocab-stat-total-words")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("vocab-stat-due")).toHaveAttribute("aria-pressed", "false");
     await user.click(screen.getByRole("button", { name: /^Filter$/ }));
-    // Both the Type and Status pill groups are back on "All".
-    for (const allPill of screen.getAllByRole("button", { name: "All" })) {
-      expect(allPill).toHaveAttribute("aria-pressed", "true");
-    }
+    expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("resets scroll position on remount — the page itself has no persisted scroll state to restore", async () => {
@@ -313,6 +340,260 @@ describe("VocabularyPage", () => {
     await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
     expect(screen.getByRole("main").className).toContain(PAGE_WIDTH_CLASS.wide);
+  });
+
+  describe("review hero", () => {
+    it("shows a loading skeleton and no CTA while stats have not loaded yet", async () => {
+      global.fetch = jest.fn((input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.startsWith("/api/vocabulary/stats")) return new Promise<Response>(() => {});
+        if (url.startsWith("/api/vocabulary")) return jsonResponse({ items: [] });
+        return Promise.reject(new Error(`Unhandled fetch in test: ${url}`));
+      }) as unknown as typeof fetch;
+
+      renderPage();
+
+      expect(await screen.findByTestId("vocab-hero-loading")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Start review" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Start a dictation session" })).not.toBeInTheDocument();
+    });
+
+    it("shows the empty-library state and a link to start a dictation session when Total is 0", async () => {
+      mockFetchFor([], STATS_ZERO);
+      renderPage();
+
+      expect(await screen.findByText("Save your first word")).toBeInTheDocument();
+      const cta = screen.getByRole("link", { name: "Start a dictation session" });
+      expect(cta).toHaveAttribute("href", "/");
+      expect(screen.queryByRole("link", { name: "Start review" })).not.toBeInTheDocument();
+    });
+
+    it("shows the all-caught-up state with no CTA when nothing is reviewable", async () => {
+      mockFetchFor([makeItem()], { total: 5, new: 0, learning: 5, due: 0, reviewable: 0 });
+      renderPage();
+
+      expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Start review" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Start a dictation session" })).not.toBeInTheDocument();
+    });
+
+    it("shows the new-only state when reviewable items exist but none are due", async () => {
+      mockFetchFor([makeItem()], { total: 5, new: 5, learning: 0, due: 0, reviewable: 5 });
+      renderPage();
+
+      expect(await screen.findByText("Ready to learn something new")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Start review" })).toHaveAttribute("href", "/vocabulary/review");
+    });
+
+    it("shows the due state with the exact due count and a plain Start review CTA", async () => {
+      mockFetchFor([makeItem()], { total: 254, new: 232, learning: 0, due: 22, reviewable: 254 });
+      renderPage();
+
+      expect(await screen.findByText("22 words are due")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Start review" })).toHaveAttribute("href", "/vocabulary/review");
+    });
+  });
+
+  describe("search collapse", () => {
+    it("is collapsed by default and expands with focus when the Search button is clicked", async () => {
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      expect(screen.queryByPlaceholderText("Search words, notes, or sentences...")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      const input = screen.getByPlaceholderText("Search words, notes, or sentences...");
+      expect(input).toHaveFocus();
+    });
+
+    it("clears the query and collapses when closed", async () => {
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "zzz");
+      await user.click(screen.getByRole("button", { name: "Close search" }));
+
+      expect(screen.queryByPlaceholderText("Search words, notes, or sentences...")).not.toBeInTheDocument();
+      // Reopening confirms the query was actually cleared, not just hidden.
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      expect((screen.getByPlaceholderText("Search words, notes, or sentences...") as HTMLInputElement).value).toBe(
+        ""
+      );
+    });
+  });
+
+  describe("multi-select and bulk delete", () => {
+    function threeItems() {
+      return [
+        makeItem({ id: "a", term: "alpha" }),
+        makeItem({ id: "b", term: "beta" }),
+        makeItem({ id: "c", term: "gamma" }),
+      ];
+    }
+
+    it("checking a card's checkbox selects it without opening the inspector, and the bulk bar swaps in place", async () => {
+      mockFetchFor(threeItems(), { ...STATS_ZERO, total: 3 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      expect(screen.queryByTestId("vocab-bulk-bar")).not.toBeInTheDocument();
+      expect(screen.getByTestId("vocab-stat-total-words")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByTestId("vocab-bulk-bar")).toHaveTextContent("1 selected");
+      // Swapped in place — the metric strip is gone, not sitting alongside the bar.
+      expect(screen.queryByTestId("vocab-stat-total-words")).not.toBeInTheDocument();
+    });
+
+    it("clears the selection via Clear selection", async () => {
+      mockFetchFor(threeItems(), { ...STATS_ZERO, total: 3 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+      await user.click(screen.getByRole("button", { name: "Clear selection" }));
+
+      expect(screen.queryByTestId("vocab-bulk-bar")).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Select alpha" })).not.toBeChecked();
+    });
+
+    it("clears the selection when the search query changes", async () => {
+      mockFetchFor(threeItems(), { ...STATS_ZERO, total: 3 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      // Open search first — the expanded input stays mounted regardless of
+      // the bulk bar swapping the command row above it (its own condition
+      // is independent of selectedIds, see plan §E/§D).
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+      expect(screen.getByTestId("vocab-bulk-bar")).toBeInTheDocument();
+
+      await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "a");
+
+      await waitFor(() => expect(screen.queryByTestId("vocab-bulk-bar")).not.toBeInTheDocument());
+    });
+
+    it("disables further checking at the shared selection cap, without blocking unchecking", async () => {
+      const items = Array.from({ length: MAX_BULK_SELECTABLE_ITEMS + 1 }, (_, i) =>
+        makeItem({ id: `item-${i}`, term: `word${i}` })
+      );
+      mockFetchFor(items, { ...STATS_ZERO, total: items.length });
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(items.length));
+
+      // fireEvent (not userEvent) for this loop — checking MAX_BULK_SELECTABLE_ITEMS
+      // boxes via userEvent's full simulated pointer sequence is too slow to
+      // fit a reasonable test timeout; fireEvent.click still toggles the
+      // checkbox and dispatches onChange, which is all this needs.
+      const checkboxes = screen.getAllByRole("checkbox");
+      for (let i = 0; i < MAX_BULK_SELECTABLE_ITEMS; i++) {
+        fireEvent.click(checkboxes[i]);
+      }
+
+      await waitFor(() =>
+        expect(screen.getByTestId("vocab-bulk-bar")).toHaveTextContent(String(MAX_BULK_SELECTABLE_ITEMS))
+      );
+      const lastCheckbox = checkboxes[MAX_BULK_SELECTABLE_ITEMS];
+      expect(lastCheckbox).toBeDisabled();
+
+      // Unchecking an already-checked one is always allowed, even at the cap.
+      expect(checkboxes[0]).not.toBeDisabled();
+    }, 30000);
+
+    it("requires confirmation before bulk deleting, and cancel changes nothing", async () => {
+      mockFetchFor(threeItems(), { ...STATS_ZERO, total: 3 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select beta" }));
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toHaveTextContent("Delete 2 vocabulary items?");
+
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("vocab-card")).toHaveLength(3);
+      expect(screen.getByTestId("vocab-bulk-bar")).toHaveTextContent("2 selected");
+    });
+
+    it("bulk deletes the confirmed selection, invalidating stats once and clearing selection", async () => {
+      let statsCallCount = 0;
+      const items = threeItems();
+      global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.startsWith("/api/vocabulary/stats")) {
+          statsCallCount += 1;
+          return jsonResponse({ ...STATS_ZERO, total: statsCallCount === 1 ? 3 : 1 });
+        }
+        if (url.startsWith("/api/vocabulary/bulk-delete")) {
+          const body = JSON.parse((init?.body as string) ?? "{}");
+          return jsonResponse({ deletedIds: body.ids });
+        }
+        if (url.startsWith("/api/vocabulary")) return jsonResponse({ items });
+        return Promise.reject(new Error(`Unhandled fetch in test: ${url}`));
+      }) as unknown as typeof fetch;
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select beta" }));
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      await user.click(within(dialog).getByRole("button", { name: "Delete 2 items" }));
+
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      expect(screen.queryByTestId("vocab-bulk-bar")).not.toBeInTheDocument();
+      // One request for the initial load's stats + one from the single
+      // post-delete invalidation — never one per deleted id.
+      expect(statsCallCount).toBe(2);
+    });
+
+    it("closes the inspector if bulk delete removes the item currently open in it", async () => {
+      const items = threeItems();
+      global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.startsWith("/api/vocabulary/stats")) return jsonResponse({ ...STATS_ZERO, total: 3 });
+        if (url.startsWith("/api/vocabulary/bulk-delete")) {
+          const body = JSON.parse((init?.body as string) ?? "{}");
+          return jsonResponse({ deletedIds: body.ids });
+        }
+        if (url.startsWith("/api/vocabulary")) return jsonResponse({ items });
+        return Promise.reject(new Error(`Unhandled fetch in test: ${url}`));
+      }) as unknown as typeof fetch;
+
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(3));
+
+      await user.click(screen.getByRole("button", { name: "Open details for alpha" }));
+      expect(await screen.findByRole("dialog")).toHaveTextContent("alpha");
+
+      await user.click(screen.getByRole("checkbox", { name: "Select alpha" }));
+      await user.click(within(screen.getByTestId("vocab-bulk-bar")).getByRole("button", { name: "Delete" }));
+      const dialog = await screen.findByRole("alertdialog");
+      await user.click(within(dialog).getByRole("button", { name: "Delete 1 item" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
   });
 
   describe("detail drawer", () => {
@@ -430,8 +711,10 @@ describe("VocabularyPage", () => {
       renderPage();
       await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
-      await user.click(screen.getByRole("button", { name: "Edit vocabulary postpone" }));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
       const drawer = await screen.findByRole("dialog");
+      await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+
       const translationInput = within(drawer).getByPlaceholderText("Translation");
       await user.clear(translationInput);
       await user.type(translationInput, "trì hoãn");
@@ -442,7 +725,7 @@ describe("VocabularyPage", () => {
       expect(within(screen.getByTestId("vocab-card")).getByText("trì hoãn")).toBeInTheDocument();
     });
 
-    it("closes the drawer when the selected item is deleted", async () => {
+    it("requires confirmation, then closes the drawer, when the selected item is deleted", async () => {
       mockViewport(true);
       mockFetchFor([makeItem({ id: "item-1", term: "postpone" })], { ...STATS_ZERO, total: 1 });
       const user = userEvent.setup();
@@ -453,6 +736,56 @@ describe("VocabularyPage", () => {
       const drawer = await screen.findByRole("dialog");
       await user.click(within(drawer).getByRole("button", { name: "Delete" }));
 
+      const confirmDialog = await screen.findByRole("alertdialog");
+      expect(screen.getByRole("dialog")).toBeInTheDocument(); // drawer still open behind it
+      await user.click(within(confirmDialog).getByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    });
+
+    it("cancelling the delete confirmation leaves the drawer open and the item intact", async () => {
+      mockViewport(true);
+      mockFetchFor([makeItem({ id: "item-1", term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      const drawer = await screen.findByRole("dialog");
+      await user.click(within(drawer).getByRole("button", { name: "Delete" }));
+
+      const confirmDialog = await screen.findByRole("alertdialog");
+      await user.click(within(confirmDialog).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getAllByTestId("vocab-card")).toHaveLength(1);
+    });
+
+    it("Escape closes only the confirm dialog, not the drawer behind it, on the mobile modal tier", async () => {
+      mockViewport(false);
+      mockFetchFor([makeItem({ id: "item-1", term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+      const drawer = await screen.findByRole("dialog");
+      expect(drawer).toHaveAttribute("aria-modal", "true");
+
+      await user.click(within(drawer).getByRole("button", { name: "Delete" }));
+      await screen.findByRole("alertdialog");
+
+      await user.keyboard("{Escape}");
+
+      // Only the confirm dialog closed — the drawer (and the item) are untouched.
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getAllByTestId("vocab-card")).toHaveLength(1);
+
+      // The drawer's own Escape handling still works now that the dialog is gone.
+      await user.keyboard("{Escape}");
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
@@ -469,6 +802,7 @@ describe("VocabularyPage", () => {
       await user.click(screen.getByRole("button", { name: "Open details for alpha" }));
       expect(await screen.findByRole("dialog")).toHaveTextContent("alpha");
 
+      await user.click(screen.getByRole("button", { name: "Search" }));
       await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "beta");
       await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
 
@@ -534,6 +868,49 @@ describe("VocabularyPage", () => {
       await user.click(screen.getByRole("button", { name: "Close vocabulary details" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(workspace.className).not.toContain("xl:grid-cols-");
+    });
+  });
+
+  describe("review-status semantics in the drawer", () => {
+    it("New shows no Next review line", async () => {
+      mockFetchFor([makeItem({ term: "postpone", last_reviewed_at: null })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+
+      const drawer = await screen.findByRole("dialog");
+      expect(within(drawer).queryByText(/Next review/)).not.toBeInTheDocument();
+      expect(within(drawer).getByText("Not reviewed yet")).toBeInTheDocument();
+    });
+
+    it("Learning shows Next review with a date", async () => {
+      mockFetchFor(
+        [makeItem({ term: "postpone", last_reviewed_at: PAST(1), next_review_at: FUTURE(5) })],
+        { ...STATS_ZERO, total: 1 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+
+      const drawer = await screen.findByRole("dialog");
+      expect(within(drawer).getByText(/Next review/)).toBeInTheDocument();
+    });
+
+    it("Due shows 'Due now', not a Next review date", async () => {
+      mockFetchFor(
+        [makeItem({ term: "postpone", last_reviewed_at: PAST(5), next_review_at: PAST(1) })],
+        { ...STATS_ZERO, total: 1 }
+      );
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open details for postpone" }));
+
+      const drawer = await screen.findByRole("dialog");
+      expect(within(drawer).getByText("Due now")).toBeInTheDocument();
+      expect(within(drawer).queryByText(/Next review/)).not.toBeInTheDocument();
     });
   });
 });

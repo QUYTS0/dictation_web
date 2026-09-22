@@ -3,22 +3,6 @@ import userEvent from "@testing-library/user-event";
 import type { VocabularyItem } from "@/lib/types";
 import { VocabularyCard } from "@/app/vocabulary/components/VocabularyCard";
 
-// Sidesteps next/link's internal app-router prefetch wiring (needs a full
-// router context this test doesn't set up) — plain link rendering is enough.
-jest.mock("next/link", () => {
-  return function MockLink({
-    href,
-    children,
-    ...rest
-  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; children: React.ReactNode }) {
-    return (
-      <a href={href} {...rest}>
-        {children}
-      </a>
-    );
-  };
-});
-
 function makeItem(overrides: Partial<VocabularyItem> = {}): VocabularyItem {
   return {
     id: "item-1",
@@ -56,6 +40,23 @@ function makeItem(overrides: Partial<VocabularyItem> = {}): VocabularyItem {
 
 function noop() {}
 
+function renderCard(overrides: Partial<Parameters<typeof VocabularyCard>[0]> = {}) {
+  return render(
+    <VocabularyCard
+      item={makeItem()}
+      index={0}
+      isSelected={false}
+      isChecked={false}
+      atSelectionCap={false}
+      isDeleting={false}
+      isUpdating={false}
+      onSelect={noop}
+      onToggleSelect={noop}
+      {...overrides}
+    />
+  );
+}
+
 describe("VocabularyCard", () => {
   beforeEach(() => {
     // motion/react's reduced-motion check reads matchMedia on mount; jsdom
@@ -75,69 +76,32 @@ describe("VocabularyCard", () => {
   });
 
   it('does not render a "Saved" badge', () => {
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={noop}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard();
     expect(screen.queryByText("Saved")).not.toBeInTheDocument();
   });
 
   it('does not render a standalone "Status" label, but still renders the status badge', () => {
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={noop}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard();
     expect(screen.queryByText("Status")).not.toBeInTheDocument();
     expect(screen.getByTestId("vocab-status-badge")).toHaveTextContent("New");
   });
 
   it("clamps the term, translation, and sentence preview so they cannot grow the card", () => {
-    render(
-      <VocabularyCard
-        item={makeItem({ canonical_form: "go about" })}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={noop}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard({ item: makeItem({ canonical_form: "go about" }) });
     expect(screen.getByText("go about")).toHaveClass("truncate");
     expect(screen.getByText("làm việc")).toHaveClass("truncate");
     expect(screen.getByText(/Let's see how he goes about/)).toHaveClass("line-clamp-2");
   });
 
+  it("does not render Edit, Delete, or Source controls — those live only in the drawer now", () => {
+    renderCard();
+    expect(screen.queryByRole("button", { name: /^Edit vocabulary/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /vocabulary go about/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Source/ })).not.toBeInTheDocument();
+  });
+
   it("exposes the open-details control as a real button with aria-expanded reflecting isSelected", () => {
-    const { rerender } = render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={noop}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    const { rerender } = renderCard();
     const openButton = screen.getByRole("button", { name: "Open details for go about" });
     expect(openButton).toHaveAttribute("aria-expanded", "false");
     expect(openButton).toHaveAttribute("aria-controls", "vocabulary-detail-drawer");
@@ -147,11 +111,12 @@ describe("VocabularyCard", () => {
         item={makeItem()}
         index={0}
         isSelected
+        isChecked={false}
+        atSelectionCap={false}
         isDeleting={false}
         isUpdating={false}
         onSelect={noop}
-        onEdit={noop}
-        onDelete={noop}
+        onToggleSelect={noop}
       />
     );
     expect(screen.getByRole("button", { name: "Open details for go about" })).toHaveAttribute(
@@ -163,18 +128,7 @@ describe("VocabularyCard", () => {
   it("calls onSelect when the card's open-details button is clicked", async () => {
     const onSelect = jest.fn();
     const user = userEvent.setup();
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard({ onSelect });
     await user.click(screen.getByRole("button", { name: "Open details for go about" }));
     expect(onSelect).toHaveBeenCalledWith("item-1");
   });
@@ -182,18 +136,7 @@ describe("VocabularyCard", () => {
   it("calls onSelect on Enter and on Space when the open-details button is focused", async () => {
     const onSelect = jest.fn();
     const user = userEvent.setup();
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard({ onSelect });
     const openButton = screen.getByRole("button", { name: "Open details for go about" });
     openButton.focus();
     await user.keyboard("{Enter}");
@@ -205,83 +148,63 @@ describe("VocabularyCard", () => {
   it("does not call onSelect when the pronunciation button is clicked", async () => {
     const onSelect = jest.fn();
     const user = userEvent.setup();
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
+    renderCard({ onSelect });
     await user.click(screen.getByRole("button", { name: /pronunciation for go about/i }));
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("does not call onSelect when Edit is clicked, and calls onEdit with the item instead", async () => {
-    const onSelect = jest.fn();
-    const onEdit = jest.fn();
-    const user = userEvent.setup();
-    const item = makeItem();
-    render(
-      <VocabularyCard
-        item={item}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={onEdit}
-        onDelete={noop}
-      />
-    );
-    await user.click(screen.getByRole("button", { name: "Edit vocabulary go about" }));
-    expect(onSelect).not.toHaveBeenCalled();
-    expect(onEdit).toHaveBeenCalledWith(item);
+  describe("multi-select checkbox", () => {
+    it("reflects isChecked and calls onToggleSelect without opening the inspector", async () => {
+      const onSelect = jest.fn();
+      const onToggleSelect = jest.fn();
+      const user = userEvent.setup();
+      renderCard({ onSelect, onToggleSelect });
+
+      const checkbox = screen.getByRole("checkbox", { name: "Select go about" });
+      expect(checkbox).not.toBeChecked();
+
+      await user.click(checkbox);
+      expect(onToggleSelect).toHaveBeenCalledWith("item-1");
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("renders as checked when isChecked is true", () => {
+      renderCard({ isChecked: true });
+      expect(screen.getByRole("checkbox", { name: "Select go about" })).toBeChecked();
+    });
+
+    it("disables the checkbox at the selection cap unless this card is already checked", () => {
+      const { rerender } = renderCard({ isChecked: false, atSelectionCap: true });
+      expect(screen.getByRole("checkbox", { name: "Select go about" })).toBeDisabled();
+
+      rerender(
+        <VocabularyCard
+          item={makeItem()}
+          index={0}
+          isSelected={false}
+          isChecked
+          atSelectionCap
+          isDeleting={false}
+          isUpdating={false}
+          onSelect={noop}
+          onToggleSelect={noop}
+        />
+      );
+      expect(screen.getByRole("checkbox", { name: "Select go about" })).toBeEnabled();
+    });
+
+    it("applies a distinct tint when checked, independent of the isSelected ring", () => {
+      renderCard({ isChecked: true, isSelected: true });
+      const card = screen.getByTestId("vocab-card");
+      expect(card).toHaveClass("bg-primary-50/60");
+      expect(card).toHaveClass("ring-2");
+      expect(card).toHaveClass("ring-primary-500");
+    });
   });
 
-  it("does not call onSelect when Delete is clicked, and calls onDelete with the id instead", async () => {
-    const onSelect = jest.fn();
-    const onDelete = jest.fn();
-    const user = userEvent.setup();
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={noop}
-        onDelete={onDelete}
-      />
-    );
-    await user.click(screen.getByRole("button", { name: "Remove vocabulary go about" }));
-    expect(onSelect).not.toHaveBeenCalled();
-    expect(onDelete).toHaveBeenCalledWith("item-1");
-  });
-
-  it("does not call onSelect when the Source link is clicked, and links to the segment", async () => {
-    const onSelect = jest.fn();
-    const user = userEvent.setup();
-    render(
-      <VocabularyCard
-        item={makeItem()}
-        index={0}
-        isSelected={false}
-        isDeleting={false}
-        isUpdating={false}
-        onSelect={onSelect}
-        onEdit={noop}
-        onDelete={noop}
-      />
-    );
-    const sourceLink = screen.getByRole("link", { name: /Source/ });
-    expect(sourceLink).toHaveAttribute("href", "/dictation/video-1?segment=3");
-    await user.click(sourceLink);
-    expect(onSelect).not.toHaveBeenCalled();
+  it("dims and disables pointer interaction while deleting or updating", () => {
+    renderCard({ isDeleting: true });
+    expect(screen.getByTestId("vocab-card")).toHaveClass("opacity-50");
+    expect(screen.getByTestId("vocab-card")).toHaveClass("pointer-events-none");
   });
 });

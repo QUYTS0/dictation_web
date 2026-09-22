@@ -1,6 +1,4 @@
-import Link from "next/link";
 import { clsx } from "clsx";
-import { Pencil, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { VocabularyItem } from "@/lib/types";
@@ -11,11 +9,15 @@ export interface VocabularyCardProps {
   item: VocabularyItem;
   index: number;
   isSelected: boolean;
+  isChecked: boolean;
+  /** Disables *checking* this card on (client-enforced) at the shared bulk
+   *  selection cap — unchecking an already-checked card is always allowed
+   *  regardless of this flag. See MAX_BULK_SELECTABLE_ITEMS. */
+  atSelectionCap: boolean;
   isDeleting: boolean;
   isUpdating: boolean;
   onSelect: (id: string) => void;
-  onEdit: (item: VocabularyItem) => void;
-  onDelete: (id: string) => void;
+  onToggleSelect: (id: string) => void;
 }
 
 /**
@@ -23,14 +25,24 @@ export interface VocabularyCardProps {
  * non-interactive container — the actual "open details" control is the
  * first child, a visually-invisible native <button> stretched to cover the
  * whole card (the standard accessible "clickable card" pattern, cf.
- * Bootstrap's .stretched-link). Real actions (audio/edit/delete/source) are
+ * Bootstrap's .stretched-link). Real actions (audio/select-checkbox) are
  * pulled above it purely via `relative z-10`, so clicks on them never reach
- * the stretched button — no stopPropagation anywhere. See
- * .claude/plans (Vocabulary Bank plan) §D for the full rationale.
+ * the stretched button — no stopPropagation anywhere. Edit/Delete/Source
+ * live only in VocabularyDetailDrawer now, not here — see the Vocabulary UX
+ * redesign plan §F.
  */
-export function VocabularyCard({ item, index, isSelected, isDeleting, isUpdating, onSelect, onEdit, onDelete }: VocabularyCardProps) {
+export function VocabularyCard({
+  item,
+  index,
+  isSelected,
+  isChecked,
+  atSelectionCap,
+  isDeleting,
+  isUpdating,
+  onSelect,
+  onToggleSelect,
+}: VocabularyCardProps) {
   const displayTerm = item.canonical_form ?? item.term;
-  const sourceHref = `/dictation/${item.video_id}?segment=${item.segment_index}`;
 
   return (
     <motion.article
@@ -41,7 +53,9 @@ export function VocabularyCard({ item, index, isSelected, isDeleting, isUpdating
       data-item-id={item.id}
       className={clsx(
         "group relative flex w-full max-w-[360px] flex-col gap-2 rounded-3xl border border-white/60 bg-white/40 p-4 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1",
-        isSelected && "ring-2 ring-primary-500"
+        isSelected && "ring-2 ring-primary-500",
+        isChecked && "bg-primary-50/60",
+        (isDeleting || isUpdating) && "pointer-events-none opacity-50"
       )}
     >
       <button
@@ -55,6 +69,14 @@ export function VocabularyCard({ item, index, isSelected, isDeleting, isUpdating
 
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
+          <input
+            type="checkbox"
+            checked={isChecked}
+            disabled={!isChecked && atSelectionCap}
+            onChange={() => onToggleSelect(item.id)}
+            aria-label={`Select ${displayTerm}`}
+            className="relative z-10 h-4 w-4 shrink-0 cursor-pointer rounded border-slate-300 text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
+          />
           {item.image_thumbnail_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -72,26 +94,6 @@ export function VocabularyCard({ item, index, isSelected, isDeleting, isUpdating
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <VocabularyStatusBadge item={item} />
-          <div className="relative z-10 flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => onEdit(item)}
-              disabled={isDeleting || isUpdating}
-              className="rounded-lg border border-white/60 bg-white/50 p-1.5 transition-colors hover:bg-white/80 disabled:opacity-40"
-              aria-label={`Edit vocabulary ${item.term}`}
-            >
-              <Pencil size={14} className="text-slate-500" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDelete(item.id)}
-              disabled={isDeleting || isUpdating}
-              className="rounded-lg border border-white/60 bg-white/50 p-1.5 transition-colors hover:bg-red-50 disabled:opacity-40"
-              aria-label={isDeleting ? `Removing vocabulary ${item.term}` : `Remove vocabulary ${item.term}`}
-            >
-              <Trash2 size={14} className="text-slate-500" />
-            </button>
-          </div>
         </div>
       </div>
 
@@ -110,13 +112,6 @@ export function VocabularyCard({ item, index, isSelected, isDeleting, isUpdating
           &quot;{item.sentence_context}&quot;
         </p>
       </div>
-
-      <Link
-        href={sourceHref}
-        className="relative z-10 inline-block w-fit text-xs font-semibold text-primary-600 underline hover:text-primary-700"
-      >
-        ↗ Source
-      </Link>
     </motion.article>
   );
 }

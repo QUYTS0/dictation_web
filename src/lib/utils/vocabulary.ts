@@ -5,6 +5,18 @@ export function normalizeVocabularyTerm(term: string): string {
   return normalizeText(term, "relaxed").trim();
 }
 
+/**
+ * Upper bound on how many vocabulary items can be selected for a bulk
+ * action (currently: bulk delete) in one request. Imported by BOTH the
+ * client (Vocabulary Bank page — disables further checkbox selection once
+ * reached, so the limit is discovered in the UI, not from a failed request)
+ * and the server (POST /api/vocabulary/bulk-delete — rejects an over-cap
+ * request) from this single shared module, so the two can never drift. In
+ * normal use the server-side check is unreachable defense-in-depth, since
+ * the client never lets a request exceed it.
+ */
+export const MAX_BULK_SELECTABLE_ITEMS = 100;
+
 // ---- Word/phrase/sentence classification (shared by the Vocabulary Bank
 // page and the dictation practice page's saved-items list) ----
 

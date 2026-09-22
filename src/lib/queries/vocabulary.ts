@@ -111,3 +111,35 @@ export function useDeleteVocabularyItemMutation(userId: string | undefined) {
     },
   });
 }
+
+/**
+ * Mirrors useDeleteVocabularyItemMutation's shape, but for N ids in one
+ * request/one cache patch/one stats invalidation instead of N of each — see
+ * POST /api/vocabulary/bulk-delete. The mutation's result is the server's
+ * own `deletedIds` (not an echo of the request), since a caller-owned id
+ * that no longer exists is silently excluded rather than an error.
+ */
+export function useBulkDeleteVocabularyItemsMutation(userId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]): Promise<string[]> => {
+      const res = await fetch("/api/vocabulary/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; deletedIds?: string[] };
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete vocabulary items.");
+      }
+      return data.deletedIds ?? [];
+    },
+    onSuccess: (deletedIds) => {
+      const deleted = new Set(deletedIds);
+      queryClient.setQueryData<VocabularyItem[]>(vocabularyKeys.items(userId), (old) =>
+        old?.filter((item) => !deleted.has(item.id))
+      );
+      void queryClient.invalidateQueries({ queryKey: vocabularyKeys.stats(userId) });
+    },
+  });
+}
