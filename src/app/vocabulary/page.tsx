@@ -434,6 +434,11 @@ export default function VocabularyPage() {
   }, [items, searchInput, typeFilter, statusFilter]);
 
   const isFiltering = searchInput.trim() !== "" || typeFilter !== "all" || statusFilter !== "all";
+  // Counts active *dimensions* (Type, Status), not selected values within a
+  // dimension — shown on the collapsed Filter button so filtering-by-Status
+  // (surfaced via the metric strip, not this panel) still registers here.
+  const activeFilterDimensions = (typeFilter !== "all" ? 1 : 0) + (statusFilter !== "all" ? 1 : 0);
+  const hasActiveSearch = searchInput.trim() !== "";
 
   const clearFilters = () => {
     setSearchInput("");
@@ -442,10 +447,19 @@ export default function VocabularyPage() {
     clearSelectionIfAny();
   };
 
+  // Collapsing is a pure visibility toggle — the query is intentionally
+  // preserved (and selectedIds left untouched) so the user never loses a
+  // search just by closing the panel. Escape while the input is focused
+  // goes through this same function. Explicit clearing is a separate,
+  // deliberate action — see clearSearch below.
   const closeSearch = () => {
     setSearchOpen(false);
+  };
+
+  const clearSearch = () => {
     setSearchInput("");
     clearSelectionIfAny();
+    searchInputRef.current?.focus();
   };
 
   // A real fetch (not a cache hit) is in flight AND there is no data yet —
@@ -609,10 +623,22 @@ export default function VocabularyPage() {
                           <button
                             type="button"
                             onClick={() => setSearchOpen(true)}
-                            aria-label="Search"
-                            className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white/60 px-4 py-3 font-semibold text-slate-600 shadow-md backdrop-blur-xl transition-colors hover:text-primary-600"
+                            aria-label={hasActiveSearch ? "Search (active)" : "Search"}
+                            className={clsx(
+                              "relative flex items-center gap-2 rounded-2xl border px-4 py-3 font-semibold shadow-md backdrop-blur-xl transition-colors",
+                              hasActiveSearch
+                                ? "border-primary-200 bg-primary-50 text-primary-600"
+                                : "border-white/80 bg-white/60 text-slate-600 hover:text-primary-600"
+                            )}
                           >
                             <Search size={18} />
+                            {hasActiveSearch && (
+                              <span
+                                aria-hidden="true"
+                                data-testid="search-active-indicator"
+                                className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-primary-600"
+                              />
+                            )}
                           </button>
                         )}
                         <button
@@ -628,7 +654,7 @@ export default function VocabularyPage() {
                         >
                           <Filter size={18} />
                           <span className="hidden sm:inline">
-                            Filter{typeFilter !== "all" ? " (1)" : ""}
+                            Filter{activeFilterDimensions > 0 ? ` (${activeFilterDimensions})` : ""}
                           </span>
                         </button>
                       </div>
@@ -648,8 +674,18 @@ export default function VocabularyPage() {
                       onKeyDown={(e) => {
                         if (e.key === "Escape") closeSearch();
                       }}
-                      className="w-full bg-transparent py-3 pl-11 pr-4 font-medium text-slate-800 outline-none placeholder:text-slate-400"
+                      className="w-full bg-transparent py-3 pl-11 pr-10 font-medium text-slate-800 outline-none placeholder:text-slate-400"
                     />
+                    {searchInput && (
+                      <button
+                        type="button"
+                        onClick={clearSearch}
+                        aria-label="Clear search"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-600"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
                   </div>
                 )}
 

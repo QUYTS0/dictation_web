@@ -231,6 +231,28 @@ describe("VocabularyPage", () => {
     expect(screen.getByText("Type")).toBeInTheDocument();
   });
 
+  it("counts Type and Status as separate active filter dimensions on the collapsed Filter button", async () => {
+    mockFetchFor(
+      [makeItem({ id: "phrase-due", term: "give up the fight", last_reviewed_at: PAST(5), next_review_at: PAST(1) })],
+      { ...STATS_ZERO, total: 1, due: 1, reviewable: 1 }
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+    expect(screen.getByRole("button", { name: /^Filter$/ })).toBeInTheDocument();
+
+    // Status is set via the metric strip, not the Filter panel itself — the
+    // Filter button's count must still account for it as an active dimension.
+    await user.click(screen.getByTestId("vocab-stat-due"));
+    expect(screen.getByRole("button", { name: "Filter (1)" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Filter (1)" }));
+    await user.click(screen.getByRole("button", { name: "Phrases" }));
+
+    expect(screen.getByRole("button", { name: "Filter (2)" })).toBeInTheDocument();
+  });
+
   it("distinguishes a genuinely empty account from a filtered-to-empty result", async () => {
     mockFetchFor([], STATS_ZERO);
     renderPage();
@@ -408,7 +430,7 @@ describe("VocabularyPage", () => {
       expect(input).toHaveFocus();
     });
 
-    it("clears the query and collapses when closed", async () => {
+    it("preserves the query when Search is collapsed, and shows an active indicator", async () => {
       mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
       const user = userEvent.setup();
       renderPage();
@@ -419,11 +441,48 @@ describe("VocabularyPage", () => {
       await user.click(screen.getByRole("button", { name: "Close search" }));
 
       expect(screen.queryByPlaceholderText("Search words, notes, or sentences...")).not.toBeInTheDocument();
-      // Reopening confirms the query was actually cleared, not just hidden.
+      // Collapsing must not silently clear the result set — the button
+      // itself signals an active search, and reopening shows the query.
+      expect(screen.getByTestId("search-active-indicator")).toBeInTheDocument();
+      const searchButton = screen.getByRole("button", { name: "Search (active)" });
+
+      await user.click(searchButton);
+      expect((screen.getByPlaceholderText("Search words, notes, or sentences...") as HTMLInputElement).value).toBe(
+        "zzz"
+      );
+    });
+
+    it("collapses on Escape while preserving the query, not resetting it", async () => {
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
       await user.click(screen.getByRole("button", { name: "Search" }));
+      await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "zzz");
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByPlaceholderText("Search words, notes, or sentences...")).not.toBeInTheDocument();
+      expect(screen.getByTestId("search-active-indicator")).toBeInTheDocument();
+    });
+
+    it("clears the query via the explicit clear control inside the expanded field, removing the active indicator", async () => {
+      mockFetchFor([makeItem({ term: "postpone" })], { ...STATS_ZERO, total: 1 });
+      const user = userEvent.setup();
+      renderPage();
+      await waitFor(() => expect(screen.getAllByTestId("vocab-card")).toHaveLength(1));
+
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await user.type(screen.getByPlaceholderText("Search words, notes, or sentences..."), "zzz");
+      await user.click(screen.getByRole("button", { name: "Clear search" }));
+
       expect((screen.getByPlaceholderText("Search words, notes, or sentences...") as HTMLInputElement).value).toBe(
         ""
       );
+
+      await user.click(screen.getByRole("button", { name: "Close search" }));
+      expect(screen.queryByTestId("search-active-indicator")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
     });
   });
 
