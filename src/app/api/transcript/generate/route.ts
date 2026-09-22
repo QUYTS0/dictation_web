@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { normalizeText } from "@/lib/utils/text";
+import { computeTranscriptFingerprint } from "@/lib/utils/transcriptFingerprint";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { mergeIntoSentences } from "@/lib/utils/segment";
 import { generateEnglishTranscript, toCueItems } from "@/lib/youtubeCaptions/orchestrator";
@@ -114,45 +115,56 @@ export async function POST(request: NextRequest) {
       .from("videos")
       .upsert({ youtube_video_id: videoId }, { onConflict: "youtube_video_id" });
 
-    const { data: existingTranscripts, error: existingTranscriptsError } = await supabase
+    // The video's current, ready revision (Phase 0 — is_current is the one
+    // authoritative pointer to it; decoupled from "most recently updated",
+    // which is no longer a safe proxy now that regeneration publishes a new
+    // row instead of mutating the existing one in place).
+    const { data: currentReady, error: currentReadyError } = await supabase
       .from("transcripts")
-      .select("id, status, updated_at, created_at")
+      .select("id, status")
       .eq("youtube_video_id", videoId)
       .eq("language", language)
-      .order("updated_at", { ascending: false })
-      .order("created_at", { ascending: false });
+      .eq("is_current", true)
+      .maybeSingle();
 
-    if (existingTranscriptsError) {
-      console.error("[transcript generate] existing transcript query error:", existingTranscriptsError);
+    if (currentReadyError) {
+      console.error("[transcript generate] current-revision query error:", currentReadyError);
       return NextResponse.json({ error: "Failed to inspect transcript state" }, { status: 500 });
     }
 
-    const canonicalTranscript = existingTranscripts?.[0] ?? null;
-    const duplicateTranscriptIds = (existingTranscripts ?? []).slice(1).map((item) => item.id);
+    // Only used as a failure-bookkeeping placeholder (see reportFetchFailure
+    // below) when no current ready revision exists — never used to decide
+    // reuse, and never mutated in place on a successful publish. Historical
+    // revisions are never deleted or merged by this route.
+    const { data: mostRecentAnyStatus, error: mostRecentAnyStatusError } = await supabase
+      .from("transcripts")
+      .select("id, status")
+      .eq("youtube_video_id", videoId)
+      .eq("language", language)
+      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (duplicateTranscriptIds.length > 0) {
-      const { error: duplicateDeleteError } = await supabase
-        .from("transcripts")
-        .delete()
-        .in("id", duplicateTranscriptIds);
-      if (duplicateDeleteError) {
-        console.error("[transcript generate] duplicate cleanup error:", duplicateDeleteError);
-        return NextResponse.json({ error: "Failed to cleanup duplicate transcripts" }, { status: 500 });
-      }
+    if (mostRecentAnyStatusError) {
+      console.error("[transcript generate] most-recent transcript query error:", mostRecentAnyStatusError);
+      return NextResponse.json({ error: "Failed to inspect transcript state" }, { status: 500 });
     }
 
-    if (!force && canonicalTranscript?.status === "ready") {
+    const failurePlaceholderCandidate = currentReady ?? mostRecentAnyStatus ?? null;
+
+    if (!force && currentReady) {
       const { count: segmentCount, error: segmentCountError } = await supabase
         .from("transcript_segments")
         .select("id", { count: "exact", head: true })
-        .eq("transcript_id", canonicalTranscript.id);
+        .eq("transcript_id", currentReady.id);
       if (segmentCountError) {
         console.error("[transcript generate] ready transcript segment count error:", segmentCountError);
         return NextResponse.json({ error: "Failed to validate ready transcript" }, { status: 500 });
       }
       if ((segmentCount ?? 0) > 0) {
         console.log(
-          `[transcript generate] reusing ready transcript ${canonicalTranscript.id} (segments=${segmentCount})`
+          `[transcript generate] reusing current transcript ${currentReady.id} (segments=${segmentCount})`
         );
         recordTranscriptFetchEvent({
           videoIdHash: hashVideoId(videoId),
@@ -165,14 +177,16 @@ export async function POST(request: NextRequest) {
           lockContended: false,
           cooldownHit: false,
         });
-        return NextResponse.json({ transcriptId: canonicalTranscript.id, status: canonicalTranscript.status });
+        return NextResponse.json({ transcriptId: currentReady.id, status: currentReady.status });
       }
     }
 
-    // A previously-ready transcript is valuable — resolve the replacement
-    // segments first and only touch the DB once they're confirmed good, so a
-    // failed regenerate can't wipe out a script that was working.
-    const hasWorkingTranscriptToPreserve = canonicalTranscript?.status === "ready";
+    // A previously-ready current transcript is valuable — resolve the
+    // replacement segments first and only publish once they're confirmed
+    // good, so a failed regenerate can't wipe out a script that was
+    // working (fn_publish_transcript_revision never touches the previous
+    // current revision unless a new one is actually being published).
+    const hasWorkingTranscriptToPreserve = !!currentReady;
 
     let resolvedSegments: ResolvedSegment[];
     let source: "manual" | "cache";
@@ -230,7 +244,7 @@ export async function POST(request: NextRequest) {
           });
           return reportFetchFailure(
             supabase,
-            canonicalTranscript,
+            failurePlaceholderCandidate,
             hasWorkingTranscriptToPreserve,
             videoId,
             language,
@@ -293,7 +307,7 @@ export async function POST(request: NextRequest) {
           );
           return reportFetchFailure(
             supabase,
-            canonicalTranscript,
+            failurePlaceholderCandidate,
             hasWorkingTranscriptToPreserve,
             videoId,
             language,
@@ -327,7 +341,7 @@ export async function POST(request: NextRequest) {
           });
           return reportFetchFailure(
             supabase,
-            canonicalTranscript,
+            failurePlaceholderCandidate,
             hasWorkingTranscriptToPreserve,
             videoId,
             language,
@@ -345,117 +359,51 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // We now have confirmed-good segments — safe to replace whatever existed.
-    let transcriptId: string;
-    if (canonicalTranscript) {
-      const { error: canonicalUpdateError } = await supabase
-        .from("transcripts")
-        .update({
-          status: "processing",
-          source,
-          full_text: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", canonicalTranscript.id);
-      if (canonicalUpdateError) {
-        console.error("[transcript generate] canonical transcript update error:", canonicalUpdateError);
-        return NextResponse.json({ error: "Failed to refresh transcript record" }, { status: 500 });
-      }
-
-      const { error: previousSegmentDeleteError } = await supabase
-        .from("transcript_segments")
-        .delete()
-        .eq("transcript_id", canonicalTranscript.id);
-      if (previousSegmentDeleteError) {
-        console.error("[transcript generate] previous segment cleanup error:", previousSegmentDeleteError);
-        return NextResponse.json({ error: "Failed to reset transcript segments" }, { status: 500 });
-      }
-
-      // Translations and vocab highlights are cached by (transcript_id,
-      // segment_index) — since the transcript row is being reused, stale
-      // rows here would otherwise get replayed against the new segments'
-      // unrelated text just because the index happens to match.
-      const { error: previousTranslationDeleteError } = await supabase
-        .from("transcript_translations")
-        .delete()
-        .eq("transcript_id", canonicalTranscript.id);
-      if (previousTranslationDeleteError) {
-        console.error("[transcript generate] previous translation cleanup error:", previousTranslationDeleteError);
-        return NextResponse.json({ error: "Failed to reset transcript translations" }, { status: 500 });
-      }
-
-      const { error: previousVocabHighlightDeleteError } = await supabase
-        .from("transcript_vocab_highlights")
-        .delete()
-        .eq("transcript_id", canonicalTranscript.id);
-      if (previousVocabHighlightDeleteError) {
-        console.error("[transcript generate] previous vocab highlight cleanup error:", previousVocabHighlightDeleteError);
-        return NextResponse.json({ error: "Failed to reset vocab highlights" }, { status: 500 });
-      }
-
-      transcriptId = canonicalTranscript.id;
-    } else {
-      const { data: transcript, error: tError } = await supabase
-        .from("transcripts")
-        .insert({
-          youtube_video_id: videoId,
-          language,
-          source,
-          status: "processing",
-          version: 1,
-        })
-        .select("id")
-        .single();
-
-      if (tError || !transcript) {
-        console.error("[transcript generate] insert error:", tError);
-        return NextResponse.json({ error: "Failed to create transcript record" }, { status: 500 });
-      }
-      transcriptId = transcript.id;
-    }
-
-    console.log(
-      `[transcript generate] writing ${resolvedSegments.length} segments to transcript ${transcriptId} for video ${videoId}`
-    );
-
-    const rows = resolvedSegments.map((seg) => ({
-      transcript_id: transcriptId,
-      segment_index: seg.segmentIndex,
-      start_sec: seg.start,
-      end_sec: seg.end,
-      duration_sec: seg.end - seg.start,
-      text_raw: seg.text,
-      text_normalized: normalizeText(seg.text, "relaxed"),
+    // We now have confirmed-good segments — publish them as a new revision,
+    // atomically, via fn_publish_transcript_revision (Phase 0). This never
+    // mutates or deletes a previously-published revision's row or segments
+    // — regeneration always either reuses an existing ready revision whose
+    // content-fingerprint matches, or inserts a brand-new transcript row.
+    // Because publication is one transaction, a failure here leaves
+    // whatever was already published (including the previous current
+    // revision, if any) completely untouched — there is no intermediate
+    // "processing" row to clean up on failure, unlike the old
+    // update-in-place flow.
+    const fullText = resolvedSegments.map((s) => s.text).join(" ");
+    const contentFingerprint = computeTranscriptFingerprint(resolvedSegments);
+    const segmentsForPublish = resolvedSegments.map((seg) => ({
+      segmentIndex: seg.segmentIndex,
+      start: seg.start,
+      end: seg.end,
+      text: seg.text,
+      textNormalized: normalizeText(seg.text, "relaxed"),
     }));
 
-    const { error: insertError } = await supabase
-      .from("transcript_segments")
-      .insert(rows);
+    console.log(
+      `[transcript generate] publishing ${segmentsForPublish.length} segments for video ${videoId} (fingerprint=${contentFingerprint.slice(0, 12)}…)`
+    );
 
-    if (insertError) {
-      console.error("[transcript generate] segment insert error:", insertError);
-      await supabase
-        .from("transcripts")
-        .update({ status: "failed" })
-        .eq("id", transcriptId);
-      return NextResponse.json({ error: "Failed to store segments" }, { status: 500 });
+    const { data: published, error: publishError } = await supabase.rpc("fn_publish_transcript_revision", {
+      p_youtube_video_id: videoId,
+      p_language: language,
+      p_source: source,
+      p_full_text: fullText,
+      p_segments: segmentsForPublish,
+      p_content_fingerprint: contentFingerprint,
+    });
+
+    if (publishError || !published) {
+      console.error("[transcript generate] publish error:", publishError);
+      // Nothing was written — fn_publish_transcript_revision is one
+      // transaction, so a failure here never leaves a partially-written
+      // row and never touches the previous current revision.
+      return NextResponse.json({ error: "Failed to publish transcript revision" }, { status: 500 });
     }
 
-    const fullText = resolvedSegments.map((s) => s.text).join(" ");
-    const { error: updateError } = await supabase
-      .from("transcripts")
-      .update({ status: "ready", full_text: fullText })
-      .eq("id", transcriptId);
-
-    if (updateError) {
-      console.error("[transcript generate] status update error:", updateError);
-      // Attempt to mark as failed so the client doesn't poll forever
-      await supabase.from("transcripts").update({ status: "failed" }).eq("id", transcriptId);
-      return NextResponse.json({ error: "Failed to finalize transcript" }, { status: 500 });
-    }
+    const transcriptId: string = published.id;
 
     console.log(
-      `[transcript generate] stored ${rows.length} segments for transcript ${transcriptId}`
+      `[transcript generate] published transcript ${transcriptId} (version=${published.version}) for video ${videoId}`
     );
 
     const outcomeLabel: TranscriptFetchOutcome = fallbackUsed ? "fallback_success" : "success";
@@ -466,7 +414,7 @@ export async function POST(request: NextRequest) {
       attemptCount,
       fallbackUsed,
       durationMs: Date.now() - requestStartedAt,
-      segmentCount: rows.length,
+      segmentCount: segmentsForPublish.length,
       cacheHit: false,
       lockContended,
       cooldownHit,
@@ -475,7 +423,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       transcriptId,
       status: "ready",
-      segmentCount: rows.length,
+      segmentCount: segmentsForPublish.length,
     });
   } catch (err) {
     console.error("[transcript generate] unexpected error:", err);

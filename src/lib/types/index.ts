@@ -138,6 +138,13 @@ export interface TranscriptResponse {
   source?: "cache" | "ai" | "manual";
   title?: string | null;
   segments: TranscriptSegment[];
+  /** The revision this response actually describes — null only when no
+   *  transcript row exists for this video/language at all yet (Phase 0).
+   *  When a `transcriptId` was requested (`?transcriptId=`), this always
+   *  echoes that exact id; a request for one that doesn't exist or belongs
+   *  to a different video/language gets a 404 instead, never a silent
+   *  substitution with the current revision. */
+  transcriptId?: string | null;
 }
 
 // ---- Listening practice / translation types ----
@@ -273,6 +280,11 @@ export interface ResumeSessionResponse {
     totalAttempts: number;
     updatedAt: string;
     status: "active" | "completed" | "abandoned";
+    /** The transcript revision this session is pinned to — null only for a
+     *  session created before this column was ever populated (Phase 0). A
+     *  client must fetch this exact revision to resume/practice against,
+     *  never "whatever is current now". */
+    transcriptId: string | null;
   } | null;
 }
 

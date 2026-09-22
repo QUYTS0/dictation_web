@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("learning_sessions")
       .select(
-        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status"
+        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status, transcript_id"
       )
       .eq("user_id", user.id)
       .eq("youtube_video_id", videoId)
@@ -49,6 +49,10 @@ export async function GET(request: NextRequest) {
             totalAttempts: data.total_attempts ?? 0,
             updatedAt: data.updated_at,
             status: data.status as "active" | "completed" | "abandoned",
+            // Phase 0 — the revision this session is pinned to. Every reader
+            // (GET /api/transcript, useDictationSession) must fetch exactly
+            // this revision when it's non-null, never "whatever is current".
+            transcriptId: data.transcript_id ?? null,
           }
         : null,
     };

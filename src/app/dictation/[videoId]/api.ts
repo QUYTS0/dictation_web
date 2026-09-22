@@ -8,8 +8,20 @@ import type {
 } from "@/lib/types";
 import type { ManualSegmentInput } from "@/lib/utils/segment";
 
-export async function fetchTranscript(videoId: string): Promise<TranscriptResponse> {
-  const res = await fetch(`/api/transcript/${videoId}?lang=en`);
+/**
+ * Fetches a transcript for a video. When `pinnedTranscriptId` is provided
+ * (an existing session's pinned revision, Phase 0), that exact revision is
+ * requested — never "whatever is current now". Omit it to resolve the
+ * video's current revision, e.g. for a video with no session yet.
+ */
+export async function fetchTranscript(
+  videoId: string,
+  pinnedTranscriptId?: string | null,
+  lang = "en"
+): Promise<TranscriptResponse> {
+  const params = new URLSearchParams({ lang });
+  if (pinnedTranscriptId) params.set("transcriptId", pinnedTranscriptId);
+  const res = await fetch(`/api/transcript/${videoId}?${params.toString()}`);
   if (!res.ok) throw new Error("Failed to fetch transcript");
   return res.json();
 }

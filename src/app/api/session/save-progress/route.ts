@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
       // Reuse an existing active session for this user+video when available.
       const { data: existingActiveSession, error: existingSessionError } = await supabase
         .from("learning_sessions")
-        .select("id, transcript_id")
+        .select("id")
         .eq("user_id", user.id)
         .eq("youtube_video_id", youtubeVideoId)
         .eq("status", "active")
@@ -81,10 +81,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (existingActiveSession) {
+        // Phase 0: a round pins its transcript revision at creation and
+        // never repins it from an ordinary progress save — transcript_id is
+        // deliberately left out of this UPDATE entirely (not "preserved via
+        // a fallback"), so a client-supplied transcriptId here can never
+        // overwrite what this session already pinned, whatever value it
+        // sends.
         const { data, error } = await supabase
           .from("learning_sessions")
           .update({
-            transcript_id: transcriptId ?? existingActiveSession.transcript_id ?? null,
             current_segment_index: currentSegmentIndex,
             video_current_time: videoCurrentTimeSec,
             accuracy,
@@ -108,12 +113,61 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // First touch for this (user, video): resolve the round's pinned
+      // transcript revision SERVER-SIDE from the video's current, ready
+      // transcript — never trust a client-supplied transcriptId for this
+      // decision (Phase 0). Language is hardcoded "en" to match every other
+      // transcript resolution in this app (fetchTranscript, transcript
+      // generate/GET routes).
+      const { data: currentTranscript, error: currentTranscriptError } = await supabase
+        .from("transcripts")
+        .select("id")
+        .eq("youtube_video_id", youtubeVideoId)
+        .eq("language", "en")
+        .eq("is_current", true)
+        .maybeSingle();
+
+      if (currentTranscriptError) {
+        console.error("[save-progress] current transcript query error:", currentTranscriptError);
+        return NextResponse.json({ error: "Failed to resolve transcript revision" }, { status: 500 });
+      }
+
+      if (!currentTranscript) {
+        // No ready transcript exists yet for this video — nothing to pin a
+        // new round to. The practice UI only reaches this call once its own
+        // transcript query is "ready", so this is a genuine race/edge case,
+        // not the common path; surfaced explicitly rather than silently
+        // creating a round with no pinned revision.
+        return NextResponse.json(
+          { error: "No ready transcript exists for this video yet.", code: "transcript_not_ready" },
+          { status: 409 }
+        );
+      }
+
+      // Race guard: the client's own transcriptId reflects whatever
+      // revision it actually fetched/displayed and is submitting work
+      // against. If the video's current revision has since moved on (a
+      // regeneration published a new one between the client's fetch and
+      // this first save), pinning the new round to the server's
+      // now-different "current" would silently attach the client's
+      // in-progress answers to a revision they were never shown — rejected
+      // instead, so the client can refetch and restart cleanly.
+      if (transcriptId && transcriptId !== currentTranscript.id) {
+        return NextResponse.json(
+          {
+            error: "The transcript revision has changed since this page loaded. Please refresh and try again.",
+            code: "stale_transcript_revision",
+          },
+          { status: 409 }
+        );
+      }
+
       const { data, error } = await supabase
         .from("learning_sessions")
         .insert({
           user_id: user.id,
           youtube_video_id: youtubeVideoId,
-          transcript_id: transcriptId ?? null,
+          transcript_id: currentTranscript.id,
           current_segment_index: currentSegmentIndex,
           video_current_time: videoCurrentTimeSec,
           accuracy,
@@ -128,7 +182,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
       }
 
-      console.log(`[save-progress] created session ${data.id} for video ${youtubeVideoId}`);
+      console.log(`[save-progress] created session ${data.id} for video ${youtubeVideoId} (transcript=${currentTranscript.id})`);
       return NextResponse.json<SaveProgressResponse>({
         sessionId: data.id,
         status,

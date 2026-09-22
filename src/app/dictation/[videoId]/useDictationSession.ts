@@ -77,10 +77,19 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   const [checkResult, setCheckResult] = useState<CheckAnswerResponse | null>(null);
   const [wrongAttempts, setWrongAttempts] = useState(0);
   const [hintLevel, setHintLevel] = useState<HintLevel>(0);
-  const [transcriptId, setTranscriptId] = useState<string | undefined>();
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
+  // Drives the transcript query's revision choice (Phase 0) — deliberately
+  // SEPARATE from resumeState (which also gets cleared once a local
+  // sessionStorage snapshot is restored, purely a resume-banner/handleResume
+  // concern below). `undefined` = not resolved yet (query stays disabled);
+  // `null` = resolved, no pinned revision (fetch current); a string = fetch
+  // exactly that revision. Once resolved from the server's resume check,
+  // this must NOT be reset just because the resume banner itself is later
+  // dismissed by a local-snapshot restore — the transcript already fetched
+  // (or is fetching) against the correct pinned revision by that point.
+  const [pinnedRevisionId, setPinnedRevisionId] = useState<string | null | undefined>(undefined);
   const [resumeLoading, setResumeLoading] = useState(false);
   // Flips true once the server resume check has settled one way or another
   // (found a session, found none, or was skipped for a guest) — distinct from
@@ -156,6 +165,13 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     pendingRestoreSeekSecRef.current = null;
     playerReadyForRestoreRef.current = false;
     setResumeState(null);
+    // Phase 0: the transcript query is gated on pinnedRevisionId being
+    // resolved, so it never fetches "current" before the new video's own
+    // resume state is known — reset both flags alongside resumeLoadedRef so
+    // a video switch re-blocks the query until the new video's resume-fetch
+    // effect (below) settles again.
+    setResumeChecked(false);
+    setPinnedRevisionId(undefined);
     firstAttemptBySegmentRef.current = {};
     // The session store (sessionId, attempt/correct counts) is global and
     // persisted, so it must be wiped whenever the active video changes —
@@ -167,18 +183,25 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   }, [videoId, user?.id]);
 
   // ---- Transcript query ----
+  // Phase 0 (.claude/video-learning-management-plan.md): gated on
+  // pinnedRevisionId being resolved (not `undefined`) so resume state
+  // resolves FIRST — an existing session fetches its own pinned revision,
+  // never "whatever is current now"; a fresh video (no session) fetches
+  // current. The query key includes the pinned id (or the "current"
+  // sentinel) so a pinned-revision fetch and a current-revision fetch never
+  // share a cache entry, even for the same video/language.
   const transcriptQuery = useQuery({
-    queryKey: ["transcript", videoId],
-    queryFn: () => fetchTranscript(videoId),
+    queryKey: ["transcript", videoId, "en", pinnedRevisionId ?? "current"],
+    queryFn: () => fetchTranscript(videoId, pinnedRevisionId ?? undefined, "en"),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === "processing" ? 3000 : false;
     },
-    enabled: !!videoId,
-    // A transcript never changes mid-session, so there's nothing to gain from
-    // revalidating it when the tab regains focus — and doing so used to reset
-    // an in-progress dictation session back to the "Start Dictation" screen
-    // (see the uxState-sync effect below).
+    enabled: !!videoId && pinnedRevisionId !== undefined,
+    // A pinned/current transcript never changes mid-session, so there's
+    // nothing to gain from revalidating it when the tab regains focus — and
+    // doing so used to reset an in-progress dictation session back to the
+    // "Start Dictation" screen (see the uxState-sync effect below).
     refetchOnWindowFocus: false,
   });
 
@@ -187,6 +210,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     [transcriptQuery.data?.segments]
   );
   const transcriptStatus = transcriptQuery.data?.status;
+  // The revision actually being displayed/practiced against right now —
+  // derived from the fetched segments (same convention page.tsx already
+  // uses), never separately tracked state that could drift from what's
+  // rendered. Undefined while segments haven't loaded yet.
+  const transcriptId = segments[0]?.transcript_id;
+  // "Still figuring out which revision to fetch, or fetching/refetching it"
+  // — distinct from "no session" so the UI never mistakes "resume still
+  // loading" for "nothing to resume" (Phase 0).
+  const transcriptPending = pinnedRevisionId === undefined || transcriptQuery.isLoading;
 
   // Sync segments into player store
   useEffect(() => {
@@ -241,7 +273,13 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       sessionStore.hydrateAccuracy(snapshot.totalAttempts, snapshot.correctCount);
 
       // A local-tab snapshot is more precise than the server's "resume"
-      // record and takes priority over it — skip the server resume fetch.
+      // banner and takes priority over it for display purposes — this only
+      // clears the "Resume at sentence N" prompt/handleResume data.
+      // pinnedRevisionId (Phase 0) is deliberately left untouched: the
+      // server resume-check already resolved it (it runs independently of
+      // transcript readiness now, so it has necessarily already settled by
+      // the time segments — and therefore this restore — can run at all),
+      // and the transcript already fetched against that correct revision.
       resumeLoadedRef.current = true;
       setResumeState(null);
 
@@ -278,7 +316,12 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // stuck even though the regenerate succeeded. dataUpdatedAt changes on
   // every successful fetch regardless of whether the content did.
   useEffect(() => {
-    if (transcriptQuery.isLoading) {
+    // Phase 0: transcriptPending also covers "resume state not resolved
+    // yet, transcript query not even enabled yet" — without this, that
+    // window would fall through every branch below and leave uxState stuck
+    // at whatever it was, which happens to look like "loading" today only
+    // by coincidence of the initial state; explicit is safer.
+    if (transcriptPending) {
       setUxState("loading_transcript");
     } else if (transcriptStatus === "processing") {
       setUxState("transcript_processing");
@@ -300,7 +343,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // Transcript marked ready but no segments — treat as failed so user gets feedback
       setUxState("transcript_failed");
     }
-  }, [transcriptStatus, transcriptQuery.isLoading, transcriptQuery.dataUpdatedAt, segments.length, videoId, applyRestoredSnapshot]);
+  }, [transcriptStatus, transcriptPending, transcriptQuery.dataUpdatedAt, segments.length, videoId, applyRestoredSnapshot]);
 
   useEffect(() => {
     uxStateRef.current = uxState;
@@ -566,7 +609,10 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         generateInFlightRef.current = false;
         if (currentVideoIdRef.current !== requestedForVideoId) return;
 
-        if (result.transcriptId) setTranscriptId(result.transcriptId);
+        // transcriptId is derived from the transcript query's own segments
+        // (Phase 0) — no separate state to set here; the next poll of that
+        // query (refetchInterval, above) picks up the newly-published
+        // revision once it's ready.
         const code = result.code ?? null;
         setAutoGenerateErrorCode(code);
         if (result.status === "ready" || result.transcriptId) setRegenerateError(null);
@@ -605,8 +651,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   }, [transcriptStatus === "processing" && !transcriptId, videoId]);
 
   const handleManualTranscriptSaved = useCallback(
-    async (id: string) => {
-      setTranscriptId(id);
+    async () => {
+      // A saved manual/SRT paste always becomes (or reuses) the video's
+      // current revision — clear any previously-pinned revision so the
+      // transcript query re-targets "current" rather than staying keyed to
+      // whatever revision an old session happened to pin (Phase 0). The
+      // refetch then picks up the freshly-published revision via its own
+      // segments; there's no separate transcriptId state to set here.
+      setResumeState(null);
+      setPinnedRevisionId(null);
       await transcriptQuery.refetch();
     },
     [transcriptQuery]
@@ -640,6 +693,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     setMistakes([]);
     setPreviousReview(null);
     setResumeState(null);
+    // Phase 0: force the transcript query back to "current" — a regenerate
+    // always targets the video's current revision, never a stale pin.
+    setPinnedRevisionId(null);
     setCombo(0);
     setBestCombo(0);
     setCleanSolveCount(0);
@@ -650,7 +706,10 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       const result = providedSegments
         ? await saveManualTranscript(videoId, providedSegments, importSource ?? "manual")
         : await regenerateTranscript(videoId);
-      if (result.transcriptId) setTranscriptId(result.transcriptId);
+      // transcriptId is derived from segments (Phase 0) — the refetch below
+      // (and resumeState already having been cleared above, so the query
+      // targets "current" rather than any previously-pinned revision) picks
+      // up the newly-published revision.
       setAutoGenerateErrorCode(result.code ?? null);
     } catch (err) {
       setRegenerateError(err instanceof Error ? err.message : "Failed to regenerate transcript.");
@@ -662,11 +721,21 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   }, [videoId, transcriptQuery]);
 
   // ---- Load resumable session for authenticated users ----
+  // Phase 0: this now runs as soon as videoId/user are known — NOT gated on
+  // transcriptStatus === "ready" as before. The transcript query above is
+  // itself gated on resumeChecked (its `enabled` flag), so resume state is
+  // always resolved BEFORE the transcript fetch decides whether to ask for
+  // a pinned revision or "current" — an existing session's own
+  // fetchResumeSession call is the authoritative source for which revision
+  // it's pinned to, independent of whichever revision a local
+  // sessionStorage snapshot (restored later, once segments load, by the
+  // sync effect above) happens to remember from this tab's last visit.
   useEffect(() => {
-    if (transcriptStatus !== "ready" || resumeLoadedRef.current) return;
+    if (resumeLoadedRef.current) return;
     if (!user) {
       resumeLoadedRef.current = true;
       setResumeChecked(true);
+      setPinnedRevisionId(null); // guest: no session possible — fetch current
       return;
     }
     setResumeLoading(true);
@@ -688,16 +757,26 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
             status: data.session.status,
             accuracy: data.session.accuracy,
             totalAttempts: data.session.totalAttempts,
+            transcriptId: data.session.transcriptId,
           });
+          // null (no pinned revision on a legacy/pre-Phase-0 row) falls back
+          // to fetching current, same as "no session at all".
+          setPinnedRevisionId(data.session.transcriptId ?? null);
+        } else {
+          setPinnedRevisionId(null);
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // Resume check failed (network error, etc.) — fetch current rather
+        // than leaving the transcript query blocked indefinitely.
+        setPinnedRevisionId(null);
+      })
       .finally(() => {
         resumeLoadedRef.current = true;
         setResumeLoading(false);
         setResumeChecked(true);
       });
-  }, [transcriptStatus, user, videoId]);
+  }, [user, videoId]);
 
   // ---- Pause playback and autosave when the tab is hidden / page is being
   // closed. This must ONLY pause and persist — it must never call setUxState
@@ -887,6 +966,12 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         clearDictationSessionSnapshot(videoId);
         firstAttemptBySegmentRef.current = {};
         setResumeState(null);
+        // Phase 0: the abandoned round's pin no longer applies — the next
+        // round (created lazily on the next save-progress call) pins
+        // whatever is current at that time, so re-target the transcript
+        // query to current now rather than continuing to show the
+        // abandoned round's revision.
+        setPinnedRevisionId(null);
         setCombo(0);
         setBestCombo(0);
         setCleanSolveCount(0);

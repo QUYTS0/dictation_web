@@ -6,24 +6,30 @@ repository (migrations `001`–`019`, and the live route/hook/component code), n
 any prior planning document. Where an earlier finding from `.claude/vocabulary-stats-and-navigation-caching-plan.md`
 overlaps, it was re-verified, not trusted as-is.
 
-**Revision 5.** Revision 1 was the original audit + plan; Revision 2 a correctness/concurrency
+**Revision 6.** Revision 1 was the original audit + plan; Revision 2 a correctness/concurrency
 review; Revision 3 added **Script Versions**; Revision 4 resolved eight findings going deeper into
-mechanisms Revision 3 had touched but not fully fixed (rows R21–R28 of the
-[Review-resolution table](#review-resolution-table)). **This revision (5)** fixes a second layer of
-defect the same review process surfaced under closer inspection: `learning_sessions` was identified
-as needing RLS tightening but never actually received it (§9.9, now with a full per-function
-permission matrix); the cutover "gate" checked a flag but never fenced concurrent writes, so an old
-writer could still create a `provenance='current'` row after the cutoff (§8.14, now a genuine
-Postgres row-lock fence, not a timeout); a claim that `SERIALIZABLE` isolation alone protects
-against a concurrent lower-isolation write was factually wrong and is removed, replaced with an
-honest statement that indirect vocabulary/bookmark reference-checking has no available
-concurrency-safety mechanism (§6.9, deletion now ships disabled by default); a real publish-vs-
-delete race (promoting a revision a concurrent deletion just removed) is now closed by a row-lock-
-and-reverify step (§6.9/§8.3); §9.5 and §9.7 gave contradictory rules for Listening writes,
-resolved by splitting round-based staleness rejection from Listening's own round-independent rule
-(§9.5/§9.6); and the navigation-boundary flush invalidated caches before the flush it was
-reflecting had actually committed, now corrected to a post-success-only guarantee owned by a
-module-level coordinator, not a component effect (§11.6). §2/§3 remain unchanged from Revision 1.
+mechanisms Revision 3 had touched but not fully fixed; Revision 5 fixed a second layer the same
+review process surfaced under closer inspection (rows R21–R28 of the
+[Review-resolution table](#review-resolution-table)) — `learning_sessions`' missing RLS
+tightening, a cutover gate that checked a flag but never fenced concurrent writes, a false claim
+that `SERIALIZABLE` isolation alone protects against a concurrent lower-isolation write, a
+publish-vs-delete race, a §9.5/§9.7 contradiction over Listening writes, and a navigation-flush
+ordering bug. **This revision (6)** fixes a third layer: the cutover fence still left
+`dictation/check`'s service-role attempt insert and the new authoritative functions' own
+`EXECUTE` grants unfenced, closed with a third transitional bridge and a deferred-grant mechanism,
+plus a corrected (drain-not-abort) description of the lock's actual behavior and a full write-path
+inventory (§8.14, issue 1); every `REVOKE` now names `anon` explicitly, since Supabase's default
+per-schema privileges grant `anon` its own separate `EXECUTE` that revoking from `PUBLIC` alone
+never removes (§9.9, issue 2); Script Versions deletion is now disabled for **every** video in v1
+via a withheld `EXECUTE` grant, not merely refused for videos already showing vocabulary/bookmark
+activity, which left the same race open for every other video (§6.9/§8.16, issue 3); the
+navigation-flush trigger moves out of the practice page into a persistent root-layout observer, an
+already-in-flight periodic flush is now tracked rather than missed, and Dictation/Shadowing
+responses now actually carry the `coverage` field their cache patches read (§11.6/§9.3, issue 4);
+and the Listening flush SQL is corrected to write its session-scoped counters to `study_sessions`
+(not the nonexistent `listening_progress` columns a prior draft used) with an added
+transcript-belongs-to-video relationship check (§9.6, issue 5). §2/§3 remain unchanged from
+Revision 1.
 
 ## Table of contents
 
@@ -120,7 +126,7 @@ specifically for this pass.
 | R10 | Cache matrix only fired on round completion | Every practice mutation invalidates round/library/dashboard at session-boundary events (not every 15s flush, to avoid excessive refetching) | §11.2 | Scenario #37 |
 | R11 | Metric-labeling/scope conflicts (Dictation "accuracy," §6.8 vs. Phase 5 dedup contradiction, in-progress/completed treated as exclusive) | "Sentence accuracy" (binary, per-sentence) throughout; one unambiguous population/scope per stat; in-progress and completed are no longer mutually exclusive | §6.6, §6.8 | Scenario #39 (video with both a completed and an active round) |
 | R12 | Migration/phase order had a real dependency bug (a completion function referenced `shadowing_attempts` before its migration) | All new schema created in one early phase before any cross-table function is written | §12 | Phase dependency graph re-checked against every function's table references |
-| R13 | Acceptance criteria needed more scenarios | 24 scenarios from the first review round (#21–44), Script Versions scenarios (#45–48), the third-pass scenarios (#49–59, R21–R28), and this pass's scenarios (#57–65, replacing/extending #57–59 and adding #60–65 — issue groups 1–5 below) | §13 | — |
+| R13 | Acceptance criteria needed more scenarios | 24 scenarios from the first review round (#21–44), Script Versions scenarios (#45–48), the fourth-pass scenarios (#49–56, R21–R28), the fifth-pass scenarios (#57–65), and this (sixth) pass's scenarios (#66–78, replacing #57/#59/#47's framing where deletion's release gate changed — R29–R33 below) | §13 | — |
 | R14 | Exact-interval preservation: gap-compacted storage plus one exact counter can't tell what's newly covered on a later flush | Dropped the compaction/exact-counter split; all stored interval sets merge on true overlap only, never on a tolerance window | §6.3, §6.3b | Re-derived worked example in §6.3 |
 | R15 | Additive counters (`listening_observed_sec` etc.) had no retry-safe batch identity | New `activity_flush_log` dedup table (`(study_session_id, flush_batch_id)` primary key) gates every additive update | §6.3b, §8.3 | Scenario #26 |
 | R16 | Per-session interval union doesn't dedupe overlapping wall-clock time across *different* sessions | Account-level "practice time" unions `activity_intervals` across all of a user's sessions at read time | §6.3b, §6.8 | Scenario #27 |
@@ -136,6 +142,11 @@ specifically for this pass.
 | R26 | Idempotent-retry SQL used `ON CONFLICT ... DO UPDATE SET updated_at = now()`, but `attempt_logs` (confirmed against `001_initial.sql:105-114`) has no `updated_at` column; `roundCompleted` conflated "completed by this request" with "currently completed" | Explicit lock-then-lookup-then-insert flow (no self-touch UPDATE); response splits into `roundCompletedByThisRequest` (fixed at response time) and `roundStatus` (current, may legitimately differ on a later retry) | §6.5, §8.6, §8.12, §9.3, §9.8 | Scenario #24 |
 | R27 | Listening/activity flush batching was described as a dedup-log-gated update but not confirmed atomic (dedup insert + interval merge + counter updates as one transaction), and had no defense against a reused batch id with different content | Single `fn_flush_study_activity` function per §6.3b, one transaction, `payload_fingerprint` column added to `activity_flush_log` for mismatch rejection | §6.3b, §8.10, §9.6 | Scenario #53 |
 | R28 | Authorization stopped at row ownership: this app's existing client-side Supabase client can call PostgREST directly, and the existing `users_self_update`/`sessions_owner`/`attempts_owner` policies (`for all`/no `with check`) already permit a client to bypass server-side validation entirely — the new tables would inherit the same gap, including a self-`is_admin`-grant path; the Azure-recovery `persisted:false` path had no bound on what a "retry the persistence step" call could accept; revision-deletion's reference check silently depended on `attempt_logs.transcript_id`, which legacy rows are never backfilled with | New §9.9 documents SECURITY DEFINER execution identity + explicit `auth.uid()` checks in every function body; owner-`for all` RLS on `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` narrowed to owner-SELECT-only, writes RPC-only; `users` gets a `BEFORE UPDATE` trigger blocking client-driven `is_admin` changes; Azure recovery uses a server-signed, expiring token, never client-supplied scores; deletion's retention check now reads `learning_sessions.transcript_id` directly for every round status, not only via attempts | §8.6, §8.7, §8.8, §8.10, §8.11, §9.4, §9.9, §6.9 | Scenarios #54, #55, #56, #47 (corrected — a prior version of this row cited #9–#12, which are unrelated scenarios in this document's own numbering; those numbers belonged to the review's own request list, not this table) |
+| R29 | The cutover fence covered only the two round-lifecycle bridges — `dictation/check`'s service-role `attempt_logs` insert, and direct PostgREST access to `learning_sessions` before Part C ran, were both left able to write during the pause/backfill window; the lock's own behavior was described backwards (an already-`FOR SHARE`-holding writer described as interrupted mid-write, rather than draining normally) | Third bridge `fn_legacy_record_dictation_attempt`; Part C (RLS drop) moved to run immediately after Phase 2 is confirmed live, decoupled from the pause/backfill; lock semantics corrected (drain, not abort) with a proof that the backfill's timestamp bound is sufficient; a full write-path inventory table; the five real functions' `EXECUTE` grant deferred to the Phase 3 runbook itself, not issued at creation | §8.13, §8.14, §12 Phase 2/3, §14.2 | Scenarios #70–#73 |
+| R30 | Every `REVOKE EXECUTE` in this plan named only `public`/`authenticated` — Supabase's default per-schema privileges separately grant `anon` its own `EXECUTE` on every new function, which a `PUBLIC`-only revoke does not remove, leaving every function reachable by an unauthenticated caller | `anon` added explicitly to every `REVOKE` in §8.3/§8.13/§9.9; the default-privilege behavior stated as a verified project fact, not assumed | §8.3, §8.13, §9.9 | Scenario #69 |
+| R31 | Deletion's release gate refused only videos with *existing* vocabulary/bookmark rows at check time, leaving open: check finds none → a reference is created concurrently → deletion proceeds anyway | v1 rule changed to unconditional: `fn_delete_transcript_revision` receives no `EXECUTE` grant to any application role at all; no route/UI delete control ships until a future migration adds the grant | §6.9, §8.16, §9.9, §10.7, §12 Phase 9 | Scenario #74 |
+| R32 | The navigation-flush trigger (`usePathname`) still lived inside the practice page's own component tree, so it could unmount before observing the destination route; an already-in-flight periodic flush at the moment of navigation was invisible to the "unsent buffer" check; the Shadowing attempt response the cache matrix promised to patch coverage from didn't contain a coverage field | Persistent root-layout `NavigationFlushObserver` + module-level coordinator split; in-flight requests tracked by `flushBatchId` and attached to rather than re-sent; `coverage` added to both attempt-recording functions' responses | §11.6, §9.3, §8.12, §12 Phase 5 | Scenarios #75–78 |
+| R33 | The Listening/activity flush SQL wrote `listening_observed_sec`/`listening_newly_covered_sec` onto `listening_progress`, a table whose actual DDL has no such columns; a Listening flush's `transcriptId` was accepted on bare FK existence, not confirmed to belong to the claimed video | Counters moved to `study_sessions` (their actual owning table, §5.3/§8.5), updated in the same transaction under the already-held session lock; explicit `transcripts.youtube_video_id = :videoId AND status='ready'` check added before the upsert | §9.6, §9.7, §8.13 | Scenarios #66–68 |
 
 ---
 
@@ -409,7 +420,7 @@ justified where they first apply):
 | `EVAL_PENDING_TIMEOUT_SEC` | 120 | A `shadowing_attempts` row still `azure_eval_status='pending'` past this age is lazily surfaced/rewritten as `failed` (`expired`) on next read — no cron needed at this app's scale (§9.5) |
 | `REVISION_GRACE_PERIOD_DAYS` | 30 | A superseded, otherwise-unreferenced transcript revision becomes a Script Versions cleanup candidate only after this long — never based on age alone or "keep latest N" (§6.9). Anchored to `superseded_at`, not to whichever moment it most recently became unreferenced (§6.9) |
 | `AZURE_RECOVERY_TOKEN_TTL_SEC` | 600 | Expiry bound on the server-signed Azure-result recovery token (§9.4/§9.9) — a persistence retry older than this must re-request evaluation rather than replay a stale signed payload |
-| `CUTOVER_DRAIN_WINDOW_SEC` | 30 | How long the legacy completion-write path waits, after `app_write_gate` is set to paused, before the provenance backfill runs — generous versus this app's observed request latency, bounding (not eliminating) the in-flight-request window (§8.14/§9.9) |
+| `CUTOVER_DRAIN_WINDOW_SEC` | 30 | **Not the correctness mechanism** — the `app_write_gate` row-lock fence (§8.14) is what actually drains in-flight legacy writes before the backfill boundary. This constant is only the operational alarm threshold used at the Phase 3 code deploy's "confirm 100% live" step (§8.14 runbook step 6) — how long to wait for the deploy platform to report every old instance replaced before treating a slow rollout as worth investigating |
 
 Assumptions carried forward from the audit rather than re-litigated:
 - **Video identity stays `youtube_video_id` (text)**, not a switch to `videos.id` (uuid) as the
@@ -1334,9 +1345,18 @@ schema-free, UI/translation/audio/SRS-behavior-free change (purely a lock acquir
 otherwise-unchanged insert), but still an integration point into the vocabulary feature this plan
 does not touch, so it is out of scope here and not assumed to exist.
 
-**Given this, deletion for any video with vocabulary/bookmark activity remains disabled — not as a
-"coarse but acceptable" default, but because no safe alternative exists within scope.** This is the
-release gate's binding condition (below), not a footnote.
+**Given this, the v1 rule is stronger than "refuse deletion for videos with existing
+vocabulary/bookmark rows" — it is physical deletion disabled for every video, unconditionally,
+until reference creation and deletion have a proven coordination mechanism.** A per-video,
+existence-based refusal does not close the race it looks like it closes: (1) deletion's existence
+check finds zero vocabulary/bookmark rows for the video; (2) the user creates the *first* such
+reference for that video, concurrently; (3) deletion, having already passed its check, proceeds
+and removes the revision that reference now points at. Gating only on *existing* rows leaves this
+open for every video that currently has none — which, at any given moment, is most of them — so
+"refuse when rows already exist" is not a mitigation of the race, it only narrows which videos are
+exposed to it. Removing that conditionality is the fix: deletion is disabled for all videos in v1,
+full stop, not only the ones already showing vocabulary/bookmark activity. See "First-release
+scope," below, for the concrete enforcement mechanism.
 
 A revision is a **cleanup candidate** only if none of the above apply **and**
 `now() − superseded_at >= REVISION_GRACE_PERIOD_DAYS` (30; a revision never promoted to current,
@@ -1402,8 +1422,9 @@ function's row-level `FOR UPDATE` (single-row, taken second, only on a row alrea
 never both held by the same function pointed at two different targets, so there is no ordering rule
 beyond "lock the specific row before deciding its fate," which both functions now do.
 
-**Deletion itself.** `fn_delete_transcript_revision(transcript_id)` (`SECURITY DEFINER`, §9.9 — the
-actor is `auth.uid()`, checked against `is_admin` inside, never a caller-supplied parameter):
+**Deletion itself, fully specified for when it is eventually enabled — not reachable by anyone in
+v1 (below).** `fn_delete_transcript_revision(transcript_id)` (`SECURITY DEFINER`, §9.9 — the actor
+is `auth.uid()`, checked against `is_admin` inside, never a caller-supplied parameter):
 `SELECT ... FOR UPDATE` the target `transcripts` row — this row-level lock, not a broader isolation
 level, is what actually coordinates with publication above — **re-check every direct protection
 condition inside that same locked transaction** (never trusting the dialog's earlier snapshot: is
@@ -1413,8 +1434,10 @@ from `transcripts`) and delete the `transcripts` row itself. If a direct referen
 between the dialog's last read and the delete request, the fresh re-check inside the lock catches
 it and the function raises `409 revision_now_referenced`, deleting nothing. **This guarantee is
 scoped to the direct references above — it does not, and (per the correction earlier) cannot,
-extend to the indirect vocabulary/bookmark check**, which is why that check alone keeps deletion
-disabled rather than being treated as covered by this same mechanism.
+extend to the indirect vocabulary/bookmark check.** The function's internal logic is unchanged by
+the v1-wide disablement below (it is still worth having fully specified, and re-checking direct
+references under lock is correct regardless); what changes is that nothing in v1 can reach it at
+all, per any video's vocabulary/bookmark state.
 
 **Authorization.** No admin mechanism exists in the audited schema — this plan's minimum addition
 is `users.is_admin boolean not null default false` (self-grant blocked by §9.9's trigger). Deletion
@@ -1428,21 +1451,56 @@ never touches `transcripts`, and — a deliberate, easily-revisited product defa
 delete the caller's own rounds/attempts either, so re-adding the same video later transparently
 surfaces prior history again.
 
-**First-release scope, kept independently releasable, and deletion's specific, default-disabled
-release gate.** Listing, preview, size estimates, and duplicate prevention have no concurrency
-hazard beyond an ordinary read and ship as soon as Phase 0 + Phase 1 are live (§12 — they need
-Phase 1's reference tables for accurate retention *reasons* in the listing, even though listing
-itself doesn't destroy anything). **Deletion specifically ships behind its own flag, default
-disabled, separate from the rest of Phase 9 and from the core learning-management release —
-enabling it is a distinct, later decision, not a byproduct of shipping the feature's other parts.**
-It may be enabled only once: (a) Phase 1's reference tables and `is_admin`/trigger exist; (b) the
-publish-vs-delete row-lock coordination test (acceptance scenario #58) and the direct-
-reference-vs-delete race test (acceptance scenario #47, both real-Postgres tier) have passed; and
-(c) for videos with vocabulary/bookmark activity, deletion stays refused — this is not a temporary
-limitation with a planned follow-up in this document, it is the standing behavior until a future,
-separately-scoped change coordinates vocabulary/bookmark writes (the minimal integrity change is
-named above, not designed here). Automatic scheduled cleanup (a cron sweeping cleanup candidates)
-is a separate, later, initially-**disabled** phase regardless of when manual deletion ships.
+**First-release scope, kept independently releasable, and deletion's v1 rule: disabled for every
+video, enforced at the write boundary, not a per-video flag.** Listing, preview, size estimates,
+retention-reason labeling, and duplicate prevention have no concurrency hazard beyond an ordinary
+read and ship as soon as Phase 0 + Phase 1 are live (§12 — they need Phase 1's reference tables
+for accurate retention *reasons* in the listing, even though listing itself doesn't destroy
+anything). These continue to distinguish, in both the API and the UI, "potential cleanup candidate
+under retention rules" (§6.9's classification above, still computed and shown) from "deletion is
+currently enabled and safe" (never true in v1) — a candidate is never labeled as immediately
+deletable while deletion itself is disabled.
+
+**The v1 rule:** *physical transcript-revision deletion remains disabled for all videos until
+reference creation and deletion have a proven coordination mechanism* — not "disabled for videos
+with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above).
+
+**Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
+hidden button is not sufficient if a directly callable RPC can still delete):**
+`fn_delete_transcript_revision` **is created by migration `035` fully specified, but with no
+`EXECUTE` grant issued to any application role at all** — `revoke execute on function
+fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
+statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
+which *does* receive that grant). This is enforced at the actual write boundary, not a Next.js
+route: even a signed-in `is_admin` user's own browser client calling
+`.rpc('fn_delete_transcript_revision', ...)` directly gets an ordinary PostgREST
+permission-denied error, identical to what `anon` or a non-admin user would get — there is no
+reachable path to the function at all, application code notwithstanding. `DELETE
+/api/transcripts/versions/[transcriptId]` (§9.1) is **not implemented in v1** — no route, no
+handler, no button in the Script Versions dialog (§10.7) — rather than being implemented and left
+pointing at an unreachable RPC; there is nothing partially built to accidentally re-enable. The
+in-function `is_admin` check (above) and the row-lock re-verification remain fully specified for
+when enablement happens, as defense-in-depth once the grant exists, but the withheld grant is the
+actual v1 gate, not those checks.
+
+**Future enablement, briefly, without designing that work here:** deletion may be enabled only
+once (a) vocabulary/bookmark reference creation and deletion participate in a compatible
+coordination mechanism — the minimal integrity change named above (an advisory-lock-gated
+insert wrapper) is one candidate, not designed further in this document; (b) that coordination
+also covers direct-reference creation (rounds/attempts/listening-progress), which this plan's
+row-lock protocol above already provides; (c) publication/re-promotion remains safe against
+deletion under real concurrency (already true, per the publish-vs-delete fix above); (d)
+concurrent reference-creation-vs-deletion passes real-PostgreSQL tests (acceptance scenarios #58
+and #47, described in §13, plus #59); and (e) authorization and **every** direct RPC entry point enforce the same
+release gate — i.e., the `EXECUTE` grant to `authenticated` is added in one deliberate, later
+migration, at which point the route/UI/button are implemented for the first time, together, not
+ahead of the grant. Automatic scheduled cleanup (a cron sweeping cleanup candidates) stays a
+separate, later, initially-**disabled** phase regardless of when manual deletion ships — enabling
+manual admin deletion is not itself a trigger for enabling automatic cleanup.
+
+**Personal library removal is unaffected by any of this** (§10.7/below) — it removes only the
+caller's own `user_videos` row, never a shared `transcripts` row, so it remains available exactly
+as designed regardless of deletion's v1 status.
 
 ---
 
@@ -1558,9 +1616,9 @@ was originally scheduled before that table existed).
 | 030 | `030_practice_round_active_uniqueness.sql` | 1 | **Moved from the old "034"/"Phase 7" (R21)** — audit-logged cleanup of duplicate active rounds + the one-active-round-per-video partial unique index, now run before any function assumes round uniqueness |
 | 031 | `031_fn_record_dictation_attempt.sql` | 2 | Locking, explicit lookup-then-insert Dictation-attempt-plus-completion function (corrected flow, R26) |
 | 032 | `032_fn_record_shadowing_attempt.sql` | 2 | Same, for Shadowing |
-| 033 | `033_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round` gate-aware bridges (§8.13, dropped in migration 034) |
+| 033 | `033_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`031`/`032`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 034) |
 | 034 | `034_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply |
-| 035 | `035_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — direct-reference-safe, re-checked-at-delete-time revision deletion; indirect vocabulary/bookmark references have no available concurrency-safety mechanism and stay refused outright (§6.9) |
+| 035 | `035_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3) |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -1657,8 +1715,11 @@ $$ language plpgsql
    set search_path = public, pg_temp;
 
 -- Backend-only (§9.9): this is a shared-content operation with no per-user actor to check, so it
--- must never be reachable directly from a browser, even an authenticated one.
-revoke execute on function fn_publish_transcript_revision from public, authenticated;
+-- must never be reachable directly from a browser, even an authenticated one. anon is named
+-- explicitly, not just public -- Supabase's default per-schema privilege grants give anon its
+-- own separate EXECUTE on every new function, which a PUBLIC-only revoke would not remove
+-- (verified project default, §9.9, issue group 2).
+revoke execute on function fn_publish_transcript_revision from public, anon, authenticated;
 grant  execute on function fn_publish_transcript_revision to service_role;
 ```
 
@@ -2115,7 +2176,15 @@ the caller's identity from `auth.uid()` only — never from a request parameter.
    serializes every writer to this round).
 5. If a fresh insert happened, recompute coverage and conditionally complete
    (`WHERE status='active' AND completed_at IS NULL`, §6.5).
-6. Return the attempt row, `wasInserted`, `roundCompletedByThisRequest`, and `roundStatus` (§6.5).
+6. Return the attempt row, `wasInserted`, `roundCompletedByThisRequest`, `roundStatus`, and
+   `coverage` (§6.4's `{dictation, shadowing, overall}` object — already computed as part of step
+   5's completion check, so returning it is free; this is what §11.2/§11.6's direct cache patch of
+   `["round", userId, videoId]` actually reads, for both Dictation and Shadowing, §9.3).
+
+Both functions ship with `EXECUTE` revoked from `public`/`anon`/`authenticated` and **no grant
+issued** in this migration — deferred to the Phase 3 cutover runbook's own step (§8.14, issue
+group 1), since each replaces a live legacy writer and must not become callable before that writer
+is actually retired.
 
 ### 8.13 `033_fn_session_activity_and_evaluation_functions.sql`
 
@@ -2147,9 +2216,15 @@ function:
   reuse the open session (`last_activity_at` within 30 minutes) or force-close it (rule 4, explicit
   new round) and open a fresh one.
 - **`fn_flush_study_activity`** — implements §6.3b/§9.6's atomic flush: lock the `study_sessions`
-  row, check `activity_flush_log` for `(study_session_id, flush_batch_id)` with fingerprint
-  comparison, and — only if genuinely new — insert the dedup row and apply the interval merge/
-  counter updates, all in one transaction (R27).
+  row (checking both `user_id = auth.uid()` and `youtube_video_id = :videoId`, not ownership
+  alone, §9.7), validate a non-null Listening `transcriptId` actually belongs to that same video
+  and is `status='ready'` (relationship validation, not just FK existence — §9.6/§9.7), check
+  `activity_flush_log` for `(study_session_id, flush_batch_id)` with fingerprint comparison, and —
+  only if genuinely new — insert the dedup row, apply the `listening_progress` interval merge, and
+  update `study_sessions.listening_observed_sec`/`.listening_newly_covered_sec` (Listening kind) or
+  `study_sessions.activity_intervals` (activity kind), all in one transaction (R27). The two
+  session-scoped Listening counters are written to `study_sessions`, matching §8.5's actual DDL —
+  never to `listening_progress`, which has no such columns.
 - **`fn_persist_azure_result`** / **`fn_persist_word_match_result`** — the by-id-and-seq PATCH
   logic from §9.4/§7.3, moved into functions rather than left as a bare service-role table write,
   so the seq-staleness check lives in one place, not duplicated across call sites. Backend-only —
@@ -2157,58 +2232,179 @@ function:
   `/api/practice/evaluate` and its recovery endpoint, after those routes have already verified the
   caller's ownership using the caller's own client.
 
-**Two additional, explicitly temporary functions ship in this same migration, for the transition
-described in §8.14/§12 (issue group 2):** `fn_legacy_save_progress` and `fn_legacy_restart_round`
-mirror today's `save-progress`/`session/restart` route logic exactly (same permissiveness, same
-trust level — a deliberate non-improvement, since their only job is bridging to the cutover, not
-fixing anything early) with one addition: `SELECT completion_writes_paused FROM app_write_gate FOR
-SHARE` as their first statement, raising if paused. These two are dropped once Phase 3's real cutover
-lands (§8.14) — they exist only so the *existing* `save-progress`/`session/restart` routes can be
-made gate-aware in Phase 2, before `learning_sessions`' RLS is touched, without which the fencing
-mechanism in §8.14 would have nothing to fence.
+**Three additional, explicitly temporary functions ship in this same migration, for the transition
+described in §8.14/§12 (issue group 1):** `fn_legacy_save_progress`, `fn_legacy_restart_round`, and
+**`fn_legacy_record_dictation_attempt`** (added this pass — closing a real gap, not a hypothetical
+one, below) each mirror today's corresponding route logic exactly (same permissiveness, same trust
+level — a deliberate non-improvement, since their only job is bridging to the cutover, not fixing
+anything early) with one addition: `SELECT completion_writes_paused FROM app_write_gate FOR SHARE`
+as their first statement, raising if paused. All three are dropped once Phase 3's real cutover
+lands (§8.14) — they exist only so the *existing* `save-progress`/`session/restart`/`dictation/check`
+routes can be made gate-aware in Phase 2, before `learning_sessions`' RLS is touched, without which
+the fencing mechanism in §8.14 would have nothing to fence.
+
+**Why `dictation/check` needed a third bridge, not just the two round-lifecycle ones:** verified
+directly against `src/app/api/dictation/check/route.ts` — after checking ownership via the
+caller's own RLS-respecting client, it inserts into `attempt_logs` via a **separate service-role
+client**, entirely outside any of the two round-lifecycle bridges' fence checks. Being
+service-role, this insert was never blocked by Phase 1's `attempts_owner` RLS tightening (§8.6) —
+which is why an earlier pass treated it as "unaffected, no change needed." But "unaffected by RLS"
+and "unaffected by the fence" are different claims: this path can still insert an `attempt_logs`
+row with the default `segment_identity_provenance='verified'` for as long as it remains
+un-fenced, including during the pause/backfill window, mislabeling a legacy-path write as verified
+if its `created_at` happens to land after `cutover_at` (an in-flight request that started before
+the pause can still commit afterward). `fn_legacy_record_dictation_attempt` closes exactly this:
+`dictation/check` calls it (still via the service-role client, matching today's actual behavior
+exactly) instead of a bare `.insert()`; ownership is still verified beforehand, in the route,
+using the caller's own client (unchanged) — the function itself receives `sessionId` as an
+already-verified, trusted parameter, the same pattern §9.9 already establishes for every other
+service-role-mediated function, and never derives identity from `auth.uid()` (which would be
+`NULL` under this connection).
+
+**Execution identity and grants for all three bridges, explicit (their temporary nature is not an
+exemption from authorization — issue group 2):**
+```sql
+-- fn_legacy_save_progress / fn_legacy_restart_round: called via the route's user-authenticated
+-- client (createClient()), matching today's actual save-progress/restart behavior exactly --
+-- auth.uid() genuinely resolves to the caller inside the function body.
+revoke execute on function fn_legacy_save_progress from public, anon, authenticated;
+grant  execute on function fn_legacy_save_progress to authenticated;
+revoke execute on function fn_legacy_restart_round from public, anon, authenticated;
+grant  execute on function fn_legacy_restart_round to authenticated;
+
+-- fn_legacy_record_dictation_attempt: called via the route's SERVICE-ROLE client, matching
+-- today's actual dictation/check behavior exactly -- ownership is verified in the route using the
+-- caller's own client BEFORE this call (unchanged); this function receives session_id as a
+-- trusted, already-verified parameter, never auth.uid() (NULL under service-role, §9.9).
+revoke execute on function fn_legacy_record_dictation_attempt from public, anon, authenticated;
+grant  execute on function fn_legacy_record_dictation_attempt to service_role;
+```
+Every `CREATE FUNCTION` in this migration is followed immediately by its own `REVOKE`/`GRANT`
+block, in the same migration file and transaction (matching §8.3's already-established pattern) —
+never created first and permissioned in a later step, which would leave a privileged function
+briefly exposed to whatever default grants Postgres/Supabase apply automatically at creation time
+(the same default-privilege gap issue group 2 identifies for `anon`, below).
+
+**The six real, authoritative functions above (`fn_create_or_get_active_round`,
+`fn_update_resume_position`, `fn_restart_round`, and — from `031`/`032` (§8.12) —
+`fn_record_dictation_attempt`/`fn_record_shadowing_attempt`) deliberately receive NO grant to
+`authenticated` in this migration.** Each is created with
+`revoke execute on function <name> from public, anon, authenticated;` and no accompanying `grant`
+statement at all — so immediately after Phase 2 deploys, these functions exist, are fully
+specified, and are callable by nobody except a superuser/table-owner connection. This is the
+concrete mechanism behind requirement 5 of issue group 1 ("new authoritative writers are not
+accidentally callable early in a way that bypasses the transition"): if the grant were issued here,
+a technically capable user could call `fn_create_or_get_active_round` directly via PostgREST
+during the Phase 2→3 window, creating a `provenance='current'` round in parallel with the still-live
+legacy path — a second, uncoordinated round-creation mechanism operating at the same time as the
+first. The grant is issued for the first time as its own explicit step inside the Phase 3 cutover
+runbook (§8.14, step 5), atomically alongside the application code deploy that starts actually
+calling these functions — never earlier. (`fn_get_or_create_study_session`/`fn_flush_study_activity`
+are **not** subject to this deferral — they're genuinely new capabilities with no legacy writer or
+provenance concept to protect against, §9.9, so their `authenticated` grant is issued normally, in
+this same migration.)
 
 ### 8.14 `034_provenance_backfill_and_completion_cutover.sql`
 
 **This migration now also tightens `learning_sessions`' RLS (§9.9) — moved here from being absent
 entirely, and deliberately not placed in Phase 1, because the *existing* `save-progress`/
 `session/restart` routes depend on the policies being dropped here until the moment Phase 3's real
-code replaces them (issue group 2).** Two parts, run in this order within the runbook below, not
-as an independent "apply the migration" step:
+code replaces them (issue group 1).** Three parts, run in a specific order within the runbook
+below — **not** the order the file's SQL happens to be written in, and not as an independent
+"apply the migration" step. (§8.1's note that the runbook, not file position, governs execution
+order applies here exactly as it already does for migration `030`.)
+
+**Every legacy-era authoritative write path, inventoried (required before choosing a mechanism —
+issue group 1's core ask):**
+
+| Path | Execution identity | Can write during prep / pause / backfill / post-activation | Mechanism that blocks or classifies it |
+|---|---|---|---|
+| `save-progress` route (round create + resume-position) | User's own RLS client → Phase 2: `fn_legacy_save_progress` | Prep: yes, ungated, until Phase 2 deploys. Pause: blocked. Backfill: blocked. Post-activation: replaced by `fn_create_or_get_active_round`/`fn_update_resume_position` | `FOR SHARE` gate check as the function's first statement (§8.13) |
+| `session/restart` route | User's own RLS client → Phase 2: `fn_legacy_restart_round` | Same as above | Same mechanism, same function family |
+| `dictation/check` route's `attempt_logs` insert | Service-role client → Phase 2: `fn_legacy_record_dictation_attempt` (**added this pass** — see §8.13) | Prep: yes, ungated, until Phase 2 deploys — previously left unfenced entirely, since it's unaffected by RLS. Pause: blocked. Backfill: blocked. Post-activation: replaced by `fn_record_dictation_attempt` | Same `FOR SHARE` gate check, now inside this third bridge |
+| Direct PostgREST write to `learning_sessions` | Authenticated client, RLS | Possible until Part C (below) drops `sessions_owner`/`sessions_anon_insert` — closed as soon as Phase 2 is confirmed live, **not** deferred until the pause window | RLS policy removal (Part C), decoupled from the backfill's timing so this gap doesn't linger any longer than it has to |
+| Direct PostgREST write to `attempt_logs` | Authenticated client, RLS | Already blocked from Phase 1 (`024` drops `attempts_owner`, §8.6) | RLS removal, already in place before this migration runs at all |
+| New real functions (`fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_record_dictation_attempt`, `fn_record_shadowing_attempt`) | `authenticated`, once granted | Created in Phase 2 (`031`–`033`) with **no** `authenticated` grant at all (§8.13); still ungranted through prep/pause/backfill; grant issued for the first time at runbook step 5, atomically with the Phase 3 code deploy | Deferred `GRANT EXECUTE`, not a runtime check (issue group 1, requirement 5) |
+| Transitional bridges (`fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt`) | `authenticated`/`service_role` per §8.13 | Live and gate-checked through prep/pause/backfill; `DROP FUNCTION`-ed at runbook step 8 | Gate check while they exist; non-existence (not just a revoked grant) afterward — a revoke alone would leave them re-grantable by mistake, a `DROP` cannot be (requirement 6) |
+
+**Part C — tighten `learning_sessions`' RLS, run FIRST, decoupled from the backfill.** This is a
+correction from a prior draft, which bundled this with the backfill at the pause boundary: Part C
+does not need to wait for the pause or the backfill at all, because by the time Phase 2's code is
+confirmed live, nothing in the application depends on raw table access to `learning_sessions`
+anymore — every write already goes through `fn_legacy_*` (`SECURITY DEFINER`, bypasses RLS as
+table owner regardless of what RLS policies exist). Running this as early as possible closes the
+direct-PostgREST-bypass row in the inventory above several steps sooner than leaving it bundled
+with Part A/B would:
+```sql
+drop policy "sessions_owner" on learning_sessions;
+drop policy "sessions_anon_insert" on learning_sessions;
+create policy "learning_sessions_owner_select" on learning_sessions for select
+  using (auth.uid() = user_id);
+```
+Safe the moment Phase 2 is confirmed 100% live (runbook step 1) — any earlier and a stray
+pre-Phase-2 instance still doing raw `.update()`/`.insert()` calls would break.
 
 **Part A — the fence itself**, a single transaction that makes the pause a genuine lock, not a
 polled flag (correcting the prior revision, where `CUTOVER_DRAIN_WINDOW_SEC` was the only thing
 standing between "gate closed" and "backfill runs"):
 ```sql
 begin;
-select * from app_write_gate for update;          -- exclusive lock: blocks every concurrent
-                                                    -- `for share` reader (below) until commit.
+select * from app_write_gate for update;          -- exclusive lock: waits for every existing
+                                                    -- `for share` holder (below) to commit/rollback
+                                                    -- and release before this acquires.
 update app_write_gate set completion_writes_paused = true, paused_at = now();
-commit;                                            -- releases the lock; every writer that was
-                                                    -- blocked on `for share` now unblocks and
-                                                    -- correctly observes paused = true.
+commit;                                            -- releases the lock; only NOW do any queued
+                                                    -- `for share` requests proceed, correctly
+                                                    -- observing paused = true.
 -- :cutover_at is captured as this transaction's app_write_gate.paused_at for use below.
 ```
-`fn_legacy_save_progress`/`fn_legacy_restart_round` (§8.13) each begin with `select
-completion_writes_paused from app_write_gate for share`. A call already past that statement and
-mid-write when this transaction starts blocks until `commit`, then re-reads `paused = true` and
-aborts — there is no window where a write started concurrently with the pause can land uncounted.
-A call that *fully committed* before this transaction acquired its lock is correctly attributed
-pre-cutover, since it happened-before by definition. **This lock, not a fixed wait, is the
-correctness mechanism** — `CUTOVER_DRAIN_WINDOW_SEC` (§4) is now only an *operational* timeout
-budget for the deploy-verification step below, never the guarantee that in-flight writes are
-accounted for.
+**The lock's actual behavior, corrected (a prior draft described this backwards):** `fn_legacy_*`
+(§8.13) each begin with `select completion_writes_paused from app_write_gate for share`. A call
+that has **already acquired** that shared lock and is mid-write when this transaction starts is
+**not** interrupted or "blocked mid-way" — Postgres does not revoke a held lock. It simply
+**finishes normally** (insert, any completion check, commit) — this transaction's `for update`
+request instead *waits* for that call to commit and release its `for share` lock before it can
+acquire its own exclusive lock. This is exactly what "an in-flight legacy writer finishes before
+the boundary is established" (issue group 1, requirement 3) means concretely: the already-admitted
+writer drains, it is not aborted. Only **after** every existing `for share` holder has released
+does this transaction acquire the lock, flip `completion_writes_paused`, and commit. A **new** call
+to `fn_legacy_*` that attempts `for share` while this transaction is already queued waiting for
+`for update` does not jump ahead of it — Postgres's row-lock queue is FIFO, so a request already
+waiting for a stronger (exclusive) lock is not overtaken by a later-arriving weaker (shared) one;
+the new call queues behind the pause transaction too, and by the time it is granted its own `for
+share` lock, the pause transaction has already committed, so it correctly reads `paused = true`
+and aborts. **There is no interleaving in which a legacy write that had not already committed
+before this transaction began can still land classified as pre-cutover** — it either finished
+before this transaction started waiting (drained, correctly pre-cutover) or it queues behind this
+transaction and sees the pause (correctly rejected).
+
+**Why the timestamp bound in Part B is provably sufficient, not merely assumed to be (the fence is
+what makes it so):** every drained writer's row-level timestamp (`started_at`/`created_at`) is
+assigned via `now()` **inside its own transaction**, strictly before that transaction commits,
+which — per the paragraph above — happens strictly before this fence transaction can acquire its
+`for update` lock, which happens strictly before `paused_at := now()` is read (immediately after
+acquiring the lock). So for every row a drained legacy writer could have produced:
+`row.created_at < drained_writer_commit_time <= fence_lock_acquired_time <= paused_at`. The bound
+`started_at <= :cutover_at` in Part B below is therefore not an independent assumption riding
+alongside the fence — it is a direct consequence of the ordering the fence itself guarantees.
+
+**This lock, not a fixed wait, is the correctness mechanism** — `CUTOVER_DRAIN_WINDOW_SEC` (§4) is
+only an *operational* alarm budget for the deploy-verification step later in the runbook, never
+the guarantee that in-flight writes are accounted for.
 
 **Part B — the bounded backfill**, run only after Part A commits:
 ```sql
 update learning_sessions set provenance = 'legacy_unverified'
 where provenance = 'current' and started_at <= :cutover_at;
--- Bounded by started_at AND by the fence above -- together, not the timestamp alone, they are
--- what makes this correct: the fence guarantees no learning_sessions row can be created or
--- meaningfully written by the legacy path after cutover_at; the timestamp bound is then a safe,
--- sufficient predicate for "everything the legacy path could have produced."
+-- Bounded by started_at AND by the fence above -- together, not the timestamp alone, per the
+-- proof above: the fence guarantees no learning_sessions row can be created or meaningfully
+-- written by the legacy path after cutover_at; the timestamp bound is then a safe, sufficient
+-- predicate for "everything the legacy path could have produced."
 
 update attempt_logs set segment_identity_provenance = 'legacy_unverified'
 where segment_identity_provenance = 'verified' and created_at <= :cutover_at;
+-- Covers fn_legacy_record_dictation_attempt's writes by the identical proof -- this bridge is
+-- fenced the same way as the other two (§8.13), so the same ordering argument applies to it.
 
 -- required_sentence_count / completed_at / round_number backfill (unchanged from Revision 2):
 update learning_sessions ls set required_sentence_count = sub.cnt
@@ -2225,15 +2421,6 @@ with numbered as (
 )
 update learning_sessions ls set round_number = numbered.rn
 from numbered where ls.id = numbered.id;
-
--- Part C, same migration, after the backfill: tighten learning_sessions' RLS. Safe now because
--- the gate is still closed -- fn_legacy_* already rejects writes; dropping the raw policies below
--- simply removes the now-redundant direct-table path too, per §9.9's verified starting point
--- (sessions_owner/sessions_anon_insert, 001_initial.sql:156-157).
-drop policy "sessions_owner" on learning_sessions;
-drop policy "sessions_anon_insert" on learning_sessions;
-create policy "learning_sessions_owner_select" on learning_sessions for select
-  using (auth.uid() = user_id);
 ```
 
 **The `app_write_gate` table itself** is created in migration `029` (§8.11), including its own RLS
@@ -2241,19 +2428,25 @@ protection — not repeated here.
 
 **Full runbook, with the fence as the correctness mechanism and the timeout only as a budget:**
 1. Confirm (deploy-platform status, not a guess) that every instance in rotation is running Phase
-   2's code — i.e. `save-progress`/`session/restart` already call the gate-aware
-   `fn_legacy_save_progress`/`fn_legacy_restart_round`, and `learning_sessions`' RLS is still the
-   *old*, permissive shape (Part C hasn't run yet).
-2. Run Part A (above) — the fence is now live; every legacy write attempt from this point on is
-   genuinely blocked, not merely discouraged.
-3. Run Part B (the bounded backfill) — correct because of the fence, not because of any elapsed
-   time.
-4. Run Part C — tighten `learning_sessions`' RLS. From this instant, even a stray old-code instance
-   that somehow bypassed the transitional functions (it can't, absent a bug in Phase 2's own
-   deploy, but this is defense-in-depth) has no raw table access left either.
-5. Deploy Phase 3's real application code — new routes calling `fn_create_or_get_active_round`,
-   `fn_update_resume_position`, `fn_restart_round`, and the attempt-recording functions directly;
-   the transitional `fn_legacy_*` functions are no longer called by anything.
+   2's code — i.e. `save-progress`/`session/restart`/`dictation/check` already call the three
+   gate-aware `fn_legacy_*` bridges, and `learning_sessions`' RLS is still the *old*, permissive
+   shape (Part C hasn't run yet).
+2. Run **Part C** — tighten `learning_sessions`' RLS. Safe immediately once step 1 is confirmed;
+   closes the direct-PostgREST-bypass row in the inventory above well before the pause window,
+   rather than leaving it open until the backfill.
+3. Run **Part A** (the fence) — every legacy write attempt from this point on is genuinely
+   blocked or correctly drained, not merely discouraged, per the corrected lock behavior above.
+4. Run **Part B** (the bounded backfill) — correct because of the fence (proved above), not
+   because of any elapsed time.
+5. Deploy Phase 3's real application code, **and, as the same atomic step, grant `EXECUTE` on
+   `fn_create_or_get_active_round`/`fn_update_resume_position`/`fn_restart_round`/
+   `fn_record_dictation_attempt`/`fn_record_shadowing_attempt` to `authenticated`** (§8.13 — the
+   grant deliberately withheld since Phase 2). This is the moment the new authoritative write
+   paths actually become reachable — not before, and not merely "whenever the route code happens
+   to deploy," since the route code alone means nothing if the underlying function was already
+   callable and could have been invoked directly beforehand (it wasn't — see the inventory above).
+   New routes call these functions directly; the transitional `fn_legacy_*` functions are no
+   longer called by anything.
 6. Confirm via the deploy platform that Phase 3 is **100% live** (no old instances remain able to
    receive new requests) — budgeted at up to `CUTOVER_DRAIN_WINDOW_SEC` (30s) as an operational
    alarm threshold, not a correctness wait; if verification takes longer, the gate simply stays
@@ -2262,34 +2455,58 @@ protection — not repeated here.
    point: Phase 3's code never consults the gate (it doesn't need to — it's correct by
    construction, not by fencing), so this step exists for legibility and to leave the gate ready
    for a future use, not because anything still depends on it being open.
-8. Drop `fn_legacy_save_progress`/`fn_legacy_restart_round` (cleanup — nothing calls them once
-   step 5 has shipped).
+8. `DROP FUNCTION fn_legacy_save_progress`, `fn_legacy_restart_round`,
+   `fn_legacy_record_dictation_attempt` — cleanup, and the mechanism behind requirement 6
+   ("transitional permissive RPCs cannot become usable again after cutover"): a `DROP`, not merely
+   a `REVOKE`, means there is no function left to accidentally re-grant later; a cached old client
+   bundle that still tries to call one gets an ordinary "function does not exist" error from
+   PostgREST, the same as calling any nonexistent RPC.
 
-**What users experience, honestly stated:** between steps 2 and 5, round creation, resume-position
-saves, and "Practice again" are **unavailable** (the gate rejects them with a clear
-`503 { error: "maintenance_pause", retryAfterSec }`, not a silent failure) — a short, real outage
-for those specific actions, not a cosmetic detail. This is the "short controlled pause" the task
-accepts as reasonable for this app's scale; it is bounded by how long steps 3–5 actually take (low
-single-digit minutes for a Vercel deploy at this app's size), not by a fixed number chosen in
-advance.
+**What users experience, honestly stated:** between steps 3 and 5, round creation, resume-position
+saves, "Practice again," and Dictation attempt recording are **unavailable** (the gate rejects
+them with a clear `503 { error: "maintenance_pause", retryAfterSec }`, not a silent failure) — a
+short, real outage for those specific actions, not a cosmetic detail. This is the "short
+controlled pause" the task accepts as reasonable for this app's scale; it is bounded by how long
+steps 4–5 actually take (low single-digit minutes for a Vercel deploy at this app's size), not by
+a fixed number chosen in advance.
 
-**Recovery, per boundary:**
-- Failure inside Part A's transaction: it never commits: the gate never closes; nothing to undo.
-- Failure between Part A and Part B/C: `UPDATE app_write_gate SET completion_writes_paused = false`
-  reopens immediately; the backfill and RLS tightening simply haven't run yet, safe to leave for a
-  retry.
-- Failure between Part C and step 5 (RLS already tightened, Phase 3 not yet deployed) — the
-  **riskiest window**, since the only write paths left are the now-gated `fn_legacy_*` functions:
-  recovery is either (a) proceed with deploying Phase 3 promptly (the intended path), or (b) if
-  Phase 3 must be delayed, explicitly **re-create** the dropped policies
-  (`create policy "sessions_owner" on learning_sessions for all using (auth.uid() = user_id);` and
-  the anon-insert policy) and reopen the gate — a genuine, documented, reversible rollback of Part
-  C specifically, restoring exactly today's behavior. This is different from Phase 0's transcript-
+**Recovery, per boundary — not reduced to a single "reopen the gate" case (issue group 1's
+explicit ask):**
+- **Failure before Part C (step 2) runs:** nothing has changed yet; simply retry step 2 once its
+  precondition (Phase 2 confirmed live) holds.
+- **Failure inside Part A's transaction (step 3):** it never commits; the gate never closes;
+  nothing to undo. `learning_sessions`' RLS is already tightened from step 2, but that alone
+  doesn't block `fn_legacy_*`, so the app keeps functioning through the bridges exactly as before.
+- **Failure between Part A and Part B (step 3 succeeded, step 4 not yet run):** the gate is closed
+  (writes correctly rejected) but no backfill has happened — `UPDATE app_write_gate SET
+  completion_writes_paused = false` reopens immediately; safe to leave for a retry, since Part B
+  hasn't touched any row yet.
+- **Failure between Part B and step 5 (backfill complete, Phase 3 not yet deployed)** — the
+  **riskiest window**, since round creation/resume/restart/Dictation-attempt writes are still
+  gated closed and the only code that could serve them (`fn_legacy_*`) is intentionally blocked:
+  recovery is either (a) proceed with deploying Phase 3 promptly (the intended path — the backfill
+  already committed correctly, nothing needs re-doing), or (b) if Phase 3 must be delayed,
+  `UPDATE app_write_gate SET completion_writes_paused = false` to restore service through the
+  (still-existing, still RLS-independent) `fn_legacy_*` bridges — this does **not** require
+  re-creating the dropped `learning_sessions` RLS policies, since Part C's tightening never broke
+  those bridges in the first place (they never depended on raw table RLS); reopening the gate
+  alone is sufficient here, unlike the more drastic bullet immediately below.
+- **If Phase 3 must be delayed long enough that even Part C's RLS tightening needs reverting**
+  (a materially different, more drastic case than the bullet above): explicitly **re-create** the
+  dropped policies (`create policy "sessions_owner" on learning_sessions for all using (auth.uid()
+  = user_id);` and the anon-insert policy) — a genuine, documented, reversible rollback of Part C
+  specifically, restoring exactly today's behavior. This is different from Phase 0's transcript-
   immutability change (§8.18): tightening `learning_sessions`' RLS is reversible up until Phase 3's
   new code has actually started relying on the tightened state for correctness (i.e., before any
   new-path round has been created under it).
-- Failure between step 5 and step 7 (Phase 3 deployed, gate still closed): harmless — Phase 3 code
-  doesn't need the gate open to function correctly; reopen once verification completes.
+- **Failure between step 5 and step 7 (Phase 3 deployed and its functions granted, gate still
+  closed):** harmless — Phase 3 code doesn't need the gate open to function correctly; reopen once
+  verification completes.
+- **Failure between step 7 and step 8 (gate reopened, `fn_legacy_*` not yet dropped):** harmless —
+  the functions are unreachable in practice (nothing calls them) but still gate-checked if
+  somehow invoked; drop them whenever convenient. **No boundary in this list is resolved by
+  "reopen the gate" alone** except the two explicitly marked so above — every other boundary has
+  its own, distinct recovery action.
 
 **The one-time anon-insert removal, noted explicitly:** `sessions_anon_insert`
 (`001_initial.sql:157`, permitting an insert with `user_id is null`) is dropped in Part C alongside
@@ -2346,10 +2563,23 @@ supplied parameter. `SELECT ... FOR UPDATE` the target row (ordinary `READ COMMI
 sufficient here — the row lock, not a stricter isolation level, is what coordinates with
 publication, §6.9), re-check every **direct** protection condition (references for every round
 status) inside that same locked transaction, cascade-delete on success, `409
-revision_now_referenced` on a detected direct-reference race. **Shipped disabled by default**
-(§6.9's release gate) until enabled; even once enabled, refuses deletion outright for any video
-with vocabulary/bookmark activity, since that check has no available concurrency-safety mechanism
-(§6.9 — not merely a caught exception to retry).
+revision_now_referenced` on a detected direct-reference race.
+
+**Shipped unreachable in v1, not merely "disabled by default" (§6.9's corrected release gate):**
+
+```sql
+revoke execute on function fn_delete_transcript_revision from public, anon, authenticated;
+-- No `grant ... to authenticated` statement at all -- contrast every other authenticated-user
+-- function in §9.9's matrix. The function exists and is fully specified (above), but no
+-- application role, including an is_admin user's own client, can call it via PostgREST. Enabling
+-- it later is exactly the act of adding that grant, in its own migration, once §6.9's future-
+-- enablement criteria are met -- never a flag checked inside a Next.js route, which would leave
+-- the RPC itself directly callable regardless of what the route decides.
+```
+
+This is unconditional — it does not distinguish videos with existing vocabulary/bookmark activity
+from videos without (§6.9's corrected v1 rule, closing the race a purely existence-based per-video
+refusal left open: a reference created *after* the check but before delete completes).
 
 ### 8.17 RLS summary for new tables
 
@@ -2461,7 +2691,7 @@ pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually
 | `POST /api/videos/[videoId]/mode` | **New** — explicit mode-switch ping, writes `user_videos.last_mode` | `user_videos` |
 | `GET /api/session/resume` | Extended response shape | `learning_sessions`, `user_videos` |
 | `POST /api/session/save-progress` | Its create/completion-trusting logic is fully retired post-cutover (§8.14/§12 Phase 3) — calls `fn_create_or_get_active_round` (first touch) and `fn_update_resume_position` (resume convenience only) instead; a client-supplied `status:'completed'` has no effect from that point on | `learning_sessions` (via the two functions, never directly) |
-| `POST /api/dictation/check` | Accepts `clientAttemptId`, `hintLevelUsed`, `studySessionId`, `transcriptId` — all **optional**, each with a safe server-side fallback for an old client that omits them (§14.3); calls `fn_record_dictation_attempt`; returns `wasInserted`/`roundCompletedByThisRequest`/`roundStatus` | `attempt_logs`, `learning_sessions` (via §8.12's function) |
+| `POST /api/dictation/check` | Accepts `clientAttemptId`, `hintLevelUsed`, `studySessionId`, `transcriptId` — all **optional**, each with a safe server-side fallback for an old client that omits them (§14.3); calls `fn_record_dictation_attempt`; returns `wasInserted`/`roundCompletedByThisRequest`/`roundStatus`/`coverage` (§9.3/§11.6 — the last field is what the cache-patch matrix reads) | `attempt_logs`, `learning_sessions` (via §8.12's function) |
 | `POST /api/practice/attempt` | **New** — records Shadowing practice credit via `fn_record_shadowing_attempt` | `shadowing_attempts`, `learning_sessions` |
 | `PATCH /api/practice/attempt/[attemptId]/word-match` | **New** — persists Word Match result, service-role write | `shadowing_attempts` |
 | `POST /api/practice/evaluate` | **Breaking request-contract change**, not additive (§14.3) — requires `attemptId`; a request without it (an old, pre-Phase-4 cached bundle) gets `409 stale_client_version`, never guessed/adapted; increments `azure_eval_request_seq`; PATCHes by id + seq | `shadowing_attempts` |
@@ -2478,7 +2708,7 @@ pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually
 | `GET /api/history/mistakes` | Unchanged | `attempt_logs` |
 | `GET /api/transcripts/[videoId]/versions` | **New** — Script Versions listing (§6.9/§10.5) | `transcripts` |
 | `GET /api/transcripts/[videoId]/versions/[transcriptId]/preview` | **New** — read-only segment preview | `transcript_segments` |
-| `DELETE /api/transcripts/versions/[transcriptId]` | **New**, admin-only — calls `fn_delete_transcript_revision` | `transcripts` |
+| `DELETE /api/transcripts/versions/[transcriptId]` | **Not implemented in v1** — the underlying RPC has no `EXECUTE` grant to any application role (§6.9/§8.16), so there is nothing for this route to call; added, together with the grant, only once deletion's future-enablement criteria are met (§6.9) | `transcripts` (future) |
 | `GET /api/transcript/[videoId]` | Extended — optional `?transcriptId=` to fetch a specific pinned revision, not only "the current one" — **ships in Phase 0**, not Phase 9 (R21) | `transcripts`, `transcript_segments` |
 
 ### 9.2 `GET /api/session/resume?videoId=` — extended response
@@ -2551,9 +2781,17 @@ Response:
 ```json
 {
   "attemptId": "uuid", "isPracticeValid": true, "wasInserted": true,
-  "roundCompletedByThisRequest": false, "roundStatus": "active"
+  "roundCompletedByThisRequest": false, "roundStatus": "active",
+  "coverage": { "dictation": 0.6, "shadowing": 0.4, "overall": 1.0 }
 }
 ```
+**`coverage` is included because §11.2's cache matrix directly patches `["round", userId,
+videoId]`'s coverage fields from this response** — a direct patch is only valid when the
+triggering response actually carries what the patch needs (§11.6), and §6.4's coverage figures are
+already computed inside `fn_record_shadowing_attempt`'s own completion check (step 4 of §6.5's
+flow) to decide whether to complete the round, so returning them costs no extra query.
+`POST /api/dictation/check`'s response includes the identical `coverage` object for the same
+reason (§9.1) — both attempt-recording functions return it, not just one.
 Delegates to `fn_record_shadowing_attempt` (§8.12, `SECURITY DEFINER`, §9.9): locks and validates
 the round row first (`user_id = auth.uid() AND youtube_video_id = :videoId`, §9.7), validates
 `recordingDurationSec >= 0.5`, checks `transcriptId` against the round's pinned revision (409
@@ -2723,8 +2961,25 @@ causes a valid retry to lose data" the review flagged. Inside one function, in o
 
 ```sql
 -- 1. Lock the owning study_sessions row (a natural owning row already exists here, unlike
---    listening-progress-transition's advisory lock, §8.8) and validate ownership.
-SELECT id FROM study_sessions WHERE id = :studySessionId AND user_id = auth.uid() FOR UPDATE;
+--    listening-progress-transition's advisory lock, §8.8) and validate ownership AND that the
+--    session belongs to the claimed video (§9.7's relationship-validation checklist -- checking
+--    user_id alone would accept a session id that happens to belong to the caller but a
+--    DIFFERENT video than the one the client claims to be flushing for).
+SELECT id FROM study_sessions
+WHERE id = :studySessionId AND user_id = auth.uid() AND youtube_video_id = :videoId
+FOR UPDATE;
+-- zero rows here means "not your session" or "wrong video" -- raise 403/404, never proceed.
+
+-- 1b. Listening kind only, and only when :transcriptId IS NOT NULL: existence is not
+--     relationship validation (a bare FK check would accept a real transcript that simply
+--     belongs to some OTHER video). Confirm the claimed transcript actually belongs to the
+--     claimed video, and is in a state whose segment timing is meaningful to score against --
+--     'ready' regardless of is_current, so a superseded-but-once-published revision the user is
+--     genuinely still listening under (§8.8 state 4) remains accepted, not just the current one.
+SELECT 1 FROM transcripts
+WHERE id = :transcriptId AND youtube_video_id = :videoId AND status = 'ready';
+-- not found -> raise 'transcript_not_found_for_video' (409) -- rejects both a nonexistent id and
+-- one that exists but belongs to a different video; neither is a valid target to score against.
 
 -- 2. Idempotency + payload-mismatch detection, via a stored fingerprint -- not just a dedup
 --    marker. A reused flush_batch_id with DIFFERENT content is a client bug (or, in principle,
@@ -2747,40 +3002,61 @@ VALUES (:studySessionId, :flushBatchId, :kind, fingerprint(:payload));
 -- predicate each one uses, or Postgres cannot match either partial index at all.
 --   raw_observed_delta = sum(entry.end - entry.start) over every entry in :intervals, UNMERGED
 --     (§5.3's replay-inclusive listening_observed_sec -- computed from the raw payload, before
---     any merge below).
+--     any merge below). listening_progress has NO listening_observed_sec column at all (§8.8's
+--     actual DDL) -- that counter lives on study_sessions, per §5.3, and is written in step 3b
+--     below, not folded into this upsert.
 IF :transcriptId IS NOT NULL THEN
+  covered_sec_before := coalesce((SELECT covered_sec FROM listening_progress
+    WHERE user_id = auth.uid() AND youtube_video_id = :videoId AND transcript_id = :transcriptId), 0);
   INSERT INTO listening_progress (user_id, youtube_video_id, transcript_id, covered_intervals,
-                                   covered_sec, listening_observed_sec, last_position_sec, ...)
-  VALUES (auth.uid(), :videoId, :transcriptId, merge(:intervals), ..., raw_observed_delta, :currentPositionSec, ...)
+                                   covered_sec, last_position_sec, ...)
+  VALUES (auth.uid(), :videoId, :transcriptId, merge(:intervals), ..., :currentPositionSec, ...)
   ON CONFLICT (user_id, youtube_video_id, transcript_id) WHERE transcript_id IS NOT NULL
   DO UPDATE SET covered_intervals = merge_exact(listening_progress.covered_intervals, :intervals),
-                covered_sec = ..., listening_observed_sec = listening_progress.listening_observed_sec + raw_observed_delta,
-                last_position_sec = :currentPositionSec, last_synced_at = now();
+                covered_sec = ...,
+                last_position_sec = :currentPositionSec, last_synced_at = now()
+  RETURNING covered_sec INTO covered_sec_after;
 ELSE
   INSERT INTO listening_progress (user_id, youtube_video_id, transcript_id, covered_intervals,
-                                   listening_observed_sec, last_position_sec, ...)
-  VALUES (auth.uid(), :videoId, NULL, merge(:intervals), raw_observed_delta, :currentPositionSec, ...)
+                                   last_position_sec, ...)
+  VALUES (auth.uid(), :videoId, NULL, merge(:intervals), :currentPositionSec, ...)
   ON CONFLICT (user_id, youtube_video_id) WHERE transcript_id IS NULL
   DO UPDATE SET covered_intervals = merge_exact(listening_progress.covered_intervals, :intervals),
-                listening_observed_sec = listening_progress.listening_observed_sec + raw_observed_delta,
                 last_position_sec = :currentPositionSec, last_synced_at = now();
   -- No transcript loaded yet on the client -- state 2 of §8.8's five-state list. coverage_ratio
   -- stays 0/unset until a real transcript_id branch above eventually seeds one (§8.8's transition).
+  -- covered_sec_before/after stay 0/0 here -- no transcript_covered_sec union exists to credit
+  -- against yet, so listening_newly_covered_sec correctly accrues nothing until state 3 (§8.8).
 END IF;
--- listening_newly_covered_sec (session-scoped, on study_sessions) is bumped separately by
--- covered_sec_after - covered_sec_before, computed from the same UPDATE ... RETURNING.
+
+-- 3b. Listening kind only, still holding step 1's lock on study_sessions: the two session-scoped
+--     counters from §5.3 live HERE, on study_sessions, not on listening_progress.
+UPDATE study_sessions
+SET listening_observed_sec = listening_observed_sec + raw_observed_delta,
+    listening_newly_covered_sec = listening_newly_covered_sec + (covered_sec_after - covered_sec_before),
+    last_activity_at = now()
+WHERE id = :studySessionId;
 
 -- activity kind: merge intervals into study_sessions.activity_intervals (§6.3b), bump
--- last_activity_at.
+-- last_activity_at -- same UPDATE target, different columns, still under step 1's lock.
 
 -- 4. Return the new state, processed := true.
 ```
 
-A crash or error at any point after step 1 rolls back the **entire** transaction, dedup-log insert
-included — there is no state where the marker exists but the progress it should have gated does
-not, closing the gap directly. `intervals` is the client's locally-buffered delta since the last
-successful flush, bounded to `MAX_PENDING_BUFFER_SEC` (300s) of worst-case retained data, not a
-full replay of the whole session.
+A crash or error at any point after step 1 rolls back the **entire** transaction, dedup-log insert,
+`listening_progress` upsert, and `study_sessions` counter update all included — there is no state
+where the marker exists but the progress it should have gated does not, closing the gap directly.
+`intervals` is the client's locally-buffered delta since the last successful flush, bounded to
+`MAX_PENDING_BUFFER_SEC` (300s) of worst-case retained data, not a full replay of the whole
+session.
+
+**Schema alignment, stated once:** `listening_progress` (§8.8) has no `listening_observed_sec`
+column — that counter, along with `listening_newly_covered_sec`, is defined on `study_sessions`
+(§8.5/§5.3), since it's session-scoped bookkeeping, not per-revision coverage. A prior draft's SQL
+here wrote both columns onto `listening_progress` directly, which does not match either table's
+actual DDL and would fail at execution time against a real schema; step 3b above is the fix —
+same transaction, same already-held `study_sessions` lock from step 1, just the correct target
+table.
 
 `POST /api/study-session/activity` (generic, cross-mode) shares the same function, `flushBatchId`/
 fingerprint mechanism, carrying candidate `activity_intervals` (§6.3b) instead of media-position
@@ -2813,6 +3089,7 @@ Every write in §9.3/§9.4/§9.6 validates, server-side, before accepting:
 | Study session belongs to the calling user, the claimed video, and (when set) a compatible round | `fn_get_or_create_study_session`/`fn_flush_study_activity` check `study_sessions.user_id = auth.uid() AND youtube_video_id = :videoId`; if the session has a non-null `round_id`, it must equal the round the current write targets — a stale `studySessionId` from a since-force-closed session (§5.3 rule 4) is rejected, not silently reattached |
 | Attempt belongs to the expected round/study session | `study_session_id` (when present) checked via `ownsStudySession` (mirroring `ownsSession`/`ownsAttempt`, `src/lib/supabase/ownership.ts`) |
 | Round-less Listening writes validate without requiring a round | `fn_flush_study_activity`'s listening kind checks `auth.uid()` + `youtube_video_id` + (when present) `study_session_id`/`transcript_id` directly against `listening_progress`'s own identity — it never looks up or requires a `learning_sessions` row, matching the product rule that Listening coverage doesn't require a round (§5.5/§6.3/R24) |
+| A non-null `transcriptId` on a Listening flush actually belongs to the claimed video, not merely to *some* video | `fn_flush_study_activity` — existence via the FK alone is not relationship validation (issue group 5b): an explicit `SELECT 1 FROM transcripts WHERE id = :transcriptId AND youtube_video_id = :videoId AND status = 'ready'` runs before the upsert, rejecting both a nonexistent id and one that resolves to a different video; `status = 'ready'` (not `is_current`) is the bar, so a superseded-but-once-published revision the user is genuinely still listening under (§8.8 state 4) remains accepted (§9.6) |
 | Reference text for Azure resolved server-side | §9.4 — never accepted from the client payload |
 | Provider-issued scores only writable by the server itself | §9.9 — no owner-write RLS policy exists on `shadowing_attempts` at all; writes are `SECURITY DEFINER`-function-only |
 | Direct-client bypass of every check above | §9.9 — RLS on `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` is owner-SELECT-only; none of these checks can be skipped by calling PostgREST directly instead of the intended function |
@@ -2887,37 +3164,74 @@ $$ language plpgsql
 
 | Function | Purpose | Allowed caller | Execution role | Actor identity source | Client inputs | Checks enforced inside | Tables/fields it may modify |
 |---|---|---|---|---|---|---|---|
-| `fn_create_or_get_active_round` | Idempotently resolve or create the current round for `(user, video)` | Authenticated user (own client) | `SECURITY DEFINER`, owned by `postgres` | `auth.uid()` inside the function — never a request parameter | `youtube_video_id` | Existing-active-round lookup; if none, resolves `is_current AND status='ready'` transcript **server-side** (never client-supplied), computes `required_sentence_count`, allocates `round_number` | `learning_sessions` INSERT only (new row); no UPDATE of an existing row's authoritative fields |
-| `fn_update_resume_position` | Save "resume where you left off" convenience state | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `videoCurrentTimeSec` | `WHERE id = :roundId AND user_id = auth.uid()` | `learning_sessions.current_segment_index`, `.video_current_time`, `.updated_at` **only** — cannot touch `status`/`transcript_id`/`provenance`/`accuracy`/`completed_at`/`required_sentence_count`/`round_number` (not in its parameter list at all, not merely unchecked) |
-| `fn_restart_round` | "Practice again" — abandon current round, create a new one, force-close the study session | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `youtube_video_id` | `WHERE user_id = auth.uid()` on both the abandon and the create step, inside one transaction | `learning_sessions` (UPDATE `status='abandoned'` on the old row, INSERT the new one), `study_sessions` (force-close, §5.3 rule 4) |
-| `fn_record_dictation_attempt` / `fn_record_shadowing_attempt` | Locked, idempotent attempt recording + completion check | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `clientAttemptId`, mode-specific payload, `transcriptId` (validated, not trusted — §9.5) | Round lock + ownership/video match (§9.7); stale-revision check; idempotency-key lookup/mismatch (§6.5) | `attempt_logs`/`shadowing_attempts` INSERT only (never UPDATE an existing row's content); `learning_sessions.status`/`.completed_at` (completion transition only, guarded) |
+| `fn_create_or_get_active_round` | Idempotently resolve or create the current round for `(user, video)` | Authenticated user (own client) — **`EXECUTE` grant deferred to the Phase 3 runbook, §8.14; not callable at creation time** | `SECURITY DEFINER`, owned by `postgres` | `auth.uid()` inside the function — never a request parameter | `youtube_video_id` | Existing-active-round lookup; if none, resolves `is_current AND status='ready'` transcript **server-side** (never client-supplied), computes `required_sentence_count`, allocates `round_number` | `learning_sessions` INSERT only (new row); no UPDATE of an existing row's authoritative fields |
+| `fn_update_resume_position` | Save "resume where you left off" convenience state | Authenticated user (own client) — **grant deferred, §8.14** | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `videoCurrentTimeSec` | `WHERE id = :roundId AND user_id = auth.uid()` | `learning_sessions.current_segment_index`, `.video_current_time`, `.updated_at` **only** — cannot touch `status`/`transcript_id`/`provenance`/`accuracy`/`completed_at`/`required_sentence_count`/`round_number` (not in its parameter list at all, not merely unchecked) |
+| `fn_restart_round` | "Practice again" — abandon current round, create a new one, force-close the study session | Authenticated user (own client) — **grant deferred, §8.14** | `SECURITY DEFINER` | `auth.uid()` | `youtube_video_id` | `WHERE user_id = auth.uid()` on both the abandon and the create step, inside one transaction | `learning_sessions` (UPDATE `status='abandoned'` on the old row, INSERT the new one), `study_sessions` (force-close, §5.3 rule 4) |
+| `fn_record_dictation_attempt` / `fn_record_shadowing_attempt` | Locked, idempotent attempt recording + completion check | Authenticated user (own client) — **grant deferred, §8.14** | `SECURITY DEFINER` | `auth.uid()` | `roundId`, `segmentIndex`, `clientAttemptId`, mode-specific payload, `transcriptId` (validated, not trusted — §9.5) | Round lock + ownership/video match (§9.7); stale-revision check; idempotency-key lookup/mismatch (§6.5) | `attempt_logs`/`shadowing_attempts` INSERT only (never UPDATE an existing row's content); `learning_sessions.status`/`.completed_at` (completion transition only, guarded) |
 | `fn_get_or_create_study_session` | Session start/resume/force-close | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `youtube_video_id`, current round id (if any) | Advisory lock; §5.3 rules | `study_sessions` INSERT/UPDATE |
 | `fn_flush_study_activity` | Atomic Listening/activity flush | Authenticated user (own client) | `SECURITY DEFINER` | `auth.uid()` | `kind`, `studySessionId`, `flushBatchId`, raw interval payload, `transcriptId` (Listening only) | Session lock + ownership (§9.7); fingerprint mismatch check (§9.6) | `study_sessions.activity_intervals`/counters, `listening_progress`, `activity_flush_log` |
 | **`fn_publish_transcript_revision`** | Atomic transcript-revision publish (writer side of §6.9) | **Backend only — the `/api/transcript/generate` route, via the service-role client** | `SECURITY DEFINER` | **None** — there is no per-user actor to check; see "backend-mediated functions," below | `youtubeVideoId`, `language`, `source`, full text + segments, fingerprint | Advisory lock; fingerprint match; row-lock-and-reverify on promotion (§6.9's coordination protocol, issue group 3) | `transcripts`, `transcript_segments` |
 | **`fn_persist_azure_result`** / **`fn_persist_word_match_result`** | Persist a provider's result, by id + sequence | **Backend only — `/api/practice/evaluate` and its recovery endpoint, via the service-role client** | `SECURITY DEFINER` | **None** — see below | `attemptId`, `seq`, scores | `WHERE id = :attemptId AND azure_eval_request_seq = :seq` (staleness) | `shadowing_attempts`' provider-result columns only |
-| `fn_delete_transcript_revision` | Reference-checked revision deletion | Authenticated user (own client) — has a real per-user actor (the admin performing the deletion), unlike publish/persist above | `SECURITY DEFINER` | `auth.uid()`, checked against `users.is_admin` inside the function body | `transcriptId` | `is_admin`; every retention condition, re-checked under lock (§6.9) | `transcripts`, cascade-deleted children |
+| `fn_delete_transcript_revision` | Reference-checked revision deletion | **Nobody, in v1** — fully specified for a real per-user actor (the admin performing deletion) once enabled, but no `EXECUTE` grant is issued to any application role at all until then (§6.9/§8.16's v1 release gate, issue group 3) | `SECURITY DEFINER` | `auth.uid()`, checked against `users.is_admin` inside the function body (dormant until the grant exists) | `transcriptId` | `is_admin`; every retention condition, re-checked under lock (§6.9) | `transcripts`, cascade-deleted children |
 
-**`EXECUTE` grants match the caller column above exactly, not a blanket "authenticated":**
+**Verified project default, not assumed away — this is why `anon` needs its own explicit
+`REVOKE`, not just `PUBLIC`'s (issue group 2's core finding):** Supabase's standard Postgres setup
+runs `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated,
+service_role` — meaning every newly `CREATE FUNCTION`-ed object in this schema receives a
+**separate, direct** `EXECUTE` grant to `anon` (and `authenticated`) at creation time, independent
+of whatever `PUBLIC` itself is granted or later has revoked. `REVOKE ... FROM PUBLIC` alone does
+**not** touch that separate grant — a function created and only ever revoked-from `public` (a
+prior draft's SQL, below) would, under this default, remain directly callable by `anon` the entire
+time, an unauthenticated caller reaching a function meant to require a signed-in user. Every
+`REVOKE` in this plan therefore names `anon` explicitly, not only `public`/`authenticated`, and
+each migration creating a function checks this project's actual default-privilege configuration
+before assuming the shape above, rather than assuming it silently.
+
+**`EXECUTE` grants match the caller column above exactly, not a blanket "authenticated" — and are
+never issued in the same migration that creates a function whose grant must be deferred (below):**
 ```sql
--- User-actor functions: authenticated only, never anon.
-revoke execute on function fn_create_or_get_active_round from public;
-grant  execute on function fn_create_or_get_active_round to authenticated;
--- ...same two lines, repeated per user-actor function in the table above (fn_update_resume_position,
--- fn_restart_round, fn_record_dictation_attempt, fn_record_shadowing_attempt,
--- fn_get_or_create_study_session, fn_flush_study_activity, fn_delete_transcript_revision).
+-- User-actor functions granted immediately (no legacy writer/provenance concern to protect
+-- against -- fn_get_or_create_study_session, fn_flush_study_activity): authenticated only, never
+-- anon, never left to PUBLIC's default.
+revoke execute on function fn_get_or_create_study_session from public, anon, authenticated;
+grant  execute on function fn_get_or_create_study_session to authenticated;
+revoke execute on function fn_flush_study_activity from public, anon, authenticated;
+grant  execute on function fn_flush_study_activity to authenticated;
 
--- Backend-mediated functions: service_role only. EXECUTE is revoked from BOTH anon and
--- authenticated -- an authenticated browser client calling .rpc('fn_publish_transcript_revision', ...)
--- gets a permission-denied error from PostgREST, the same as an anonymous one. This is what
--- "a browser must not be able to bypass API verification by calling the underlying RPC directly"
--- means concretely for these two functions.
-revoke execute on function fn_publish_transcript_revision from public, authenticated;
+-- User-actor functions with a DEFERRED grant (issue group 1, requirement 5 -- these replace a
+-- live legacy writer, so becoming callable early would let a second, uncoordinated write path
+-- operate alongside the still-live legacy one). Created here, in Phase 2 (031-033), with the
+-- REVOKE only; the matching GRANT is issued for the first time at the Phase 3 cutover runbook's
+-- own step (§8.14 step 5), not in this migration:
+revoke execute on function fn_create_or_get_active_round from public, anon, authenticated;
+revoke execute on function fn_update_resume_position from public, anon, authenticated;
+revoke execute on function fn_restart_round from public, anon, authenticated;
+revoke execute on function fn_record_dictation_attempt from public, anon, authenticated;
+revoke execute on function fn_record_shadowing_attempt from public, anon, authenticated;
+-- (§8.14 step 5 later runs, verbatim: grant execute on function fn_create_or_get_active_round,
+--  fn_update_resume_position, fn_restart_round, fn_record_dictation_attempt,
+--  fn_record_shadowing_attempt to authenticated; -- as its own explicit runbook action.)
+
+-- fn_delete_transcript_revision: revoked, and — deliberately — no grant statement follows it at
+-- all in v1 (§6.9/§8.16's release gate, issue group 3). Not "deferred to a known later step"
+-- like the five functions above; enabling this one is an out-of-scope future decision this plan
+-- does not schedule.
+revoke execute on function fn_delete_transcript_revision from public, anon, authenticated;
+
+-- Backend-mediated functions: service_role only. EXECUTE is revoked from PUBLIC, anon, AND
+-- authenticated explicitly -- an authenticated browser client calling
+-- .rpc('fn_publish_transcript_revision', ...) gets a permission-denied error from PostgREST, the
+-- same as an anonymous one. This is what "a browser must not be able to bypass API verification
+-- by calling the underlying RPC directly" means concretely for these functions.
+revoke execute on function fn_publish_transcript_revision from public, anon, authenticated;
 grant  execute on function fn_publish_transcript_revision to service_role;
-revoke execute on function fn_persist_azure_result from public, authenticated;
+revoke execute on function fn_persist_azure_result from public, anon, authenticated;
 grant  execute on function fn_persist_azure_result to service_role;
-revoke execute on function fn_persist_word_match_result from public, authenticated;
+revoke execute on function fn_persist_word_match_result from public, anon, authenticated;
 grant  execute on function fn_persist_word_match_result to service_role;
 ```
+(`fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt`'s own
+grants are specified alongside their definitions, §8.13 — same `anon`-explicit discipline.)
 
 **Backend-mediated functions, and why `auth.uid()` cannot be trusted for them (resolving the
 service-role/actor-identity question directly, not by assumption):** a Postgres connection made
@@ -3191,15 +3505,22 @@ requirement).
 
 Per-revision row, sourced from `GET /api/transcripts/[videoId]/versions`: version/label,
 `created_at`, source, status, sentence count, the size-estimate breakdown (§6.9, clearly labeled
-as an estimate — text/segments/translations/highlights, each shown, plus "eligible for removal"
-computed client-side from the retention reason), an `is_current` badge, a "used by your round"
-indicator (viewer's own association only — never another user's), a plain-language retention
-reason string the API computes from §6.9's classification (e.g. "eligible for cleanup after
-`<date>`"), a read-only **Preview** action (`GET .../preview`, never touches `is_current` or any
-round's pinned `transcript_id` — a pure fetch), and a **Delete** action rendered only when the
-viewer is `is_admin` (checked via the session, not just hidden client-side — the DELETE route
-itself re-verifies via `fn_delete_transcript_revision`'s own `409` on a lost race, §8.16). A
-non-admin viewer sees every revision's information but no working delete control.
+as an estimate — text/segments/translations/highlights, each shown), an `is_current` badge, a
+"used by your round" indicator (viewer's own association only — never another user's), and a
+plain-language retention reason string the API computes from §6.9's classification (e.g.
+"eligible for cleanup after `<date>`" — a **classification label, distinct from a claim that
+deletion is currently available**), plus a read-only **Preview** action (`GET .../preview`, never
+touches `is_current` or any round's pinned `transcript_id` — a pure fetch).
+
+**No Delete action ships in v1, for any viewer, `is_admin` included** (§6.9's corrected release
+gate) — since the underlying RPC has no `EXECUTE` grant to any application role, a delete button
+would have nothing to call; the dialog therefore renders classification/retention information only
+in v1, never a disabled-but-present delete control (which would need its own explanatory copy for
+no functional benefit). "Eligible for cleanup after `<date>`" is shown as exactly that — a
+classification, computed from §6.9's retention rules — never as "deletable now." The Delete action
+is added to this dialog, for `is_admin` viewers only, in the same future change that adds the
+`EXECUTE` grant and the `DELETE` route together (§6.9's future-enablement criteria) — not ahead of
+either.
 
 A **Remove from my library** action lives on the video's card/menu, not in this dialog — it calls
 `DELETE /api/videos/library/[videoId]` (§10.2) and is explicitly a different, always-available,
@@ -3254,17 +3575,17 @@ progress behind a milestone):**
 | Add a video | `POST /api/video/resolve` success | — | `["video-library", userId]` |
 | Start/resume a round | `GET /api/session/resume` (read, not a mutation) | — | — |
 | Switch mode | `POST /api/videos/[videoId]/mode` success (§10.6) | `["round", userId, videoId]`'s `lastMode` field | `["video-library", userId]` (so the Library card's mode badge updates) |
-| Submit Dictation | `POST /api/dictation/check` success | `["round", userId, videoId]` — coverage/`currentSegmentIndex` patched from the response directly, every submission, not gated on completion | `["video-library", userId]`, `["dashboard-summary", userId]` unconditionally (R25 — Revision 3 already did this for these two; unchanged here); additionally `["history-sessions", userId, *]` only via the session-boundary row below, **not** on `roundCompletedByThisRequest` (a round completing mid-session doesn't mean the *session* closed — conflating the two was itself a small inconsistency, corrected here) |
-| Complete a valid Shadowing recording | `POST /api/practice/attempt` success | `["round", userId, videoId]`, same as Dictation | Same as Dictation above |
+| Submit Dictation | `POST /api/dictation/check` success | `["round", userId, videoId]` — `coverage` patched from the response's own `coverage` field directly (§9.1/§9.3/§11.6 confirm the field exists on this response), every submission, not gated on completion | `["video-library", userId]`, `["dashboard-summary", userId]` unconditionally (R25 — Revision 3 already did this for these two; unchanged here); additionally `["history-sessions", userId, *]` only via the session-boundary row below, **not** on `roundCompletedByThisRequest` (a round completing mid-session doesn't mean the *session* closed — conflating the two was itself a small inconsistency, corrected here) |
+| Complete a valid Shadowing recording | `POST /api/practice/attempt` success | `["round", userId, videoId]` — `coverage` patched from the response's own `coverage` field (§9.3, added this pass — a prior draft promised this patch without the response actually carrying it) | Same as Dictation above |
 | Receive evaluation results | `POST /api/practice/evaluate` success/failure, or the recovery endpoint (§9.4) | `["round", userId, videoId]` | `["history-sessions", userId, *]` **added (R25)** — History's per-session `shadowingResults` (§10.4) would otherwise show stale evaluation coverage until the session closes or `staleTime` lapses |
 | Synchronize Listening coverage | `POST /api/listening/sync` success | `["listening-progress", userId, videoId, transcriptId]` from the response directly, every flush | `["video-library", userId]` **on every successful flush where `coveredSec` increased (R25, corrected)** — the Library card shows a live `coverage_ratio` percentage (§10.3), not just a listened-through boolean, so gating it behind the threshold (Revision 3's rule) left ordinary partial Listening progress invisible on Library; `["dashboard-summary", userId]` stays gated on `listenedThrough` flipping true, since Dashboard only ever shows a *count* of listened-through videos, not a per-video percentage — no benefit to invalidating it more often |
 | Generic activity-pulse flush | `POST /api/study-session/activity` success | — | **Nothing directly** — still deliberately not invalidated on every 15-20s flush (excessive refetching while a session is merely open); superseded by the navigation-boundary flush (§11.6, R25) for the "return to Dashboard mid-session" case Revision 3 left unhandled |
 | Study session opened / force-closed by a new round | `fn_get_or_create_study_session` boundary events | — | `["history-sessions", userId, *]` — this is where a just-closed session's final numbers actually need to appear |
-| Navigate away from the practice page (route change or tab-hide) | Navigation-boundary flush, owned by a module-level coordinator, not a component effect (§11.6) | — | `["dashboard-summary", userId]`, `["video-library", userId]`, `["history-sessions", userId, *]` — **only after the flush's own request resolves successfully** (an optional, non-authoritative early invalidation may also fire immediately, but the post-success one is what guarantees a destination-page fetch never caches pre-flush data, §11.6) |
+| Navigate away from the practice page (route change or tab-hide) | Route change detected by the root-layout-level `NavigationFlushObserver` (§11.6) — never a `usePathname` effect inside the practice page itself, which can unmount before observing the destination route; tab-hide detected by the existing `visibilitychange`/`pagehide` listener; both funnel into the module-level coordinator, not a component effect | — | `["dashboard-summary", userId]`, `["video-library", userId]`, `["history-sessions", userId, *]` — **only after the flush's own request resolves successfully**, including a flush that was already in flight before navigation was detected (§11.6's problem-B handling) (an optional, non-authoritative early invalidation may also fire immediately, but the post-success one is what guarantees a destination-page fetch never caches pre-flush data, §11.6) |
 | Complete a round | (bundled into the Dictation/Shadowing mutation above via `roundCompletedByThisRequest`) | — | Same keys as the triggering mutation — completion adds no *additional* invalidation beyond what every submission already does, now that partial progress is no longer gated |
 | Start another round ("Practice again") | `POST /api/session/restart` success | — | `["round", userId, videoId]`, `["video-library", userId]`, `["history-sessions", userId, *]` (the force-closed prior session becomes visible) |
 | Regenerate a transcript | `POST /api/transcript/generate` success | — | `["round", userId, videoId]` (so a stale pinned-revision banner, if shown, clears), `["transcript-versions", videoId]` — does **not** invalidate other users'/videos' caches |
-| Delete a transcript revision (admin) | `DELETE /api/transcripts/versions/[transcriptId]` success | — | `["transcript-versions", videoId]` only |
+| Delete a transcript revision (admin) | **Not applicable in v1** — the route/RPC don't exist yet (§6.9/§9.1); this row documents the intended invalidation for whenever future enablement ships the route | — | `["transcript-versions", videoId]` only |
 | Remove a video from the library | `DELETE /api/videos/library/[videoId]` success | — | `["video-library", userId]` |
 
 Every invalidation is scoped to the keys actually affected — nothing invalidates Dashboard/History
@@ -3306,7 +3627,7 @@ same tab never inherits the first user's filters. The local Shadowing-evaluation
 
 ### 11.6 Navigation-boundary flush — ordered so a destination fetch cannot cache stale data
 
-**The gap this section closes (two, corrected together):** (1) `pagehide`/`visibilitychange`(hidden)
+**The gap this section closes (three, corrected together):** (1) `pagehide`/`visibilitychange`(hidden)
 fire on tab close or backgrounding, but not on an in-app Next.js route transition — relying on them
 alone leaves a user who practices for several minutes and clicks straight to Dashboard seeing stale
 data, since neither a completion nor a session-boundary event fired. (2) **A prior draft's fix for
@@ -3314,60 +3635,123 @@ data, since neither a completion nor a session-boundary event fired. (2) **A pri
 destination page's own fetch (triggered by that early invalidation) resolves before the flush's
 write actually commits, TanStack Query caches the **stale** pre-flush response, and nothing further
 corrects it, since no *later* invalidation was ever scheduled. An early, optimistic invalidation is
-fine as an early refresh; it must never be the *only* one.
+fine as an early refresh; it must never be the *only* one. (3) **The trigger that detects navigation
+still lived inside the practice page's own component tree** — surviving completion handling (below)
+does not help if the thing that was supposed to *start* the flush never observed the navigation in
+the first place, because the component it lived in had already unmounted.
 
-**Where the flush lifecycle is owned — not a component effect that can unmount mid-flight.** A
-`usePathname` effect inside the practice page's component tree is unsuitable on its own: React
-unmounts that component (and, with it, any hook state a `.then()`/`onSuccess` callback might
-close over) the moment the route actually changes, which can happen before a network response
-lands. The flush is instead owned by a **module-level coordinator**
-(`src/lib/practiceFlushCoordinator.ts`), instantiated once and never tied to any component's
-lifecycle — the same pattern already used for the app's single, app-lifetime `queryClient`
-(`src/components/Providers.tsx`):
-- The practice page's top-level component registers/unregisters its current buffered state with
-  the coordinator on mount/unmount, and calls `coordinator.requestFlush('navigation')` from a
-  `usePathname`-based effect the moment it detects outbound navigation — but the effect only
-  *triggers* the request; it does not own completion handling.
-- `requestFlush` fires the flush as `fetch(url, { method: 'POST', body, keepalive: true })` —
-  `keepalive: true` is the standard web-platform mechanism for a request that must survive the
-  initiating document/component going away (the same primitive analytics beacons use for
-  exactly this "fire on navigate/unload, don't get cancelled" case) — and its `.then()`/`.catch()`
-  chain operates only on the module-level `queryClient` singleton, never on component state, so it
-  keeps running and completes its work regardless of whether the practice page has since unmounted.
+**Where each responsibility lives — no single component owns the whole lifecycle:**
+- **The practice page** supplies session identity and observations only: on every buffered
+  interval/pulse, and again on mount, it calls `coordinator.registerSession({ userId, studySessionId,
+  videoId, transcriptId, roundId })` — captured **once, at the moment each batch is buffered**, not
+  re-derived later from "whichever user/video happens to be current" when a response eventually
+  arrives (this is what makes account-switching mid-flush safe, below). It never touches
+  `usePathname` or owns any flush-completion logic itself.
+- **The coordinator** (`src/lib/practiceFlushCoordinator.ts`), a module-level singleton instantiated
+  once and never tied to any component's lifecycle — the same pattern already used for the app's
+  single, app-lifetime `queryClient` (`src/components/Providers.tsx`) — retains the currently
+  registered session, any buffered-but-unsent data, and any in-flight request's promise,
+  independently of which components are currently mounted.
+- **A persistent navigation observer**, `src/components/NavigationFlushObserver.tsx`, rendered once
+  inside `Providers.tsx` at the root layout — **not** inside the practice page's component tree —
+  is the **only** thing that calls `usePathname()` for this purpose. Because it lives at the same
+  level as `queryClient` itself, it is never unmounted by a route change; a route change is
+  precisely the event it exists to observe. On every pathname change, it calls
+  `coordinator.requestFlush('navigation')` unconditionally — a no-op if the coordinator currently
+  has no registered session (Dashboard-to-Dashboard navigation, no practice page ever opened this
+  visit) or nothing buffered (nothing new since the last flush). This closes the exact gap named
+  above: the trigger's own survival no longer depends on the practice page's component tree.
 
-**The corrected sequence:**
-1. On detecting outbound navigation, `coordinator.requestFlush('navigation')` sends the buffered
-   activity/Listening intervals via the `keepalive` fetch above.
-2. **Optional, immediate:** the effect may *also* call `queryClient.invalidateQueries(...)` right
+**Unregistering, defined precisely (so unmounting cannot discard pending data):** the practice
+page's cleanup effect calls `coordinator.unregisterSession()` on unmount, but this only stops
+**future** activity from being attributed to that session — it does not touch anything already
+buffered or in flight. Any interval/pulse buffered before unregistration, and any request already
+sent via `requestFlush`, remains owned by the coordinator and is flushed/tracked to completion
+exactly as if the page were still mounted; `unregisterSession()` clears the pointer used for *new*
+data, never the queue of data already captured.
+
+**`keepalive`, stated precisely — it is a network-request guarantee, not a JavaScript-execution
+guarantee.** `fetch(url, { keepalive: true })` is the standard web-platform mechanism that lets the
+browser continue transmitting a request after the initiating document is torn down (the same
+primitive analytics beacons use). It does **not** guarantee that a `.then()`/`.catch()` callback
+subsequently runs — if the *document itself* is destroyed (real tab close, hard navigation to a
+different origin) before the response arrives, the request may still complete server-side, but
+there is no JavaScript context left in which to run the coordinator's post-success invalidation.
+This is distinct from — and the reason to distinguish — **in-app navigation**: a Next.js route
+change does not destroy the document or the JS runtime at all (it's a client-side transition), so
+the coordinator's promise chain reliably keeps running and completing its invalidation regardless
+of whether the practice page component has since unmounted. For genuine document termination, the
+write still lands (that's what `keepalive` buys), and the *next* time any client opens
+Dashboard/Library/History, ordinary `staleTime`-based refetch picks up the committed data — there
+is no page left in that browsing context needing an immediate client-side invalidation, so the gap
+is inherently harmless, not merely tolerated.
+
+**The corrected sequence, including an already-in-flight periodic flush (problem B):**
+1. `coordinator.requestFlush(trigger)` first checks for an **in-flight request** for the currently
+   registered session (tracked by its own `flushBatchId`, §6.3b/§9.6 — the same identity already
+   used server-side for dedup). If one exists — e.g. the ordinary 15-20s periodic flush already
+   took the unsent buffer and sent it moments before navigation was detected — the coordinator does
+   **not** conclude "buffer is empty, nothing to do." It instead attaches its post-success
+   invalidation (step 3 below) to **that same in-flight promise**, rather than starting a second,
+   redundant request for the same observations. An empty unsent buffer is never treated as "no
+   pending persistence" — only "no *new* data to send."
+2. If no request is in flight and the unsent buffer is non-empty, `requestFlush` sends it as
+   `fetch(url, { method: 'POST', body, keepalive: true })`, reusing the buffer's existing
+   `flushBatchId` (a network retry of an already-attempted send) or minting a fresh one (genuinely
+   new buffered data) — never a second logical batch for data already covered by an in-flight or
+   already-succeeded batch id (§6.3b's dedup discipline, reused here rather than re-invented).
+3. **Optional, immediate:** the caller may *also* call `queryClient.invalidateQueries(...)` right
    away, purely as an early-refresh nicety — this is allowed to race and serve stale data; it is
    never relied on for correctness (this is the "treat immediate invalidation as optional early
    refresh" requirement, satisfied by demoting it, not by removing it).
-3. **After the flush's `fetch` promise resolves successfully**, the coordinator itself (not the
-   possibly-unmounted component) invalidates `["dashboard-summary", userId]`, `["video-library",
-   userId]`, and `["history-sessions", userId, *]` (added — partial practice and active-time
-   updates belong in History too, not only Dashboard/Library). This second invalidation is the one
-   that actually guarantees correctness: any refetch it triggers happens strictly after the flush's
-   write committed, so it cannot observe pre-flush data. The route response for `POST
-   /api/listening/sync`/`/api/study-session/activity` is used only for this trigger, not for a
-   direct cache patch — a single flush response does not carry the account-wide aggregates
+4. **After the flush's request resolves successfully** (whether it was newly sent in step 2 or
+   already in flight per step 1), the coordinator itself — never a component, which may no longer
+   exist — invalidates `["dashboard-summary", userId]`, `["video-library", userId]`, and
+   `["history-sessions", userId, *]` (History included — partial practice and active-time updates
+   belong there too, not only Dashboard/Library), scoped to the `userId` **captured at
+   registration time**, not whichever user is signed in when the response arrives. This is the
+   invalidation that actually guarantees correctness: any refetch it triggers happens strictly
+   after the flush's write committed, so it cannot observe pre-flush data. The route response for
+   `POST /api/listening/sync`/`/api/study-session/activity` is used only for this trigger, not for
+   a direct cache patch — a single flush response does not carry the account-wide aggregates
    `dashboard-summary`/`video-library` need, so patching from it would mean inventing values it
    doesn't provide (§11.2's "align mutation responses with cache patches" rule); invalidate-and-
    refetch is the correct choice here, not a corner cut.
-4. **On flush failure** (network error, non-2xx response): the coordinator does **not** invalidate
+5. **On flush failure** (network error, non-2xx response): the coordinator does **not** invalidate
    or patch anything, and does **not** discard the locally-buffered data — it stays marked
    unflushed so the *next* trigger (the ordinary periodic cadence, the next navigation, or
    `pagehide`) resends it. Nothing is presented to the user as confirmed/saved until a flush
    actually succeeds.
-5. `pagehide`/`visibilitychange`(hidden) remain wired as **independent** triggers into the same
+6. `pagehide`/`visibilitychange`(hidden) remain wired as **independent** triggers into the same
    `coordinator.requestFlush('visibility')` call — covering tab close/backgrounding, which no
    in-app route-change event can see. Both triggers funnel through the same coordinator, so the
-   success/failure handling in steps 3–4 is identical regardless of which one fired.
+   success/failure handling in steps 4–5 is identical regardless of which one fired.
+
+**Account switching cannot apply a stale response to the new user's cache:** because `userId` is
+captured per-session at registration time (not re-read from "whoever is signed in now"), a flush
+registered under user A that resolves *after* the user signs out and user B signs in still
+invalidates only `["…", A]` keys — which are moot anyway, since `signOut()` already calls
+`queryClient.clear()` (§11.5, unchanged) before B's session begins. The coordinator never
+substitutes a currently-signed-in user's id for the one a pending flush was actually registered
+under.
+
+**Cache-patch/response-field alignment (problem C).** Every *direct* patch in §11.2's matrix is
+now checked against what its triggering mutation's response actually returns, not assumed:
+Dictation's and Shadowing's attempt responses both include `coverage` (§9.3/§8.12 — the
+completion-check step already computes it server-side to decide whether to complete the round, so
+returning it costs nothing extra), which is what `["round", userId, videoId]`'s direct patch
+requires; Listening's sync response includes `coverageRatio`/`coveredSec`/`lastPositionSec`/
+`hasHistory` (§9.6), matching its own patch target exactly. No patch in this plan reads a field its
+triggering response doesn't document — where a query's needed fields aren't cheaply available from
+a single mutation's response (Dashboard/Library's account-wide aggregates), invalidate-and-refetch
+is used instead, never a patch built from invented values.
 
 This stays "invalidate at most once per navigation, not once per 15-20 seconds of continuous
-practice" (§11.2's rate discipline) — step 3 fires once per completed flush, not on a timer — while
-no longer risking a stale cache from the race in the prior draft. Cached content stays visible
-throughout, per §11.3 — none of this clears a query's data before its replacement is ready, only
-marks it stale and lets the existing background-refetch behavior take over.
+practice" (§11.2's rate discipline) — step 4 fires once per completed flush, not on a timer — while
+no longer risking a stale cache from the race in the prior draft, and no longer depending on the
+practice page's own component tree to notice navigation happened at all. Cached content stays
+visible throughout, per §11.3 — none of this clears a query's data before its replacement is ready,
+only marks it stale and lets the existing background-refetch behavior take over.
 
 ---
 
@@ -3405,6 +3789,20 @@ producing a genuinely new, separate revision instead of mutating in place, an ex
 pinned to revision A would start rendering revision B's text on its next load. Full detail in
 §6.9's "Reader paths" subsection.
 
+**Implementation status (as of this pass): code implemented and locally verified; not deployed.**
+Every item below is implemented against the actual repository (not copied from this plan's
+pseudocode without checking real column names/signatures — several differed, noted in the task
+list). `npx tsc --noEmit`, `npm run lint`, `npm run build`, and `npm test` (909 passed, 7 skipped)
+all pass locally. The 7 skipped tests are the real-Postgres integration suite
+(`src/__tests__/integration/transcript-revision-publish.integration.test.ts`) — they require a
+local Supabase/Postgres instance this environment doesn't have (no `supabase`/`docker` CLI
+available) and were **not executed**; they are gated to skip cleanly (not silently "pass") when
+their required env vars are absent. No migration was applied to any project, linked or otherwise,
+and no application was deployed. `save-progress/route.ts`'s INSERT branch (not Phase 3's RPC —
+Phase 2/3 don't exist yet) already resolves `transcript_id` server-side from `is_current` and
+rejects a client/server mismatch with `409 stale_transcript_revision`, since Phase 0 needs this
+working now, not merely scheduled for a later phase.
+
 - **Modify:** `src/app/api/transcript/generate/route.ts` — stop hard-deleting/reusing on
   regeneration; call `fn_publish_transcript_revision` (§8.3) instead of sequential REST calls, so
   publication is atomic and duplicate/current-revision logic is applied correctly from day one.
@@ -3429,14 +3827,25 @@ pinned to revision A would start rendering revision B's text on its next load. F
   `save-progress/route.ts`'s insert branch, moving under Phase 3's RPC cutover for its actual
   write path) — resolves `transcript_id` server-side from `is_current`, never from a client-
   supplied value, for *new* rounds specifically.
-- **Migrate:** `020_transcript_revision_identity.sql`, `021_fn_publish_transcript_revision.sql`.
-- **Test:** extend `src/__tests__/transcript-generate-route.test.ts` — regenerating a video with
-  an existing round in progress leaves the old transcript/segments queryable and does not mutate
-  their ids; regenerating identical content reuses the existing revision and flips `is_current`
-  rather than inserting a duplicate; two concurrent regenerate calls (simulated) produce one
-  outcome, not two rows. New `src/__tests__/transcript-pinned-revision-route.test.ts` —
-  `?transcriptId=` returns a specific non-current revision's segments; a round created before B's
-  publication still renders A's text after B becomes current (acceptance scenario #1).
+- **Migrate:** `020_transcript_revision_identity.sql`, `021_fn_publish_transcript_revision.sql`
+  (implemented; not applied to any project).
+- **Test — implemented, locally verified (mocked/unit tier):** rewrote
+  `src/__tests__/transcript-generate-route.test.ts` for the new query/publish sequence (17 cases,
+  including that a failed forced regenerate never overwrites the current transcript and that a
+  publish failure never marks the previous current revision failed); new
+  `src/__tests__/transcript-fingerprint.test.ts` (determinism, order-independence, 0.1s timing
+  tolerance, boundary/content sensitivity); new `src/__tests__/transcript-get-route.test.ts`
+  (pinned-vs-current resolution, wrong-video/language rejection, missing-pinned-id rejection —
+  acceptance scenario #1's route-level slice); new `src/__tests__/session-save-progress-route.test.ts`
+  (ordinary saves never overwrite a pinned `transcript_id`; first-touch creation resolves current
+  server-side and rejects a stale client-believed revision); new
+  `src/__tests__/session-resume-route.test.ts` (`transcriptId` exposed, including the legacy-null
+  case). **Test — implemented, NOT executed (real-Postgres tier):** new
+  `src/__tests__/integration/transcript-revision-publish.integration.test.ts` covering the partial
+  unique index, new-revision-preserves-old, fingerprint-reuse, older-revision-repromotion,
+  concurrent-identical-publish, segment-insert-failure rollback, and `anon`/`authenticated` RPC
+  rejection — requires a local Supabase/Postgres instance this environment does not have; skips
+  cleanly (not reported as passing) when unavailable.
 
 ### Phase 1 — All new schema, plus duplicate-active-round reconciliation
 
@@ -3466,21 +3875,31 @@ old "Phase 7").
 ### Phase 2 — Concurrency-safe RPC functions, and gate-aware bridges for the existing writers
 
 Safe now that every table these functions touch exists, and round uniqueness is established
-(Phase 1). **`learning_sessions`' actual writer identity was verified before sequencing this
-(issue group 2):** `save-progress/route.ts` and `session/restart/route.ts` both write via the
-caller's own RLS-respecting client (`createClient()`, confirmed by direct read of both files),
-depending on the `sessions_owner`/`sessions_anon_insert` policies §9.9 identifies as the bypass —
-so those two routes would break the moment those policies are dropped, unless their replacement
-(the real RPC functions below) exists **and** they are already calling something gate-aware
-**before** the drop happens. (`dictation/check/route.ts`'s `attempt_logs` insert, by contrast,
-already uses the *service-role* client today — confirmed by direct read — so it was never actually
-dependent on `attempts_owner`'s policy, and Phase 1's tightening of that table did not break it.)
+(Phase 1). **Every legacy-era writer's actual identity was verified before sequencing this (issue
+group 1):** `save-progress/route.ts` and `session/restart/route.ts` both write via the caller's own
+RLS-respecting client (`createClient()`, confirmed by direct read of both files), depending on the
+`sessions_owner`/`sessions_anon_insert` policies §9.9 identifies as the bypass — so those two
+routes would break the moment those policies are dropped, unless their replacement (the real RPC
+functions below) exists **and** they are already calling something gate-aware **before** the drop
+happens. `dictation/check/route.ts`'s `attempt_logs` insert, by contrast, already uses the
+*service-role* client today (confirmed by direct read), so Phase 1's `attempts_owner` RLS
+tightening never affected it — but "unaffected by RLS" is not the same claim as "unaffected by the
+cutover fence": being service-role-executed, this write path was left completely outside the
+gate's protection in a prior pass, meaning it could still insert a `provenance`-default-`'verified'`
+`attempt_logs` row during the pause/backfill window. It gets its own transitional bridge here too
+(§8.13/§8.14, below), not because RLS requires it, but because the fence does.
 
 - **Migrate:** `031_fn_record_dictation_attempt.sql`, `032_fn_record_shadowing_attempt.sql`,
   `033_fn_session_activity_and_evaluation_functions.sql` (bundles `fn_create_or_get_active_round`,
   `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`,
   `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result`, and the
-  temporary `fn_legacy_save_progress`/`fn_legacy_restart_round` bridges — §8.13/§9.9).
+  temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt`
+  bridges — §8.13/§9.9). **The five real round/attempt functions ship with `EXECUTE` revoked from
+  `public`/`anon`/`authenticated` and no grant issued at all** (§8.13/§8.14/§9.9, issue group 1
+  requirement 5) — they exist and are fully specified after this phase, but nobody can call them
+  yet; `fn_get_or_create_study_session`/`fn_flush_study_activity` are granted to `authenticated`
+  normally, in this same migration, since they're new capabilities with no legacy writer to
+  protect against.
 - **Modify:** `src/app/api/session/save-progress/route.ts` — its *existing* create/update logic is
   changed to call `fn_legacy_save_progress` (via `.rpc()`) instead of raw `.from('learning_sessions')`
   calls, with **no behavior change** beyond gaining the gate check — still exactly as permissive/
@@ -3488,15 +3907,23 @@ dependent on `attempts_owner`'s policy, and Phase 1's tightening of that table d
   removed" the review asked for.
 - **Modify:** `src/app/api/session/restart/route.ts` — same treatment, calling
   `fn_legacy_restart_round`.
+- **Modify:** `src/app/api/dictation/check/route.ts` — its *existing* service-role `attempt_logs`
+  insert is changed to call `fn_legacy_record_dictation_attempt` (via the same service-role
+  client) instead of a bare `.insert()`, with **no behavior change** beyond gaining the gate check
+  — ownership is still verified beforehand in the route using the caller's own client, exactly as
+  today (§8.13). This is the third leg of the inventory in §8.14, closing the gap named above.
 - **New:** `src/lib/supabase/studySession.ts` (thin wrapper calling the RPC, §5.3 rules).
 - **Test:** **real PostgreSQL integration tests** (not the mocked-Supabase-client Jest suite) for
   the row-locking completion race (§6.5's worked scenario: two concurrent submissions of the
   round's last two required sentences), the explicit lookup-then-insert idempotency contract
   (`wasInserted` correctness on a genuine retry, no timestamp mutation), idempotency-key reuse
-  rejection with a different payload, the flush-batch fingerprint-mismatch rejection (R27), and a
-  new one: `fn_legacy_save_progress` correctly blocks while `app_write_gate` is held `FOR UPDATE`
-  by a concurrent transaction, not merely when `completion_writes_paused` happens to already be
-  `true` (the fencing property, not just the flag).
+  rejection with a different payload, the flush-batch fingerprint-mismatch rejection (R27), and two
+  new ones: all three `fn_legacy_*` bridges correctly drain an in-flight caller and then block once
+  `app_write_gate` is held `FOR UPDATE` by a concurrent transaction, not merely when
+  `completion_writes_paused` happens to already be `true` (the fencing property, not just the flag
+  — scenario #71); and `anon`/`authenticated` cannot yet execute any of the five real functions
+  immediately after this migration deploys, confirming the withheld-grant mechanism actually holds
+  (scenario #70).
 
 ### Phase 3 — Dictation route cutover, via a genuine write-fence, not a bare "same deploy" claim
 
@@ -3509,16 +3936,22 @@ old writer could still create a round or save a resume position — including in
 list; the row-lock fence (not the timeout) is what makes it correct, and `CUTOVER_DRAIN_WINDOW_SEC`
 is a deploy-verification budget, not the guarantee.
 
-1. Run §8.14 Part A (the `app_write_gate` row-lock fence) — genuinely blocks every write through
-   `fn_legacy_save_progress`/`fn_legacy_restart_round`, not just the completion-claiming ones.
-2. Run §8.14 Part B (the bounded backfill) — correct because of the fence.
-3. Run §8.14 Part C (`learning_sessions`' RLS tightening — `sessions_owner`/`sessions_anon_insert`
-   dropped, SELECT-only policy created) — safe now, since the fence already blocks the only
-   remaining write path.
-4. Deploy Phase 3's real application code (below).
-5. Confirm 100% live via the deploy platform (budgeted, not timed) before reopening the gate.
-6. `UPDATE app_write_gate SET completion_writes_paused = false`; drop the now-unreachable
-   `fn_legacy_*` functions.
+1. Confirm Phase 2 is 100% live (deploy-platform status).
+2. Run §8.14 Part C (`learning_sessions`' RLS tightening — `sessions_owner`/`sessions_anon_insert`
+   dropped, SELECT-only policy created) — run **first**, decoupled from the pause/backfill, since
+   nothing has depended on raw table access since Phase 2's routes switched to the `fn_legacy_*`
+   bridges.
+3. Run §8.14 Part A (the `app_write_gate` row-lock fence) — genuinely drains or blocks every write
+   through all three `fn_legacy_*` bridges (round creation, resume, restart, **and** Dictation
+   attempt recording — issue group 1's full inventory, not just the completion-claiming ones).
+4. Run §8.14 Part B (the bounded backfill) — correct because of the fence, proved in §8.14.
+5. Deploy Phase 3's real application code (below), **and grant `EXECUTE` on the five real
+   round/attempt functions to `authenticated` as the same atomic step** (§8.13/§8.14/§9.9) — this
+   is the first moment they become callable at all.
+6. Confirm 100% live via the deploy platform (budgeted, not timed) before reopening the gate.
+7. `UPDATE app_write_gate SET completion_writes_paused = false`.
+8. `DROP FUNCTION` the three now-unreachable `fn_legacy_*` bridges — not merely revoke, so they
+   cannot be re-granted back into existence by mistake (§8.14's requirement-6 mechanism).
 
 **Legacy active rounds with uncertain segment identity, resolved explicitly:** a round's
 `provenance` is set once, at this backfill, and is **never re-promoted to `'current'`** afterward —
@@ -3536,7 +3969,9 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
 
 - **Modify:** `src/app/api/dictation/check/route.ts` — accept `clientAttemptId`/`hintLevelUsed`/
   `studySessionId`/`transcriptId` (all optional, §14.3's compatibility policy for this route);
-  call `fn_record_dictation_attempt`; return `wasInserted`/`roundCompletedByThisRequest`/`roundStatus`.
+  call `fn_record_dictation_attempt` (replacing Phase 2's `fn_legacy_record_dictation_attempt`,
+  fully retired here, not merely bypassed); return
+  `wasInserted`/`roundCompletedByThisRequest`/`roundStatus`/`coverage` (§9.3/§11.6).
 - **Modify:** `src/app/api/session/save-progress/route.ts` — replace the `fn_legacy_save_progress`
   call from Phase 2 with `fn_update_resume_position` (resume convenience only) and
   `fn_create_or_get_active_round` (first-touch round creation) — the transitional bridge is fully
@@ -3552,10 +3987,13 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   produces one row; a legacy-provenance round's completed-videos contribution shows up only in
   the "legacy completions" stat, never the primary one, even after a new verified attempt is added
   to it. New `src/__tests__/cutover-write-gate.integration.test.ts` (real-Postgres tier) — the
-  bounded backfill does not relabel a row created after `cutover_at`; **and a new scenario: a call
-  to `fn_legacy_save_progress` attempting to create a round *after* the fence closes is rejected
+  bounded backfill does not relabel a row created after `cutover_at`; a call to
+  `fn_legacy_save_progress` attempting to create a round *after* the fence closes is rejected
   outright (never inserted, never classified as anything), distinct from a pre-fence row that is
-  correctly tagged legacy** (acceptance scenario #61).
+  correctly tagged legacy (scenario #61); an old Dictation request via
+  `fn_legacy_record_dictation_attempt` attempting to write after the gate closes is blocked the
+  same way (scenario #72); and, run after the full runbook completes, the dropped `fn_legacy_*`
+  functions cannot be re-invoked at all, even by a cached old client bundle (scenario #73).
 
 ### Phase 4 — Shadowing server-side persistence
 
@@ -3584,10 +4022,19 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   `src/app/api/listening-session/save-progress/route.ts` (confirmed dead code, §2.1).
 - **Modify:** `src/components/YouTubePlayer.tsx` — add a `BUFFERING` branch and the rate-aware
   discontinuity check (§6.3); `src/app/dictation/[videoId]/useDictationSession.ts` — replace the
-  ad hoc `triggerAutoSave` call for Listening with interval-accumulation + flush logic; wire the
-  existing `visibilitychange`/`pagehide` listener, **plus a new route-change (navigation-boundary)
-  listener (§11.6, R25)**, to force-flush both Listening and generic activity buffers and
-  invalidate Dashboard/Library on outbound navigation.
+  ad hoc `triggerAutoSave` call for Listening with interval-accumulation + flush logic; register/
+  unregister the current session with the flush coordinator (§11.6) on mount/unmount; keep the
+  existing `visibilitychange`/`pagehide` listener wired to `coordinator.requestFlush('visibility')`.
+- **New:** `src/lib/practiceFlushCoordinator.ts` — the module-level flush coordinator (§11.6):
+  tracks the registered session, buffered/unsent data, and any in-flight request by `flushBatchId`;
+  owns the post-success invalidation, independent of any component's lifecycle.
+- **New:** `src/components/NavigationFlushObserver.tsx` — the persistent, root-layout-level
+  `usePathname` observer (§11.6); rendered once inside `Providers.tsx`, alongside the app's
+  existing single `queryClient` instantiation, so it shares the same app-lifetime mount/unmount
+  guarantee and is never torn down by a practice-page route change. Calls
+  `coordinator.requestFlush('navigation')` on every pathname change.
+- **Modify:** `src/components/Providers.tsx` — render `NavigationFlushObserver` alongside the
+  existing `QueryClientProvider`.
 - **New:** `src/app/dictation/[videoId]/useListeningCoverage.ts`,
   `src/app/dictation/[videoId]/useActivityPulse.ts` — client-side buffers that keep **two**
   representations, not one merged one: the raw, unmerged list of observed spans (sent as-is in
@@ -3597,7 +4044,10 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   conflated, and the raw list is what actually gets sent. `flushBatchId` generation per batch.
 - **Test:** new `src/__tests__/listening-sync-route.test.ts` covering the corrected
   denominator/discontinuity/threshold scenarios (§13); new `src/__tests__/activity-flush-log.test.ts`
-  covering retry-safe dedup and cross-session union deduplication.
+  covering retry-safe dedup and cross-session union deduplication; new
+  `src/__tests__/navigation-flush-in-flight.test.tsx`,
+  `src/__tests__/navigation-flush-account-switch.test.tsx` covering §11.6's coordinator/observer
+  split (scenarios #52, #65, #75–78).
 
 ### Phase 6 — Dashboard, Library, History rewrite
 
@@ -3650,21 +4100,27 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `035_fn_delete_transcript_revision.sql`.
+- **Migrate:** `035_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
+  **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
+  merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
-  `src/app/api/transcripts/[videoId]/versions/[transcriptId]/preview/route.ts` (`GET`),
-  `src/app/api/transcripts/versions/[transcriptId]/route.ts` (`DELETE`, admin-gated, disabled by
-  default behind its own flag until its release gate is met, §6.9).
+  `src/app/api/transcripts/[videoId]/versions/[transcriptId]/preview/route.ts` (`GET`). **Not
+  built in this phase:** `DELETE /api/transcripts/versions/[transcriptId]` — there is no grant for
+  it to call (§6.9/§9.1); it ships, together with the grant, only in the separate, later,
+  out-of-scope change that meets §6.9's future-enablement criteria.
 - **New:** `src/lib/queries/transcriptVersions.ts`; a Script Versions dialog component reachable
-  from the video actions menu / Script tab overflow (§10.7). (The `?transcriptId=` reader change
+  from the video actions menu / Script tab overflow (§10.7) — listing/preview/retention-reason
+  display only, no delete control for any viewer (§10.7). (The `?transcriptId=` reader change
   itself already shipped in Phase 0, §12 above — this phase only adds the management UI on top of
   it.)
 - **Test:** new `src/__tests__/transcript-versions-route.test.ts` covering retention
   classification (every round status, not only active — R28's `learning_sessions.transcript_id`
-  fix), the publish-vs-delete and direct-reference-vs-delete races (§13, real-Postgres tier), and non-admin viewers never
-  seeing a working delete action. Deletion specifically gated on passing this test tier before
-  release (§6.9's explicit release gate) — listing/preview/size-estimates/duplicate-prevention are
-  not gated on it.
+  fix) and non-admin/admin viewers alike seeing no working delete action in the UI. The
+  publish-vs-delete and direct-reference-vs-delete races (§13, real-Postgres tier, scenarios #47,
+  #58, #59, #74) are **future-enablement prerequisites**, exercised via a direct, privileged test
+  connection since no application role can reach the function in v1 — not a v1 release gate for
+  Phase 9's actual shipped scope, which is listing/preview/size-estimates/duplicate-prevention
+  only.
 
 ### Dependency graph
 
@@ -3740,7 +4196,7 @@ none of the jsdom tests below are described as real-device verification.
 | 44 | Rollout and rollback preserve historical data | §8.18 — rollback never drops populated tables | Manual rollout rehearsal against a staging copy | **Runtime** |
 | 45 | Regenerating identical content reuses the existing revision, doesn't duplicate | §6.9/§8.3 fingerprint match reuses and re-promotes | `transcript-generate-route.test.ts` | Unit |
 | 46 | Deleting a revision still referenced by a round/attempt is refused | §6.9 retention classification | `transcript-versions-route.test.ts` | Unit |
-| 47 | A reference created between the dialog's read and the delete request blocks deletion | §6.9/§8.16 `fn_delete_transcript_revision`'s re-check-under-lock | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
+| 47 | A reference created between the dialog's read and the delete request blocks deletion — verified by calling the function directly (via a test connection with elevated privileges), since no application role can reach it in v1 | §6.9/§8.16 `fn_delete_transcript_revision`'s re-check-under-lock — a future-enablement prerequisite, not a v1 acceptance gate (§6.9) | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
 | 48 | Removing a video from the personal library never deletes the shared transcript | §10.7/§C.5 separation of library-removal from admin deletion | `video-library-route.test.ts` | Unit |
 | 49 | Listening-only video (no round ever created) appears correctly on the Library page with a live coverage percentage | §5.5/§6.3/§10.2 round-independent Listening resolution (R24 — corrects the `latest_round.transcript_id` bug) | `video-library-route.test.ts` | Unit |
 | 50 | A video's observed-but-transcript-less Listening intervals are credited (intersected, not discarded) the moment a transcript first becomes available; a legacy position-only backfill row contributes zero credit under the same rule | §8.8's corrected transition rule (intersection with the new transcript's valid-segment union) | new `listening-transcript-transition.test.ts` | Unit |
@@ -3750,15 +4206,28 @@ none of the jsdom tests below are described as real-device verification.
 | 54 | A direct PostgREST write to `attempt_logs`/`shadowing_attempts`/`study_sessions`/`listening_progress`/`activity_flush_log` (bypassing the intended route) is rejected by RLS; a direct PATCH attempting to set `users.is_admin` on one's own row silently has no effect | §9.9 — owner-SELECT-only RLS + `users_prevent_self_admin_grant` trigger (R28) | new `direct-write-bypass.integration.test.ts` | **Real Postgres** |
 | 55 | A tampered or expired Azure-recovery token is rejected; a valid, unexpired one persists the result without a new Azure call | §9.4/§9.9 signed recovery token, HMAC + `expiresAt` + `azure_eval_request_seq` checks | new `evaluate-recovery-token.test.ts` | Unit |
 | 56 | A completed (or abandoned) round with no linked `attempt_logs`/`shadowing_attempts` rows still protects its pinned transcript revision from deletion | §6.9's retention check against `learning_sessions.transcript_id` directly, for every round status (R28 — not dependent on `attempt_logs.transcript_id` being populated) | `transcript-versions-route.test.ts` | Unit |
-| 57 | A video with any existing `vocabulary_items`/`bookmarks` row refuses deletion outright (pre-existing-row check, not a concurrency claim — §6.9 corrects a prior draft's false claim that `SERIALIZABLE` isolation alone detects a concurrent, lower-isolation insert) | §6.9's indirect-reference block, verified as a plain existence check | `transcript-versions-route.test.ts` | Unit |
+| 57 | No caller can reach `fn_delete_transcript_revision` in v1 at all — superseded by scenario #74, which is the actual v1 gate; the function's own indirect-reference logic (any `vocabulary_items`/`bookmarks` row for the video refuses deletion) remains a plain existence check, not a concurrency guarantee, and is exercised only as a future-enablement prerequisite via a direct, privileged test connection | §6.9's corrected v1 rule (issue group 3) — deletion is disabled for every video, not conditioned on existing vocabulary/bookmark rows | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
 | 58 | Publication finding a fingerprint-matching older revision A, racing a concurrent deletion of A, never leaves the video without a current revision — publication's row lock on the candidate, re-verified before retiring the old current, falls back to inserting fresh content if A is gone | §6.9's publish-vs-delete coordination protocol | `fn_publish_transcript_revision.integration.test.ts` (new) | **Real Postgres** |
-| 59 | A deletion refused mid-transaction (any protection condition trips) leaves the target revision, its segments, and every round/attempt/listening-progress row referencing it completely unchanged | §6.9/§8.16 — refusal is a clean transaction abort, not a partial cascade | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
+| 59 | A deletion refused mid-transaction (any protection condition trips) leaves the target revision, its segments, and every round/attempt/listening-progress row referencing it completely unchanged — a future-enablement prerequisite, exercised via a direct, privileged test connection | §6.9/§8.16 — refusal is a clean transaction abort, not a partial cascade | `fn_delete_transcript_revision.integration.test.ts` | **Real Postgres** |
 | 60 | The write-gate cutover runbook, run against a staging copy with simulated in-flight requests, produces the exact legacy/current split the bounded backfill promises; a run interrupted mid-runbook recovers cleanly by reopening the gate | §8.14/§12 Phase 3/§14.2's runbook | `cutover-write-gate.integration.test.ts` | **Real Postgres** + manual staging rehearsal |
 | 61 | A call to `fn_legacy_save_progress` attempting to create a round *after* the `app_write_gate` fence closes is genuinely blocked — not merely rejected by a flag check that a concurrent write could race — distinct from a pre-fence row, which is correctly tagged legacy by the bounded backfill | §8.14's `FOR UPDATE`/`FOR SHARE` row-lock fence, the correctness mechanism, not the 30s timeout | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
 | 62 | Duplicate-active-round cleanup's rollback runs in the correct order (drop index, then restore) and is refused/fails safely if attempted in the wrong order | §8.15/§8.18 corrected rollback ordering | new `migration-030-rollback.integration.test.ts` | **Real Postgres** |
 | 63 | An already-open Listening session's buffered observations survive a concurrent regeneration in another tab — the pending flush still credits the *original* `transcriptId` the observations were made under, never silently reassigned and never dropped | §9.5/§9.6's explicit concurrent-regeneration rule | new `listening-open-session-regeneration.test.ts` | Unit |
 | 64 | Both `listening_progress` upsert branches (`transcript_id IS NOT NULL` and `transcript_id IS NULL`) correctly target their respective partial unique index under real concurrent writers | §8.8/§9.6's corrected `ON CONFLICT ... WHERE ...` predicates | `listening_progress_uniqueness.integration.test.ts` (extend) | **Real Postgres** |
 | 65 | Navigating away before a flush completes: the destination page's own fetch may return pre-flush data, but once the pending flush commits, Dashboard/Library/History subsequently reflect it without a manual reload | §11.6's post-success (not pre-emptive) invalidation | new `navigation-flush-ordering.test.tsx` | Unit (DOM) |
+| 66 | A Listening/activity flush naming a `transcriptId` that exists but belongs to a *different* video is rejected, not silently accepted because the bare FK resolved | §9.6/§9.7's relationship-validation check inside `fn_flush_study_activity` (issue group 5b) | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
+| 67 | A Listening flush naming a `transcriptId` that belongs to the correct video but is a superseded (non-`is_current`), `status='ready'` revision is accepted, since the user may genuinely be listening under it (§8.8 state 4) | §9.6/§9.7's `status='ready'` (not `is_current`) check | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
+| 68 | `fn_flush_study_activity` executed against the actual migrated schema writes `listening_observed_sec`/`listening_newly_covered_sec` to `study_sessions` and `covered_intervals`/`covered_sec` to `listening_progress` without a missing-column error | §8.5/§8.8's actual DDL vs. §9.6's corrected SQL (issue group 5a) | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
+| 69 | A caller with no EXECUTE grant on a user-actor function (`anon`) is rejected by PostgREST before any function body runs; an authenticated user calling a backend-only function (`fn_publish_transcript_revision`, `fn_persist_azure_result`, `fn_persist_word_match_result`) is rejected the same way; an authenticated user cannot call another user's-scoped function with someone else's identifiers and have it succeed | §9.9's per-function `REVOKE`/`GRANT`, verified as effective privileges, not just SQL text (issue group 2) | new `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
+| 70 | Immediately after migration `033` deploys (Phase 2), `anon` and `authenticated` cannot execute `fn_create_or_get_active_round`/`fn_update_resume_position`/`fn_restart_round`/`fn_record_dictation_attempt`/`fn_record_shadowing_attempt` — the grant is withheld until the Phase 3 cutover runbook's own step, not issued at creation time | §8.14's deferred-grant mechanism (issue group 1, requirement 5) | `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
+| 71 | An in-flight `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` call that already acquired `FOR SHARE` before the pause transaction requests `FOR UPDATE` is allowed to finish and commit; its row is correctly included in the bounded backfill | §8.14's corrected fence semantics — a holder is drained, not aborted mid-flight | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
+| 72 | An old Dictation request (`dictation/check`'s legacy insert path) attempting to write after the gate closes is blocked by `fn_legacy_record_dictation_attempt`'s own fence check, the same as the round-lifecycle bridges | §8.14/§12 Phase 2's third bridge function (issue group 1) | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
+| 73 | After Phase 3's real functions are granted `EXECUTE`, the dropped `fn_legacy_*` functions cannot be re-invoked even with a cached/replayed old client bundle — the functions no longer exist, not merely unreachable via the app's current routes | §8.14 runbook step 8 (DROP, not just revoke) | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
+| 74 | `fn_delete_transcript_revision` cannot be invoked by any application role in v1 — `anon`, `authenticated` (including an `is_admin` user's own client), and a direct PostgREST RPC call are all rejected with permission-denied, since no `EXECUTE` grant is issued to any of them | §6.9/§8.16's v1 release gate — no callable path exists, not merely a disabled UI button (issue group 3) | `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
+| 75 | Navigating away when the unsent buffer is already empty because the ordinary 15-20s periodic flush just took it — the navigation trigger attaches to that already-in-flight request instead of concluding there is nothing pending, and still invalidates Dashboard/Library/History once it resolves | §11.6's problem-B handling — in-flight requests tracked by `flushBatchId`, not inferred from buffer emptiness | new `navigation-flush-in-flight.test.tsx` | Unit (DOM) |
+| 76 | Both browser Back and Forward navigation, and an in-app navigation-link click, all trigger the same `NavigationFlushObserver`-owned flush/invalidation sequence — not only a `<Link>` click | §11.6's root-layout-level `usePathname` observer, which sees every pathname change regardless of cause | new `navigation-flush-in-flight.test.tsx` | Unit (DOM) |
+| 77 | A pending flush registered under user A that resolves after `signOut()`/user B signs in does not invalidate or patch any of B's queries | §11.6's per-registration `userId` capture + existing `queryClient.clear()` on sign-out (§11.5) | new `navigation-flush-account-switch.test.tsx` | Unit (DOM) |
+| 78 | The Shadowing attempt-response cache patch reads only `coverage` as documented in §9.3 — no field the response doesn't actually return is read or fabricated by the patch | §9.3/§11.6's response/patch alignment | `dashboard-cache-invalidation.test.tsx` (extend) | Unit |
 
 ### Runtime / real-device verification (not achievable in jsdom)
 
@@ -3766,6 +4235,10 @@ none of the jsdom tests below are described as real-device verification.
   flush and study-session `ended_at` stamp; Safari's lack of `SpeechRecognition` correctly
   degrading Word Match to "unsupported" without blocking practice credit (§6.2 — practice credit
   never depends on Word Match succeeding).
+- Real in-app route navigation (click Dashboard/back-button/forward-button away from an active
+  practice page mid-flush) confirmed to unmount the practice page before the flush's response
+  lands, and to still invalidate Dashboard/Library/History correctly once it commits (scenario
+  #65) — manual, since this repo has no browser-automation test runner (§13's note above).
 - Real Supabase project: confirm all 19 original + 16 new migrations (`020`–`035`) apply cleanly
   against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
   `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
@@ -3775,12 +4248,19 @@ none of the jsdom tests below are described as real-device verification.
   click to confirm the `attemptId`+seq-scoped PATCH lands on the correct row under real network
   latency, not just the mocked test.
 - **Real PostgreSQL integration tests** (scenarios #23, #26, #30, #37, #41, #47, #53, #54, #58,
-  #59, #60, #61, #62, #64) are a genuinely separate tier from the existing mocked-Supabase-client
-  Jest suite — row locking (including the publish-vs-delete and cutover-fence coordination
-  protocols), advisory locks, `SECURITY DEFINER`/RLS interaction, and partial-unique-index behavior
+  #59, #60, #61, #62, #64, #66, #67, #68, #69, #70, #71, #72, #73, #74) are a genuinely separate
+  tier from the existing mocked-Supabase-client Jest suite — row locking (including the
+  publish-vs-delete and cutover-fence coordination protocols), advisory locks, `SECURITY
+  DEFINER`/RLS interaction, effective `EXECUTE` privileges, and partial-unique-index behavior
   cannot be exercised meaningfully against a mock. These run against a local Supabase/Postgres
   instance (`supabase start` or equivalent), not production, and are not part of the existing
   `npm test` mocked-route suite.
+- **Scenario #65's browser-level requirement (real route navigation, not a direct coordinator
+  call) has no automated tool in this repo today** — `package.json`/`jest.config.ts` (confirmed)
+  provide only Jest with `jsdom`, no Playwright/Cypress or other browser-automation runner. Until
+  one is adopted, this specific check is a **manual** verification step (click through the app,
+  confirm Dashboard/Library/History refresh correctly after a delayed flush), tracked alongside
+  the other manual/runtime checks below rather than claimed as an automated Jest scenario.
 - No paid-provider test is run as part of this planning task, and none of the above list should be
   executed while producing this plan — they are the acceptance procedure for whoever implements it.
 
@@ -3818,17 +4298,21 @@ recovery path, not merely "ship the phases in order":
    nothing reads or writes to it yet except the reconciliation itself, which is a one-time,
    audit-logged, reversible cleanup (§8.15) — not a no-op, but a bounded, tested one. Fully safe to
    deploy otherwise — a no-op from the rest of the running application's perspective.
-2. **New authoritative write paths land behind the old ones, and the old path learns to check the
-   gate** (Phase 2). The new RPC functions and routes exist and are tested (including the
-   real-Postgres integration tier, §13); `save-progress`'s completion branch gains the
-   `app_write_gate` check (still a no-op — the gate defaults closed/open, i.e.
-   `completion_writes_paused = false`). This step must fully roll out and soak *before* step 3
-   flips the gate, so every instance in rotation has the check.
-3. **The cutover itself — the concrete runbook (§12 Phase 3, R23):** pause via the gate, drain
-   `CUTOVER_DRAIN_WINDOW_SEC`, run the bounded provenance backfill keyed to the captured
-   `cutover_at`, deploy the Phase 3 code that removes the old completion branch entirely, reopen
-   the gate. Recovery at each step is specified in §12 Phase 3 — every failure mode short of "the
-   Phase 3 code deploy itself failed" is a same-session, non-destructive reopen-the-gate operation.
+2. **New authoritative write paths land behind the old ones, and every old writer — round
+   creation, resume, restart, AND Dictation attempt recording, the full inventory in §8.14, not
+   only the completion branch — learns to check the gate** (Phase 2). The five real RPC functions
+   are created with no `EXECUTE` grant to `authenticated` at all yet (§8.13/§9.9); the three
+   `fn_legacy_*` bridges (including the new `fn_legacy_record_dictation_attempt`) are tested
+   (including the real-Postgres integration tier, §13). This step must fully roll out and soak
+   *before* step 3 begins, so every instance in rotation is calling a gate-aware bridge.
+3. **The cutover itself — the concrete runbook (§12 Phase 3/§8.14, R23):** confirm Phase 2 is
+   100% live; tighten `learning_sessions`' RLS (Part C, run first, decoupled from the pause);
+   pause via the fence (Part A — a genuine row lock, not `CUTOVER_DRAIN_WINDOW_SEC`); run the
+   bounded, provably-sufficient provenance backfill (Part B); deploy the Phase 3 code **and** grant
+   `EXECUTE` on the five real functions to `authenticated` as the same atomic step; confirm 100%
+   live; reopen the gate; `DROP` the now-permanently-unreachable `fn_legacy_*` bridges. Recovery at
+   each of these boundaries is specified separately in §8.14 — not collapsed into a single
+   "reopen the gate" case.
 4. **Client and UI cutover** (Phase 4–6's frontend changes ship together with their backend
    counterparts, per phase). Dashboard/Library/History switch to the new formulas and queries.
 5. **Validation/reconciliation.** Confirm via the real-Postgres integration tests (§13, including
@@ -3948,7 +4432,10 @@ is never written back to any table as the score of record.
 - Phase 0 (transcript revision identity + atomic publish + the pinned-revision **reader** path,
   R21) — a clear, self-contained fix with an obvious correct behavior, blocking nothing else
   conceptually but blocking everything else *safely*; the Script Versions duplicate-detection logic
-  it establishes is fully specified (§6.9).
+  it establishes is fully specified (§6.9). **Code implemented and locally verified** (typecheck,
+  lint, build, and the mocked/unit test tier all pass — see Phase 0's own status note above); real-
+  Postgres integration tests are written but unexecuted (no local Postgres in this environment),
+  and nothing has been applied to any project or deployed.
 - Phase 1 (all new schema, plus duplicate-round reconciliation, R21) — every table, index, and RLS
   policy for the tables Phase 1 itself creates (§9.9), and the reconciliation's corrected, ordered
   rollback (§8.18), are fully specified. **`learning_sessions`' own RLS tightening is deliberately
@@ -3956,30 +4443,35 @@ is never written back to any table as the score of record.
   exist and the existing routes have been made gate-aware, per the sequencing correction in this
   pass (issue group 2).
 - Phase 2 (concurrency-safe RPC functions, plus the transitional `fn_legacy_*` gate-aware bridges
-  for the *existing* `save-progress`/`session/restart` routes) — every function's locking strategy,
-  execution identity (§9.9's per-function permission matrix), and idempotency mechanism is fully
-  specified (§6.5's worked concurrency scenario, §8's DDL), including the corrected explicit
-  lookup-then-insert flow (R26), atomic flush function (R27), and the round-lifecycle functions
-  this pass added (`fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`).
+  for the *existing* `save-progress`/`session/restart`/`dictation/check` routes — three bridges,
+  not two, since the sixth pass found `dictation/check`'s service-role insert was left outside the
+  fence entirely) — every function's locking strategy, execution identity (§9.9's per-function
+  permission matrix, now with `anon` explicitly revoked everywhere and the five real functions'
+  grant deliberately deferred to the Phase 3 runbook), and idempotency mechanism is fully specified
+  (§6.5's worked concurrency scenario, §8's DDL), including the corrected explicit
+  lookup-then-insert flow (R26) and atomic flush function (R27).
 - Phase 3–5 (Dictation/Shadowing/Listening cutovers) — every formula, validity rule, and API
   contract in §6/§9 is fully specified, including the corrected idempotency contract, the
-  interval-tracking redesign (now with Listening's own, round-independent stale-revision exemption
-  spelled out separately from round-based writes, issue group 4), and — for Phase 3 specifically —
-  a genuine write-fence cutover mechanism (§8.14/§12/§14.2) whose correctness comes from a
-  Postgres row lock, not from `CUTOVER_DRAIN_WINDOW_SEC`'s elapsed time, which is now only an
-  operational budget.
+  interval-tracking redesign (with Listening's own round-independent stale-revision exemption AND
+  its relationship-validation check that a claimed `transcriptId` belongs to the claimed video, not
+  merely exists), and — for Phase 3 specifically — a genuine write-fence cutover mechanism
+  (§8.14/§12/§14.2) covering every legacy-era writer, not only completion, whose correctness comes
+  from a Postgres row lock with a proven-sufficient backfill boundary, not from
+  `CUTOVER_DRAIN_WINDOW_SEC`'s elapsed time, which is only an operational budget.
 - Phase 6's Dashboard/Library/History formulas — fully specified in §6.8/§10, with the earlier
   draft's internal contradiction (accuracy dedup scope) resolved to one unambiguous rule, and the
-  Library/resume "historical evidence of study" signal (§10.2/§9.2) added this pass so a revision
-  change never misreports a studied video as untouched.
+  Library/resume "historical evidence of study" signal (§10.2/§9.2) so a revision change never
+  misreports a studied video as untouched; §11.6's navigation-boundary flush is now owned by a
+  persistent root-layout observer plus a module-level coordinator, not a component effect that can
+  miss the very navigation it exists to detect.
 - Phase 9 (Script Versions) — listing/preview/size-estimates/duplicate-prevention are fully
-  specified and independently releasable. **Deletion specifically ships disabled by default**,
-  behind its own release gate (§6.9): its direct-reference concurrency-safety (the row-lock
-  coordination with publication, §6.9) is fully specified, but its indirect vocabulary/bookmark
-  check has no available concurrency-safety mechanism and keeps deletion refused for any video
-  with such activity — stated as a standing scope limitation, not something "ready" in the same
-  sense as the rest of this phase. Depends on **both** Phase 0 and Phase 1 (corrected — §12's
-  dependency graph), not Phase 0 alone.
+  specified and independently releasable. **Deletion ships unreachable by any application role in
+  v1** (§6.9/§8.16's corrected release gate) — not merely "disabled for videos with existing
+  vocabulary/bookmark activity," which left a real create-then-delete race open for every video
+  without such activity yet. Direct-reference concurrency-safety (the row-lock coordination with
+  publication, §6.9) is fully specified as a future-enablement prerequisite; the indirect
+  vocabulary/bookmark gap remains the reason deletion isn't simply re-enabled once that prerequisite
+  passes. Depends on **both** Phase 0 and Phase 1, not Phase 0 alone.
 
 **Needs runtime confirmation before or during rollout** (not blocking, but should happen early in
 Phase 0/1, and is exactly the kind of thing the real-Postgres integration tests in §13 exist to
@@ -4002,6 +4494,12 @@ catch before production):
   i.e. how frequently a fingerprint-matched revision is deleted out from under a concurrent
   publish at this app's real usage level; expected to be rare, worth confirming rather than
   assuming.
+- **This project's actual `ALTER DEFAULT PRIVILEGES` configuration** (§9.9) — this plan's
+  `anon`-explicit `REVOKE` statements are written against Supabase's documented standard default
+  (new functions separately granted to `anon`/`authenticated`/`service_role`), but a project whose
+  defaults were customized away from that standard could have a different starting grant shape;
+  confirm the live project's actual configuration before relying on the revoke list above as
+  exhaustive.
 
 **This document does not claim every ambiguity is resolved, and this revision found real defects,
 not only remaining ambiguity — both are stated honestly rather than smoothed over.** Two items
@@ -4014,8 +4512,10 @@ had access to. A third, new item from this revision is a **standing limitation, 
 call awaiting a decision**: indirect vocabulary/bookmark reference-checking for Script Versions
 deletion (§6.9) has **no available concurrency-safety mechanism at all** within this plan's scope —
 not a narrowed-but-imperfect one — without also gating the (explicitly out-of-scope, per §14.1)
-vocabulary feature's own writes. Deletion stays refused for any video with vocabulary/bookmark
-activity as a direct consequence, and this document does not claim otherwise.
+vocabulary feature's own writes. This is the direct reason deletion is disabled for **every**
+video in v1, not merely refused for videos already showing vocabulary/bookmark activity — a
+per-video existence check alone would leave the create-then-delete race open for the rest, which
+this document no longer claims is an acceptable mitigation.
 
 **This revision's own review process found concrete, previously-unnoticed defects — not just
 underspecified ambiguity — and this document does not describe them as "no blockers were ever
@@ -4047,7 +4547,7 @@ third (indirect vocabulary/bookmark reference-checking for deletion) is a real, 
 limitation with a working mitigation (refuse deletion outright) — grouped with the other two only
 as "not blocking implementation," never described as an accepted tradeoff on its own terms. Every
 defect in §3 has a concrete, additive fix in this plan; every product rule in the brief — and every
-finding across all five review rounds — has a precise, schema-or-formula-level resolution, not just a
+finding across all six review rounds — has a precise, schema-or-formula-level resolution, not just a
 paragraph of intent (the review-resolution table traces each one to its updated sections). The one
 behavior that must actually *change* (transcript regeneration's in-place hard-delete, D15/§8.3,
 together with the reader-path fix R21 moved into the same phase) is isolated to Phase 0 and has no
