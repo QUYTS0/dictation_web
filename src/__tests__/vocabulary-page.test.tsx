@@ -154,6 +154,10 @@ describe("VocabularyPage", () => {
     expect(screen.getByTestId("vocab-stat-new")).toHaveTextContent("4");
     expect(screen.getByTestId("vocab-stat-learning")).toHaveTextContent("3");
     expect(screen.getByTestId("vocab-stat-due")).toHaveTextContent("3");
+    // Exactly these four — guards against a future dimension (e.g. Mastery)
+    // silently appearing here as a fifth mutually-exclusive metric before
+    // that's actually designed.
+    expect(screen.getAllByTestId(/^vocab-stat-/)).toHaveLength(4);
   });
 
   it("never prints a session-size count or an ordering claim on the primary CTA", async () => {
@@ -166,6 +170,7 @@ describe("VocabularyPage", () => {
     expect(screen.queryByText(/\(\d+\)/)).not.toBeInTheDocument();
     expect(screen.queryByText(/prioriti/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/due first/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/mixed in/i)).not.toBeInTheDocument();
   });
 
   it("clicking the Due metric shows only cards matching due status", async () => {

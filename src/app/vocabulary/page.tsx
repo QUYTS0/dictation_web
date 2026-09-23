@@ -44,6 +44,43 @@ const TYPE_FILTER_OPTIONS: Array<{ value: TypeFilterValue; label: string }> = [
   { value: "phrase", label: "Phrases" },
 ];
 
+// Data-driven so a future independent metric (e.g. a Mastery count, once
+// that dimension is designed — see the orthogonality note in
+// VocabularyDetailDrawer.tsx) is a new array entry, not a rewritten header.
+// Kept as a plain array over the existing simple component, not a bigger
+// registry — four items doesn't warrant more machinery than this.
+const STAT_METRICS: Array<{
+  value: StatusFilterValue;
+  label: string;
+  statsKey: keyof VocabularyStatsResponse;
+  icon: (isActive: boolean) => React.ReactNode;
+}> = [
+  {
+    value: "all",
+    label: "Total Words",
+    statsKey: "total",
+    icon: (isActive) => <BookOpen className={isActive ? "text-white" : "text-primary-500"} size={20} />,
+  },
+  {
+    value: "new",
+    label: "New",
+    statsKey: "new",
+    icon: (isActive) => <Sparkles className={isActive ? "text-white" : "text-slate-500"} size={20} />,
+  },
+  {
+    value: "learning",
+    label: "Learning",
+    statsKey: "learning",
+    icon: (isActive) => <Clock className={isActive ? "text-white" : "text-indigo-500"} size={20} />,
+  },
+  {
+    value: "due",
+    label: "Due",
+    statsKey: "due",
+    icon: (isActive) => <AlertCircle className={isActive ? "text-white" : "text-amber-500"} size={20} />,
+  },
+];
+
 type PendingDeleteConfirmation = { kind: "single"; id: string } | { kind: "bulk"; ids: string[] };
 
 /** Precedence checked top-to-bottom by the caller: loading first (never a
@@ -580,34 +617,19 @@ export default function VocabularyPage() {
                   ) : (
                     <>
                       <div className="flex w-full flex-wrap gap-3 md:w-auto md:flex-1">
-                        <VocabularyMetricButton
-                          icon={<BookOpen className={statusFilter === "all" ? "text-white" : "text-primary-500"} size={20} />}
-                          label="Total Words"
-                          value={stats?.total}
-                          isActive={statusFilter === "all"}
-                          onClick={() => handleStatusFilterChange("all")}
-                        />
-                        <VocabularyMetricButton
-                          icon={<Sparkles className={statusFilter === "new" ? "text-white" : "text-slate-500"} size={20} />}
-                          label="New"
-                          value={stats?.new}
-                          isActive={statusFilter === "new"}
-                          onClick={() => handleStatusFilterChange("new")}
-                        />
-                        <VocabularyMetricButton
-                          icon={<Clock className={statusFilter === "learning" ? "text-white" : "text-indigo-500"} size={20} />}
-                          label="Learning"
-                          value={stats?.learning}
-                          isActive={statusFilter === "learning"}
-                          onClick={() => handleStatusFilterChange("learning")}
-                        />
-                        <VocabularyMetricButton
-                          icon={<AlertCircle className={statusFilter === "due" ? "text-white" : "text-amber-500"} size={20} />}
-                          label="Due"
-                          value={stats?.due}
-                          isActive={statusFilter === "due"}
-                          onClick={() => handleStatusFilterChange("due")}
-                        />
+                        {STAT_METRICS.map((metric) => {
+                          const isActive = statusFilter === metric.value;
+                          return (
+                            <VocabularyMetricButton
+                              key={metric.value}
+                              icon={metric.icon(isActive)}
+                              label={metric.label}
+                              value={stats?.[metric.statsKey]}
+                              isActive={isActive}
+                              onClick={() => handleStatusFilterChange(metric.value)}
+                            />
+                          );
+                        })}
                       </div>
                       <div className="flex items-center gap-2">
                         {searchOpen ? (

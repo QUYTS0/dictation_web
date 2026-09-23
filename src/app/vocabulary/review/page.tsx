@@ -107,10 +107,18 @@ export default function VocabularyReviewPage() {
         ) : !current ? (
           <section className="w-full rounded-3xl border border-white/60 bg-white/40 p-8 text-center shadow-xl backdrop-blur-xl">
             <p className="text-3xl">🎉</p>
-            <h1 className="mt-2 text-xl font-bold text-slate-900">Nothing due for review</h1>
+            {/* This session's queue is a capped batch (REVIEW_BATCH_SIZE in
+                GET /api/vocabulary/review), not the full due backlog —
+                finishing it doesn't guarantee nothing else is due, so once
+                the user has actually reviewed something this deliberately
+                avoids claiming "nothing due". That claim is only accurate
+                when the queue was empty from the very first fetch. */}
+            <h1 className="mt-2 text-xl font-bold text-slate-900">
+              {reviewedCount > 0 ? "Session complete" : "Nothing due for review"}
+            </h1>
             <p className="mt-2 text-sm text-slate-500">
               {reviewedCount > 0
-                ? `You reviewed ${reviewedCount} item${reviewedCount === 1 ? "" : "s"}. Come back later for more.`
+                ? `You reviewed ${reviewedCount} item${reviewedCount === 1 ? "" : "s"}. Check the Vocabulary Bank to keep going.`
                 : "You're all caught up. Saved vocabulary reappears here as it becomes due."}
             </p>
             <Link
@@ -122,7 +130,9 @@ export default function VocabularyReviewPage() {
           </section>
         ) : (
           <>
-            <p className="text-sm font-medium text-slate-500">{queue.length} due</p>
+            {/* Remaining items in this loaded (capped) queue — a session
+                progress count, not the user's full review backlog. */}
+            <p className="text-sm font-medium text-slate-500">{queue.length} left in this session</p>
             {error ? <p className="text-sm text-red-600">{error}</p> : null}
             <div className="w-full rounded-3xl border border-white/60 bg-white/50 p-10 text-center shadow-xl backdrop-blur-xl">
               <h2 className="text-3xl font-bold text-indigo-900">{current.term}</h2>
