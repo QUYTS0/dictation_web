@@ -29,12 +29,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       id: string;
       status: "processing" | "ready" | "failed";
       source: "cache" | "ai" | "manual";
+      version: number;
     } | null = null;
 
     if (pinnedTranscriptId) {
       const { data: pinned, error: pinnedError } = await supabase
         .from("transcripts")
-        .select("id, status, source, youtube_video_id, language")
+        .select("id, status, source, version, youtube_video_id, language")
         .eq("id", pinnedTranscriptId)
         .maybeSingle();
 
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       // once regeneration can leave multiple ready rows coexisting.
       const { data: currentTranscript, error: currentError } = await supabase
         .from("transcripts")
-        .select("id, status, source")
+        .select("id, status, source, version")
         .eq("youtube_video_id", videoId)
         .eq("language", lang)
         .eq("is_current", true)
@@ -81,7 +82,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         // reported accurately instead of looking like "no transcript at all".
         const { data: latestTranscript, error: latestError } = await supabase
           .from("transcripts")
-          .select("id, status, source")
+          .select("id, status, source, version")
           .eq("youtube_video_id", videoId)
           .eq("language", lang)
           .order("updated_at", { ascending: false })
@@ -184,6 +185,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       title,
       segments,
       transcriptId: transcript.id,
+      version: transcript.version,
     });
   } catch (err) {
     console.error("[transcript GET] unexpected error:", err);

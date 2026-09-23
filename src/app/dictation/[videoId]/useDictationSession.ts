@@ -1159,6 +1159,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     segments,
     transcriptStatus,
     transcriptTitle: transcriptQuery.data?.title,
+    transcriptVersion: transcriptQuery.data?.version ?? null,
     transcriptIsLoading: transcriptQuery.isLoading,
     ytPlayerRef,
     restoredInputState,

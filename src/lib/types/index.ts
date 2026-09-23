@@ -145,6 +145,11 @@ export interface TranscriptResponse {
    *  to a different video/language gets a 404 instead, never a silent
    *  substitution with the current revision. */
   transcriptId?: string | null;
+  /** The real `transcripts.version` integer for this revision, when the
+   *  row is known (never present for the "processing"/"no transcript yet"
+   *  responses) — a genuine identifier, never a fabricated/guessed number.
+   *  Used only as secondary display metadata (e.g. transcript export). */
+  version?: number | null;
 }
 
 // ---- Listening practice / translation types ----
