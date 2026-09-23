@@ -57,14 +57,15 @@ beforeEach(() => {
 });
 
 describe("POST /api/session/save-progress — Phase 0 transcript pinning", () => {
-  it("13. an update on an existing session (sessionId supplied) never writes transcript_id", async () => {
+  it("13. an update on an existing session (sessionId supplied) never writes transcript_id, even when the supplied id matches the pin", async () => {
+    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
     queueResponse("learning_sessions", { data: { id: "sess-1" }, error: null }); // update ... .single()
 
     const res = await POST(
       makeRequest({
         sessionId: "sess-1",
         youtubeVideoId: "vid1",
-        transcriptId: "attacker-supplied-id",
+        transcriptId: "rev-A",
         currentSegmentIndex: 3,
         accuracy: 80,
         totalAttempts: 5,
@@ -72,19 +73,58 @@ describe("POST /api/session/save-progress — Phase 0 transcript pinning", () =>
     );
     expect(res.status).toBe(200);
 
-    const sessionsBuilder = fromMock.mock.results[fromMock.mock.calls.findIndex((c) => c[0] === "learning_sessions")].value;
-    const updateCall = (sessionsBuilder.update as jest.Mock).mock.calls[0][0];
-    expect(updateCall).not.toHaveProperty("transcript_id");
+    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
+    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].builder.update.mock.calls[0][0]).not.toHaveProperty("transcript_id");
+  });
+
+  it("13. an update on an existing session omitting transcriptId still succeeds (compatibility — no identity to check)", async () => {
+    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
+    queueResponse("learning_sessions", { data: { id: "sess-1" }, error: null }); // update ... .single()
+
+    const res = await POST(
+      makeRequest({
+        sessionId: "sess-1",
+        youtubeVideoId: "vid1",
+        currentSegmentIndex: 3,
+        accuracy: 80,
+        totalAttempts: 5,
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("13. an update on an existing session rejects a supplied transcriptId that mismatches the session's actual pin, without writing progress", async () => {
+    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
+
+    const res = await POST(
+      makeRequest({
+        sessionId: "sess-1",
+        youtubeVideoId: "vid1",
+        transcriptId: "rev-B", // client believes it's on B; session is actually pinned to A
+        currentSegmentIndex: 3,
+        accuracy: 80,
+        totalAttempts: 5,
+      })
+    );
+    const json = await res.json();
+    expect(res.status).toBe(409);
+    expect(json.code).toBe("stale_transcript_revision");
+
+    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
+    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
+    expect(updateCalls).toHaveLength(0);
   });
 
   it("13. an ordinary progress save for an already-active session never overwrites its pinned transcript_id", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-2" }, error: null }); // existingActiveSession lookup
+    queueResponse("learning_sessions", { data: { id: "sess-2", transcript_id: "rev-A" }, error: null }); // existingActiveSession lookup
     queueResponse("learning_sessions", { data: { id: "sess-2" }, error: null }); // update ... .single()
 
     const res = await POST(
       makeRequest({
         youtubeVideoId: "vid2",
-        transcriptId: "some-other-revision",
+        transcriptId: "rev-A",
         currentSegmentIndex: 4,
         accuracy: 80,
         totalAttempts: 5,
@@ -96,6 +136,27 @@ describe("POST /api/session/save-progress — Phase 0 transcript pinning", () =>
     const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
     expect(updateCalls).toHaveLength(1);
     expect(updateCalls[0].builder.update.mock.calls[0][0]).not.toHaveProperty("transcript_id");
+  });
+
+  it("13. an ordinary progress save rejects a supplied transcriptId that mismatches the active session's pin, without writing progress", async () => {
+    queueResponse("learning_sessions", { data: { id: "sess-2", transcript_id: "rev-A" }, error: null }); // existingActiveSession lookup
+
+    const res = await POST(
+      makeRequest({
+        youtubeVideoId: "vid2",
+        transcriptId: "rev-B", // stale: displayed/practiced against a different revision than the pin
+        currentSegmentIndex: 4,
+        accuracy: 80,
+        totalAttempts: 5,
+      })
+    );
+    const json = await res.json();
+    expect(res.status).toBe(409);
+    expect(json.code).toBe("stale_transcript_revision");
+
+    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
+    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
+    expect(updateCalls).toHaveLength(0);
   });
 
   it("3. a first-touch session creation resolves transcript_id server-side from the current transcript, ignoring a matching client value", async () => {

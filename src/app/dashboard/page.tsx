@@ -335,7 +335,10 @@ export default function DashboardPage() {
                             <div className="mt-auto">
                               <div className="mb-1 flex justify-between text-xs text-slate-600">
                                 <span>
-                                  {(firstSession.currentSegmentIndex ?? 0) + 1} segments · {firstSession.totalAttempts ?? 0} attempts
+                                  {/* currentSegmentIndex is the saved resume position (0-based),
+                                      not a count of the video's segments — labeled accordingly so
+                                      an early/default position never reads as "coverage". */}
+                                  Saved at sentence {(firstSession.currentSegmentIndex ?? 0) + 1} · {firstSession.totalAttempts ?? 0} attempts
                                 </span>
                                 <span className="font-medium">{firstSession.accuracy ?? 0}%</span>
                               </div>

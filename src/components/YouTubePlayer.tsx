@@ -50,6 +50,15 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     const activeSegmentIdxRef = useRef<number>(0);
     const isPausedRef = useRef<boolean>(false);
     const playbackRateRef = useRef<number>(1);
+    // Ownership token: bumped every time initPlayer() creates a new
+    // underlying YT.Player. Every callback that writes to the shared
+    // playerStore (tick, onReady, onStateChange) closes over the token
+    // value at the moment IT was registered and checks it against
+    // instanceIdRef.current before writing — so a late event/interval tick
+    // from a destroyed instance (e.g. a trailing callback that fires during
+    // teardown, or an overlapping create/destroy under React Strict Mode)
+    // can never overwrite state that belongs to a newer, current instance.
+    const instanceIdRef = useRef(0);
     // Continuous mode only: set by playSegmentFn to the segment a manual
     // Replay/Next/Previous navigated to. playSegmentFn seeks to a small
     // pre-roll point *before* that segment's start (see
@@ -66,6 +75,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
     const setDuration = usePlayerStore((s) => s.setDuration);
     const setCurrentSegmentIndex = usePlayerStore((s) => s.setCurrentSegmentIndex);
+    const resetPlayback = usePlayerStore((s) => s.resetPlayback);
 
     // Keep segments accessible in the tick callback without re-creating it
     const segmentsRef = useRef(segments);
@@ -93,9 +103,16 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       onActiveSegmentChangeRef.current = onActiveSegmentChange;
     }, [onActiveSegmentChange]);
 
-    const startTick = useCallback(() => {
+    const startTick = useCallback((ownerInstanceId: number) => {
       if (tickRef.current) clearInterval(tickRef.current);
       tickRef.current = setInterval(() => {
+        // This instance was superseded (a newer player was created) since
+        // this interval was started — stop writing to the shared store.
+        // The interval itself is cleared by whichever code superseded us
+        // (stopTick()/destroy()), but this guard closes the small window
+        // where a tick already queued on the event loop fires before that
+        // cleanup runs.
+        if (instanceIdRef.current !== ownerInstanceId) return;
         const player = playerRef.current;
         if (!player) return;
         const time = player.getCurrentTime?.() ?? 0;
@@ -160,10 +177,27 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
     const initPlayer = useCallback(() => {
       if (!containerRef.current) return;
+      // Stop any interval left running from a previous instance before
+      // creating a new one — this must happen here (not only in the
+      // effect's cleanup below), since the "API already loaded" path calls
+      // initPlayer() directly on every videoId change without the effect
+      // ever unmounting/cleaning up in between. Leaving the old interval
+      // running would poll a `playerRef.current` that's about to be
+      // reassigned to the new player, feeding stale/erratic times into the
+      // shared store alongside the new instance's own tick.
+      stopTick();
       if (playerRef.current) {
         playerRef.current.destroy();
       }
       playerReadyRef.current = false;
+      // This instance is now the sole owner of the shared player store —
+      // mint a fresh token (invalidating any callback still in flight from
+      // whatever instance owned it before, even if destroy() above doesn't
+      // fully suppress a trailing event) and clear any time/status/duration
+      // that instance left behind, so nothing stale is ever briefly shown
+      // as if it belonged to this one.
+      const myInstanceId = ++instanceIdRef.current;
+      resetPlayback();
 
       playerRef.current = new window.YT.Player(containerRef.current, {
         videoId,
@@ -181,6 +215,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         events: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onReady: (event: any) => {
+            if (instanceIdRef.current !== myInstanceId) return;
             playerReadyRef.current = true;
             setStatus("ready");
             setDuration(event.target.getDuration());
@@ -190,10 +225,11 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onStateChange: (event: any) => {
+            if (instanceIdRef.current !== myInstanceId) return;
             if (event.data === window.YT.PlayerState.PLAYING) {
               setStatus("playing");
               isPausedRef.current = false;
-              startTick();
+              startTick(myInstanceId);
             } else if (event.data === window.YT.PlayerState.PAUSED) {
               setStatus("paused");
               stopTick();
@@ -204,7 +240,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           },
         },
       });
-    }, [videoId, setStatus, setDuration, startTick, stopTick]);
+    }, [videoId, setStatus, setDuration, startTick, stopTick, resetPlayback]);
 
     // Load the YouTube IFrame API script once
     useEffect(() => {
@@ -214,19 +250,27 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
       if (window.YT && window.YT.Player) {
         initPlayer();
-        return;
+      } else {
+        const tag = document.createElement("script");
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScript = document.getElementsByTagName("script")[0];
+        firstScript?.parentNode?.insertBefore(tag, firstScript);
+
+        window.onYouTubeIframeAPIReady = () => {
+          initPlayer();
+        };
       }
 
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      const firstScript = document.getElementsByTagName("script")[0];
-      firstScript?.parentNode?.insertBefore(tag, firstScript);
-
-      window.onYouTubeIframeAPIReady = () => {
-        initPlayer();
-      };
-
+      // Registered unconditionally (previously only on the "script still
+      // loading" branch above) — the "API already loaded" branch used to
+      // return early with no cleanup at all, so nothing ever called
+      // stopTick()/destroy() between successive initPlayer() calls on that
+      // path (see the leading stopTick() now inside initPlayer() itself,
+      // which covers that gap defensively too).
       return () => {
+        // Invalidate any callback still in flight from this instance even
+        // if destroy() below doesn't fully suppress a trailing event.
+        instanceIdRef.current += 1;
         stopTick();
         playerRef.current?.destroy();
       };

@@ -148,6 +148,8 @@ export default function DictationPage({ params }: PageProps) {
     previousReview,
     regenerating,
     regenerateError,
+    pendingRevisionNotice,
+    dismissPendingRevisionNotice,
     autoGenerateErrorCode,
     nextAutoRetryAt,
     checkAnswerError,
@@ -816,11 +818,18 @@ export default function DictationPage({ params }: PageProps) {
 
   useEffect(() => {
     const wasShowingVideo = previousShowVideoRef.current;
+    // Reads the store fresh at the moment showVideo actually flips, rather
+    // than subscribing to playerStore.currentTimeSec/uxState (which would
+    // re-run this effect on every ~200ms tick and risk seeking from a
+    // value captured in an unrelated earlier render). The player itself is
+    // the one continuously updating currentTimeSec while visible; this
+    // effect only needs to (re)sync once, on a real hidden→shown edge.
     if (!wasShowingVideo && showVideo) {
-      ytPlayerRef.current?.seekTo(playerStore.currentTimeSec, uxState === "playing");
+      const live = usePlayerStore.getState();
+      ytPlayerRef.current?.seekTo(live.currentTimeSec, live.status === "playing");
     }
     previousShowVideoRef.current = showVideo;
-  }, [showVideo, playerStore.currentTimeSec, uxState, ytPlayerRef]);
+  }, [showVideo, ytPlayerRef]);
 
   useEffect(() => {
     ytPlayerRef.current?.setPlaybackRate(playbackRate);
@@ -1000,6 +1009,8 @@ export default function DictationPage({ params }: PageProps) {
             onRegenerateScript={handleRegenerateClick}
             regenerating={regenerating}
             regenerateError={regenerateError}
+            pendingRevisionNotice={pendingRevisionNotice}
+            onDismissPendingRevisionNotice={dismissPendingRevisionNotice}
             onLoadSrtFile={handleLoadSrtClick}
             srtParsing={srtParsing}
             srtUploadError={srtUploadError}

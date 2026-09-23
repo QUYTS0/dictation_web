@@ -3803,6 +3803,64 @@ Phase 2/3 don't exist yet) already resolves `transcript_id` server-side from `is
 rejects a client/server mismatch with `409 stale_transcript_revision`, since Phase 0 needs this
 working now, not merely scheduled for a later phase.
 
+**Follow-up pass — application-side lifecycle bug fix (this pass): code implemented and locally
+verified; not deployed; real-device/browser verification pending.** A user-reported reproduction
+(regenerate mid-session → video "resets", Dashboard shows a misleadingly low saved position,
+reopening shows a stale/oscillating player state) was audited and, in this pass, actually fixed —
+not merely re-audited. Root causes found in the **client and one API route**, not in the writer/
+reader work above, which was independently confirmed still correct:
+- `handleRegenerateTranscript` (`useDictationSession.ts`) used to reset segment index/uxState/
+  counters/the sessionStorage snapshot **synchronously, before the publish request even resolved**,
+  and never restored them on failure — regenerate now preserves an already-established lesson's
+  session identity, pinned revision, displayed segments, sentence, counters, and drafts entirely;
+  it only refetches/resets when there was no usable lesson yet (first generation / retry from
+  failed). A same-revision republish is a no-op; a different-revision republish surfaces a
+  dismissible notice instead of silently swapping the displayed content out from under the session.
+- The uxState-sync effect's active-session guard read a `uxStateRef` mirror kept in sync by a
+  *separate* effect one render behind — under React's same-commit effect ordering this could
+  briefly read a stale value and let a background transcript refetch overwrite a just-set
+  "playing"/"paused_waiting_input" state back to the pre-start screen (reproduces the reported
+  Resume→"Start Dictation" flip while playback continued underneath). Fixed by reading `uxState`
+  directly instead of the lagging ref.
+- `playerStore` (global Zustand store) was never reset at any lifecycle boundary, and
+  `YouTubePlayer`'s `initPlayer()` never called `stopTick()` — combined with the outer effect only
+  registering its cleanup on the "API script still loading" branch (not the common "already
+  loaded" branch), a previous instance's polling interval could keep running and writing
+  time/status into the shared store after a new instance took over. Fixed with an ownership-token
+  guard (only the current instance's callbacks may write to the store) plus an explicit
+  `resetPlayback()` at the ownership boundary and an unconditional cleanup registration.
+- `sessionPersistence.ts` snapshots had no identity scoping beyond `videoId` — a restored
+  snapshot could not be told apart from one captured under a different user or transcript
+  revision. Added `userId`/`transcriptId` to the snapshot and an `isSnapshotCompatible` check;
+  legacy snapshots missing those fields are treated as incompatible (discarded, not guessed at).
+- `save-progress/route.ts`'s existing-session UPDATE paths (both `sessionId`-supplied and the
+  active-session-reuse lookup) resolved the session's actual pinned `transcript_id` but never
+  validated a client-supplied `transcriptId` against it — a mismatch is now rejected with
+  `409 stale_transcript_revision` rather than silently saving progress against the wrong content,
+  mirroring the INSERT path's existing guard.
+- The Dashboard's resumable-session card rendered `currentSegmentIndex + 1` labeled "segments"
+  (`src/app/dashboard/page.tsx`) — a pre-existing (pre-Phase-0) mislabeling, not data loss; relabeled
+  "Saved at sentence N".
+- A context-epoch ref now invalidates in-flight regenerate/resume-fetch responses after a video/
+  user switch or an explicit Restart, and delayed transitions (the correct-answer auto-advance,
+  the resume seek) are tracked and cancelled alongside it, so a late response/callback can never
+  apply to a context the user has already left.
+
+Verification: `npx tsc --noEmit`, `npm run lint` (0 errors), `npm run build`, and `npm test`
+(937 passed, 7 skipped — same pre-existing skipped integration tier as above) all pass locally.
+New automated coverage: `src/__tests__/useDictationSession.test.tsx` (React Testing Library
+`renderHook`, mocked API — regeneration preserves an established lesson across same-revision/
+different-revision/failed/stale-after-navigation cases, autosave never fires before identity
+resolves, backward navigation still saves, Resume survives a concurrent refetch, Restart still
+works), `src/__tests__/sessionPersistence.test.ts` (snapshot identity compatibility, including the
+legacy-snapshot case), `src/__tests__/YouTubePlayer.test.tsx` (instance-ownership token, stale-tick/
+stale-event rejection, no time oscillation across instance switches), and updated
+`src/__tests__/session-save-progress-route.test.ts` (the new mismatch-rejection cases). **Not
+executed:** the real-Postgres integration tier (unchanged from above); real-device/browser
+acceptance of the original reported repro (regenerate mid-session on an actual YouTube embed,
+iPhone Safari/PWA) — mocked/unit tests establish the fixed logic, not real-player/network timing;
+see the completion report delivered alongside this pass for exact manual acceptance steps.
+
 - **Modify:** `src/app/api/transcript/generate/route.ts` — stop hard-deleting/reusing on
   regeneration; call `fn_publish_transcript_revision` (§8.3) instead of sequential REST calls, so
   publication is atomic and duplicate/current-revision logic is applied correctly from day one.

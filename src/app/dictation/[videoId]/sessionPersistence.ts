@@ -21,6 +21,15 @@ export interface PersistedInputState {
 
 export interface DictationSessionSnapshot {
   videoId: string;
+  /** Signed-in user this snapshot belongs to, or null for a guest — a
+   *  snapshot must never be applied to a different user sharing the same
+   *  browser/tab. */
+  userId: string | null;
+  /** The revision (transcript_id) this snapshot's segIdx/checkResult/etc.
+   *  actually refer to — a snapshot must never be applied against a
+   *  different revision than the one it was captured from, since segment
+   *  indices/content can differ between revisions. */
+  transcriptId: string | null;
   uxState: UXState;
   currentSegIdx: number;
   checkResult: CheckAnswerResponse | null;
@@ -92,4 +101,33 @@ export function clearDictationSessionSnapshot(videoId: string): void {
   } catch {
     // ignore
   }
+}
+
+export interface SnapshotIdentityContext {
+  videoId: string;
+  userId: string | null;
+  transcriptId: string | null;
+}
+
+/**
+ * Whether a loaded snapshot's identity matches the context it would be
+ * restored into — a snapshot captured for a different user or a different
+ * transcript revision must never be silently applied (segment indices and
+ * content aren't comparable across revisions, and a snapshot is per-tab
+ * sessionStorage that could still reflect a previous user's in-progress
+ * text on a shared device). Snapshots saved before this identity scoping
+ * existed have no `userId`/`transcriptId` field at all (`undefined` at
+ * runtime despite the type) — treated as incompatible rather than guessed
+ * at, so they're discarded once instead of risking a silent misapplication.
+ */
+export function isSnapshotCompatible(
+  snapshot: DictationSessionSnapshot | null,
+  context: SnapshotIdentityContext
+): snapshot is DictationSessionSnapshot {
+  if (!snapshot) return false;
+  if (snapshot.videoId !== context.videoId) return false;
+  if (typeof snapshot.userId === "undefined" || typeof snapshot.transcriptId === "undefined") return false;
+  if (snapshot.userId !== context.userId) return false;
+  if (snapshot.transcriptId !== context.transcriptId) return false;
+  return true;
 }

@@ -33,7 +33,40 @@ export async function POST(request: NextRequest) {
     }
 
     if (sessionId) {
-      // Update existing session
+      // Resolve this session's actual pinned revision before writing. A
+      // caller that supplies a transcriptId is telling us which revision it
+      // believes it's displaying/practicing against — if that doesn't match
+      // what the session is actually pinned to, this request must not
+      // silently save progress as if it were made against the right
+      // content (e.g. a client that's fallen behind after a regeneration
+      // published a different current revision).
+      const { data: existingSession, error: existingSessionError } = await supabase
+        .from("learning_sessions")
+        .select("id, transcript_id")
+        .eq("id", sessionId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (existingSessionError) {
+        console.error("[save-progress] session lookup error:", existingSessionError);
+        return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
+      }
+      if (!existingSession) {
+        return NextResponse.json({ error: "Failed to update session" }, { status: 500 });
+      }
+      if (transcriptId && existingSession.transcript_id && transcriptId !== existingSession.transcript_id) {
+        return NextResponse.json(
+          {
+            error: "The transcript revision has changed since this page loaded. Please refresh and try again.",
+            code: "stale_transcript_revision",
+          },
+          { status: 409 }
+        );
+      }
+
+      // Phase 0: transcript_id is deliberately left out of this UPDATE
+      // entirely — a round pins its revision at creation and never repins
+      // it from an ordinary progress save.
       const { data, error } = await supabase
         .from("learning_sessions")
         .update({
@@ -67,7 +100,7 @@ export async function POST(request: NextRequest) {
       // Reuse an existing active session for this user+video when available.
       const { data: existingActiveSession, error: existingSessionError } = await supabase
         .from("learning_sessions")
-        .select("id")
+        .select("id, transcript_id")
         .eq("user_id", user.id)
         .eq("youtube_video_id", youtubeVideoId)
         .eq("status", "active")
@@ -81,6 +114,23 @@ export async function POST(request: NextRequest) {
       }
 
       if (existingActiveSession) {
+        // Same identity check as the sessionId branch above — a mismatched
+        // client-supplied transcriptId means this save was produced against
+        // different content than what this session is actually pinned to.
+        if (
+          transcriptId &&
+          existingActiveSession.transcript_id &&
+          transcriptId !== existingActiveSession.transcript_id
+        ) {
+          return NextResponse.json(
+            {
+              error: "The transcript revision has changed since this page loaded. Please refresh and try again.",
+              code: "stale_transcript_revision",
+            },
+            { status: 409 }
+          );
+        }
+
         // Phase 0: a round pins its transcript revision at creation and
         // never repins it from an ordinary progress save — transcript_id is
         // deliberately left out of this UPDATE entirely (not "preserved via
