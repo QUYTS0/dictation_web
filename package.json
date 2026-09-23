@@ -41,6 +41,7 @@
     "@testing-library/user-event": "^14.6.7",
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/youtube": "^0.2.0",
@@ -49,6 +50,7 @@
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.5.1",
     "jest-environment-node": "^30.3.0",
+    "pg": "^8.23.0",
     "tailwindcss": "^4",
     "ts-jest": "^29.4.9",
     "typescript": "^5"

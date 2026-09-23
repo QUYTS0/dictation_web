@@ -247,3 +247,45 @@ describe("POST /api/session/save-progress — Phase 0 transcript pinning", () =>
     expect(insertCalls[0].builder.insert.mock.calls[0][0]).toMatchObject({ transcript_id: "current-rev" });
   });
 });
+
+describe("POST /api/session/save-progress — Phase 1 concurrent-first-save compatibility (migration 030)", () => {
+  it("a concurrent first-save that loses the learning_sessions_one_active_per_video race reuses the winner's round instead of failing", async () => {
+    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session (checked before the race)
+    queueResponse("transcripts", { data: { id: "current-rev" }, error: null }); // is_current lookup
+    queueResponse("learning_sessions", {
+      data: null,
+      error: { code: "23505", message: 'duplicate key value violates unique constraint "learning_sessions_one_active_per_video"' },
+    }); // insert loses the race
+    queueResponse("learning_sessions", { data: { id: "winner-sess" }, error: null }); // post-conflict active lookup
+
+    const res = await POST(
+      makeRequest({
+        youtubeVideoId: "vid7",
+        currentSegmentIndex: 0,
+        accuracy: 0,
+        totalAttempts: 0,
+      })
+    );
+    const json = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ sessionId: "winner-sess", status: "active" });
+  });
+
+  it("an insert failure unrelated to the unique constraint still reports a 500, not a false recovery", async () => {
+    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session
+    queueResponse("transcripts", { data: { id: "current-rev" }, error: null }); // is_current lookup
+    queueResponse("learning_sessions", { data: null, error: { code: "23503", message: "some other constraint" } }); // unrelated FK error
+
+    const res = await POST(
+      makeRequest({
+        youtubeVideoId: "vid8",
+        currentSegmentIndex: 0,
+        accuracy: 0,
+        totalAttempts: 0,
+      })
+    );
+
+    expect(res.status).toBe(500);
+  });
+});

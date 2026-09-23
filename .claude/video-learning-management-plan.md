@@ -1752,8 +1752,11 @@ comment on table learning_sessions is
 ```
 
 The `provenance` default is `'current'` here (schema only, harmless); the actual retroactive
-`'legacy_unverified'` tagging of every pre-existing row happens in migration `033`, deliberately
-co-located with the Dictation route's cutover (§12, R18) rather than here.
+`'legacy_unverified'` tagging of every pre-existing row happens in migration `034`, deliberately
+co-located with the Dictation route's cutover (§12, R18) rather than here. (Corrected from an
+earlier draft's stale `033` cross-reference — per §8.1's authoritative numbering table, `033`
+bundles Phase 2's RPC functions; the provenance backfill has always meant `034`,
+`034_provenance_backfill_and_completion_cutover.sql`, Phase 3.)
 
 ### 8.5 `023_study_sessions.sql`
 
@@ -3911,6 +3914,71 @@ Every table any later function will reference is created here, in one batch, clo
 dependency-ordering bug the review found — **and** the round-uniqueness invariant Phase 2's
 functions will assume is established here too, before anything depends on it (R21, moved from the
 old "Phase 7").
+
+**Implementation status (as of this pass): implemented and locally verified (mocked/unit tier);
+NOT applied to any Supabase project, linked or otherwise, and NOT database-integration-verified.**
+All nine migration files (`022`-`030`) are written against the actual current schema (verified by
+direct read of `supabase/migrations/001_initial.sql` and `012_listening_sessions.sql`, not copied
+from this plan's SQL without checking real column names/behavior — several small defects were
+found and fixed in the process, listed below). `ownsStudySession` is added to
+`src/lib/supabase/ownership.ts`, matching `ownsSession`/`ownsAttempt`'s exact shape.
+`npx tsc --noEmit`, `npm run lint`, `npm run build`, and `npm test` all pass locally against the
+resulting application code (exact counts in the Phase 1 completion report). A new real-Postgres
+integration suite, `src/__tests__/integration/phase1-schema.integration.test.ts`, is written and
+gated to skip cleanly (not reported as passing) when its required env vars are absent — it was
+**not executed**, for the same reason Phase 0's integration suite wasn't: no `supabase`/`docker`
+CLI is available in this environment. See `supabase/PHASE1_RUNBOOK.md` for the exact apply
+procedure, preflight/postflight queries, and locking/rollback discussion.
+
+Small defects found in the plan's SQL during implementation, corrected here (each also noted in
+its migration file's own comments):
+
+- §8.4's prose referenced migration `033` for the retroactive `provenance`/
+  `segment_identity_provenance` backfill; per §8.1's own authoritative numbering table this has
+  always meant `034` (`033` bundles Phase 2's RPC functions) — corrected in place above.
+- §5's Video-library-membership backfill (migration `027`): the plan's original two separately
+  `GROUP BY`-then-`UNION`-then-`ON CONFLICT DO NOTHING` queries could discard a source's
+  timestamps for any `(user, video)` pair present in both `learning_sessions` and
+  `listening_sessions` — whichever grouped row happened to be processed first by `ON CONFLICT DO
+  NOTHING` silently "won" the whole row. Implemented instead as `UNION ALL` of both sources
+  row-wise, THEN a single `GROUP BY (user_id, youtube_video_id)` computing `min(started_at)` /
+  `max(last_activity_at)` across the combined set — genuinely the earliest/latest across both
+  sources together, never decided by arbitrary source ordering.
+- §8.8's listening-progress legacy backfill (migration `026`) used `DISTINCT ON (...) ORDER BY ...
+  updated_at DESC` with no tie-breaker for two legacy rows sharing the exact same `updated_at` —
+  added a stable `id DESC` tie-breaker, per the Phase 1 task's explicit "stable tie-breaker for
+  equal timestamps" requirement.
+- §8.15's reconciliation ranking (migration `030`) had the same missing-tie-breaker gap for two
+  active rounds sharing the exact same `updated_at` — added `started_at DESC, id DESC` as
+  deterministic tie-breakers, and added an explicit `user_id IS NOT NULL` filter the plan's prose
+  described but its SQL block didn't actually include — without it, `PARTITION BY user_id,
+  youtube_video_id` groups every anonymous session's `NULL` `user_id` into one partition,
+  incorrectly treating unrelated anonymous visitors as one person's duplicate history.
+- §9.9's two conflicting declarations of the `prevent_self_admin_grant` trigger function (§8.11:
+  plain `language plpgsql`; §9.9: `security definer set search_path = ...`) are reconciled to one
+  tested implementation in migration `029`: `SECURITY INVOKER` (the default — no elevated
+  privilege is actually needed, since the function only reads `NEW`/`OLD` and calls `auth.role()`)
+  with `search_path` still pinned as a hygiene measure independent of `SECURITY DEFINER`.
+- `shadowing_attempts.recording_duration_sec` gained a `CHECK (>= 0)` constraint (migration `025`)
+  not present in the plan's SQL, closing an obvious gap (a negative duration is never valid) rather
+  than leaving it unconstrained.
+- Explicit `GRANT`/`REVOKE` statements were added to every new table (migrations `023`, `025`-`029`)
+  beyond what §8's SQL blocks showed, per this task's §4 requirement to declare intentional
+  privileges rather than rely on Supabase's automatic (and, on newer projects, absent) default
+  grants — documented per-table in each migration file.
+- `save-progress/route.ts`'s first-touch INSERT branch now catches a `23505` (unique-violation) on
+  `learning_sessions_one_active_per_video` and recovers by reusing whichever concurrent request won
+  the race, instead of surfacing a `500` for what is actually the exact "two concurrent first
+  saves" scenario migration `030`'s index now correctly rejects one side of — a narrow
+  compatibility fix, not a redesign; it never redirects to an unrelated round, never touches a
+  transcript pin, and never reactivates an abandoned duplicate.
+
+**Deliberately NOT done in this phase** (explicitly out of scope per the task authorizing this
+pass): `learning_sessions`' own RLS is untouched (verified both `save-progress/route.ts` and
+`session/restart/route.ts` still write it via the caller's own RLS-respecting client today, so
+tightening it now would break both routes); no Phase 2+ RPC function, route cutover, activity
+tracking, or new learning UI was implemented; `app_write_gate` is created unpaused and consulted by
+nothing; no real user was promoted to `is_admin`; no migration was applied to any project.
 
 - **Migrate:** `022_practice_round_columns.sql`, `023_study_sessions.sql`,
   `024_attempt_logs_extensions.sql` (includes tightening the existing `attempts_owner` RLS policy,

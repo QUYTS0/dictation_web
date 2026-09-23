@@ -227,6 +227,43 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
 
+      // Migration 030 (Phase 1) added learning_sessions_one_active_per_video,
+      // a partial unique index on (user_id, youtube_video_id) WHERE
+      // status='active'. Before that index existed, two concurrent
+      // first-saves for the same (user, video) — both finding no
+      // existingActiveSession above, both then reaching this INSERT — could
+      // each succeed, silently creating two active rounds (the exact
+      // duplicate-round bug that migration reconciles). Now the loser gets
+      // a unique-violation here instead. Recover by reusing whichever round
+      // won the race — the same round this request's own lookup above
+      // would have found had it simply run a few milliseconds later — never
+      // redirect to an unrelated round, never touch its transcript pin, and
+      // never fabricate a new one.
+      if (error?.code === "23505") {
+        const { data: winner, error: winnerError } = await supabase
+          .from("learning_sessions")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("youtube_video_id", youtubeVideoId)
+          .eq("status", "active")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (winnerError || !winner) {
+          console.error("[save-progress] post-conflict active session lookup error:", winnerError);
+          return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
+        }
+
+        console.log(
+          `[save-progress] concurrent first-save for video ${youtubeVideoId} resolved to existing active session ${winner.id}`
+        );
+        return NextResponse.json<SaveProgressResponse>({
+          sessionId: winner.id,
+          status: "active",
+        });
+      }
+
       if (error || !data) {
         console.error("[save-progress] insert error:", error);
         return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
