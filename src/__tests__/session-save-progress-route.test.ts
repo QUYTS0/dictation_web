@@ -1,41 +1,22 @@
 import { NextRequest } from "next/server";
 
-type QueryResult = { data?: unknown; error?: unknown };
-
-const responseQueues = new Map<string, QueryResult[]>();
-function queueResponse(table: string, result: QueryResult) {
-  const queue = responseQueues.get(table) ?? [];
-  queue.push(result);
-  responseQueues.set(table, queue);
-}
-function nextResponse(table: string): QueryResult {
-  const queue = responseQueues.get(table) ?? [];
-  return queue.shift() ?? { data: null, error: null };
-}
-
-function makeBuilder(table: string) {
-  const result = nextResponse(table);
-  const builder: Record<string, unknown> = {};
-  const chain = () => builder;
-  for (const method of ["select", "eq", "order", "limit"]) {
-    builder[method] = jest.fn(chain);
-  }
-  builder.insert = jest.fn(chain);
-  builder.update = jest.fn(chain);
-  builder.maybeSingle = jest.fn(() => Promise.resolve(result));
-  builder.single = jest.fn(() => Promise.resolve(result));
-  builder.then = (resolve: (v: QueryResult) => unknown, reject?: (e: unknown) => unknown) =>
-    Promise.resolve(result).then(resolve, reject);
-  return builder;
-}
-
-const fromMock = jest.fn((table: string) => makeBuilder(table));
-const getUserMock = jest.fn(async () => ({ data: { user: { id: "user-1" } } }));
+// Phase 2: save-progress/route.ts now delegates entirely to
+// fn_legacy_save_progress (migration 035) via .rpc() — the transcript-pin
+// validation, race-winner-reuse, and creation logic all moved into that
+// SQL function (covered by src/__tests__/integration/phase2-schema.
+// integration.test.ts against a real Postgres instance). These tests
+// verify the route's own, narrower job: mapping the request body onto the
+// RPC's parameters, and mapping the RPC's response/errors onto the HTTP
+// response.
+const rpcMock = jest.fn();
+const getUserMock = jest.fn(async (): Promise<{ data: { user: { id: string } | null } }> => ({
+  data: { user: { id: "user-1" } },
+}));
 
 jest.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: { getUser: getUserMock },
-    from: (table: string) => fromMock(table),
+    rpc: rpcMock,
   }),
 }));
 
@@ -50,242 +31,97 @@ function makeRequest(body: Record<string, unknown>) {
 }
 
 beforeEach(() => {
-  responseQueues.clear();
-  fromMock.mockClear();
+  rpcMock.mockReset();
   getUserMock.mockClear();
   getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
 });
 
-describe("POST /api/session/save-progress — Phase 0 transcript pinning", () => {
-  it("13. an update on an existing session (sessionId supplied) never writes transcript_id, even when the supplied id matches the pin", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
-    queueResponse("learning_sessions", { data: { id: "sess-1" }, error: null }); // update ... .single()
+describe("POST /api/session/save-progress (Phase 2 — delegates to fn_legacy_save_progress)", () => {
+  it("requires authentication before calling the RPC at all", async () => {
+    getUserMock.mockResolvedValueOnce({ data: { user: null } });
+    const res = await POST(makeRequest({ youtubeVideoId: "vid1", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
+    expect(res.status).toBe(401);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
 
-    const res = await POST(
+  it("requires youtubeVideoId before calling the RPC", async () => {
+    const res = await POST(makeRequest({ currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
+    expect(res.status).toBe(400);
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("maps the request body onto fn_legacy_save_progress's exact parameter names", async () => {
+    rpcMock.mockResolvedValue({ data: { sessionId: "sess-1", status: "active" }, error: null });
+    await POST(
       makeRequest({
         sessionId: "sess-1",
         youtubeVideoId: "vid1",
         transcriptId: "rev-A",
-        currentSegmentIndex: 3,
-        accuracy: 80,
-        totalAttempts: 5,
-      })
-    );
-    expect(res.status).toBe(200);
-
-    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
-    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].builder.update.mock.calls[0][0]).not.toHaveProperty("transcript_id");
-  });
-
-  it("13. an update on an existing session omitting transcriptId still succeeds (compatibility — no identity to check)", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
-    queueResponse("learning_sessions", { data: { id: "sess-1" }, error: null }); // update ... .single()
-
-    const res = await POST(
-      makeRequest({
-        sessionId: "sess-1",
-        youtubeVideoId: "vid1",
-        currentSegmentIndex: 3,
-        accuracy: 80,
-        totalAttempts: 5,
-      })
-    );
-    expect(res.status).toBe(200);
-  });
-
-  it("13. an update on an existing session rejects a supplied transcriptId that mismatches the session's actual pin, without writing progress", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-1", transcript_id: "rev-A" }, error: null }); // pin lookup
-
-    const res = await POST(
-      makeRequest({
-        sessionId: "sess-1",
-        youtubeVideoId: "vid1",
-        transcriptId: "rev-B", // client believes it's on B; session is actually pinned to A
-        currentSegmentIndex: 3,
-        accuracy: 80,
-        totalAttempts: 5,
-      })
-    );
-    const json = await res.json();
-    expect(res.status).toBe(409);
-    expect(json.code).toBe("stale_transcript_revision");
-
-    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
-    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
-    expect(updateCalls).toHaveLength(0);
-  });
-
-  it("13. an ordinary progress save for an already-active session never overwrites its pinned transcript_id", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-2", transcript_id: "rev-A" }, error: null }); // existingActiveSession lookup
-    queueResponse("learning_sessions", { data: { id: "sess-2" }, error: null }); // update ... .single()
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid2",
-        transcriptId: "rev-A",
         currentSegmentIndex: 4,
+        videoCurrentTimeSec: 12.5,
         accuracy: 80,
         totalAttempts: 5,
+        status: "active",
       })
     );
-    expect(res.status).toBe(200);
-
-    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
-    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
-    expect(updateCalls).toHaveLength(1);
-    expect(updateCalls[0].builder.update.mock.calls[0][0]).not.toHaveProperty("transcript_id");
+    expect(rpcMock).toHaveBeenCalledWith("fn_legacy_save_progress", {
+      p_session_id: "sess-1",
+      p_youtube_video_id: "vid1",
+      p_transcript_id: "rev-A",
+      p_current_segment_index: 4,
+      p_video_current_time_sec: 12.5,
+      p_accuracy: 80,
+      p_total_attempts: 5,
+      p_status: "active",
+    });
   });
 
-  it("13. an ordinary progress save rejects a supplied transcriptId that mismatches the active session's pin, without writing progress", async () => {
-    queueResponse("learning_sessions", { data: { id: "sess-2", transcript_id: "rev-A" }, error: null }); // existingActiveSession lookup
+  it("defaults omitted optional fields to null rather than undefined", async () => {
+    rpcMock.mockResolvedValue({ data: { sessionId: "sess-2", status: "active" }, error: null });
+    await POST(makeRequest({ youtubeVideoId: "vid2", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
+    const call = rpcMock.mock.calls[0][1];
+    expect(call.p_session_id).toBeNull();
+    expect(call.p_transcript_id).toBeNull();
+  });
 
+  it("returns the RPC's sessionId/status on success", async () => {
+    rpcMock.mockResolvedValue({ data: { sessionId: "sess-3", status: "active" }, error: null });
+    const res = await POST(makeRequest({ youtubeVideoId: "vid3", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json).toEqual({ sessionId: "sess-3", status: "active" });
+  });
+
+  it("maps a stale_transcript_revision RPC error to 409 with the stable code", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "stale_transcript_revision" } });
     const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid2",
-        transcriptId: "rev-B", // stale: displayed/practiced against a different revision than the pin
-        currentSegmentIndex: 4,
-        accuracy: 80,
-        totalAttempts: 5,
-      })
+      makeRequest({ youtubeVideoId: "vid4", transcriptId: "rev-A", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 })
     );
     const json = await res.json();
     expect(res.status).toBe(409);
     expect(json.code).toBe("stale_transcript_revision");
-
-    const calls = fromMock.mock.calls.map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }));
-    const updateCalls = calls.filter((c) => c.table === "learning_sessions" && (c.builder.update as jest.Mock).mock.calls.length > 0);
-    expect(updateCalls).toHaveLength(0);
   });
 
-  it("3. a first-touch session creation resolves transcript_id server-side from the current transcript, ignoring a matching client value", async () => {
-    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session
-    queueResponse("transcripts", { data: { id: "current-rev" }, error: null }); // is_current lookup
-    queueResponse("learning_sessions", { data: { id: "new-sess" }, error: null }); // insert
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid3",
-        transcriptId: "current-rev",
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
+  it("maps a transcript_not_ready RPC error to 409 with the stable code", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "transcript_not_ready" } });
+    const res = await POST(makeRequest({ youtubeVideoId: "vid5", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
     const json = await res.json();
-    expect(res.status).toBe(200);
-    expect(json.sessionId).toBe("new-sess");
-
-    const insertCalls = fromMock.mock.calls
-      .map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }))
-      .filter((c) => c.table === "learning_sessions" && (c.builder.insert as jest.Mock).mock.calls.length > 0);
-    expect(insertCalls[0].builder.insert.mock.calls[0][0]).toMatchObject({ transcript_id: "current-rev" });
-  });
-
-  it("16. a first-touch session creation rejects a client-believed revision that no longer matches current (the regeneration race)", async () => {
-    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session
-    queueResponse("transcripts", { data: { id: "revision-B" }, error: null }); // is_current is now B
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid4",
-        transcriptId: "revision-A", // client displayed A, unaware B was just published
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
-    const json = await res.json();
-
-    expect(res.status).toBe(409);
-    expect(json.code).toBe("stale_transcript_revision");
-
-    // No insert ever happens for the mismatched request.
-    const insertCalls = fromMock.mock.calls
-      .map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }))
-      .filter((c) => c.table === "learning_sessions" && (c.builder.insert as jest.Mock).mock.calls.length > 0);
-    expect(insertCalls).toHaveLength(0);
-  });
-
-  it("a first-touch session creation with no ready current transcript is rejected rather than pinning null", async () => {
-    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session
-    queueResponse("transcripts", { data: null, error: null }); // no current transcript yet
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid5",
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
-    const json = await res.json();
-
     expect(res.status).toBe(409);
     expect(json.code).toBe("transcript_not_ready");
   });
 
-  it("a first-touch session creation with no client-supplied transcriptId still resolves and pins the current revision", async () => {
-    queueResponse("learning_sessions", { data: null, error: null });
-    queueResponse("transcripts", { data: { id: "current-rev" }, error: null });
-    queueResponse("learning_sessions", { data: { id: "new-sess-2" }, error: null });
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid6",
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
-    expect(res.status).toBe(200);
-
-    const insertCalls = fromMock.mock.calls
-      .map((c, i) => ({ table: c[0], builder: fromMock.mock.results[i].value }))
-      .filter((c) => c.table === "learning_sessions" && (c.builder.insert as jest.Mock).mock.calls.length > 0);
-    expect(insertCalls[0].builder.insert.mock.calls[0][0]).toMatchObject({ transcript_id: "current-rev" });
-  });
-});
-
-describe("POST /api/session/save-progress — Phase 1 concurrent-first-save compatibility (migration 030)", () => {
-  it("a concurrent first-save that loses the learning_sessions_one_active_per_video race reuses the winner's round instead of failing", async () => {
-    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session (checked before the race)
-    queueResponse("transcripts", { data: { id: "current-rev" }, error: null }); // is_current lookup
-    queueResponse("learning_sessions", {
-      data: null,
-      error: { code: "23505", message: 'duplicate key value violates unique constraint "learning_sessions_one_active_per_video"' },
-    }); // insert loses the race
-    queueResponse("learning_sessions", { data: { id: "winner-sess" }, error: null }); // post-conflict active lookup
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid7",
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
+  it("maps a write_gate_paused RPC error to a retryable 503 with Retry-After", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "write_gate_paused" } });
+    const res = await POST(makeRequest({ youtubeVideoId: "vid6", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
     const json = await res.json();
-
-    expect(res.status).toBe(200);
-    expect(json).toEqual({ sessionId: "winner-sess", status: "active" });
+    expect(res.status).toBe(503);
+    expect(json.code).toBe("write_gate_paused");
+    expect(res.headers.get("Retry-After")).toBeTruthy();
   });
 
-  it("an insert failure unrelated to the unique constraint still reports a 500, not a false recovery", async () => {
-    queueResponse("learning_sessions", { data: null, error: null }); // no existing active session
-    queueResponse("transcripts", { data: { id: "current-rev" }, error: null }); // is_current lookup
-    queueResponse("learning_sessions", { data: null, error: { code: "23503", message: "some other constraint" } }); // unrelated FK error
-
-    const res = await POST(
-      makeRequest({
-        youtubeVideoId: "vid8",
-        currentSegmentIndex: 0,
-        accuracy: 0,
-        totalAttempts: 0,
-      })
-    );
-
+  it("maps an unrecognized RPC error to a generic 500, not a raw table-write fallback", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "some_unexpected_db_error" } });
+    const res = await POST(makeRequest({ youtubeVideoId: "vid7", currentSegmentIndex: 0, accuracy: 0, totalAttempts: 0 }));
     expect(res.status).toBe(500);
   });
 });

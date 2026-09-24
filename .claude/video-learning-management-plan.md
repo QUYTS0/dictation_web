@@ -1467,7 +1467,7 @@ with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above)
 
 **Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
 hidden button is not sufficient if a directly callable RPC can still delete):**
-`fn_delete_transcript_revision` **is created by migration `035` fully specified, but with no
+`fn_delete_transcript_revision` **is created by migration `037` fully specified, but with no
 `EXECUTE` grant issued to any application role at all** — `revoke execute on function
 fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
 statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
@@ -1585,11 +1585,14 @@ satisfying acceptance scenario #10 (§13).
 ## 8. Database changes
 
 **Schema is additive throughout — no existing column is dropped, renamed, or retyped anywhere in
-`020`–`035` — but this is not the same claim as "every migration is behaviorally additive," and
+`020`–`037` — but this is not the same claim as "every migration is behaviorally additive," and
 this document does not make the broader claim.** Several migrations change *existing* behavior on
-purpose: `024`, `025`, and `034` remove or replace RLS policies that currently grant direct
-owner-write access (§9.9 — a real permission *removal*, not an addition, verified against actual
-policy text rather than assumed); `030` and `034` `UPDATE` existing rows (`status`, `provenance`).
+purpose: `024` and `036` remove or replace RLS policies that currently grant direct owner-write
+access (§9.9 — a real permission *removal*, not an addition, verified against actual policy text
+rather than assumed), and `031` narrows table-level GRANTs on `attempt_logs` that were never
+policy-gated in the first place (a corrective privilege migration, not part of the original
+numbered sequence — see PHASE2_RUNBOOK.md §1); `030` and `036` `UPDATE` existing rows (`status`,
+`provenance`).
 Each is called out explicitly where it happens, not folded into a blanket "additive" claim. RLS
 follows the exact pattern every existing owner-scoped table already uses
 (`using (auth.uid() = user_id)`) **only for SELECT** on the tables §9.9 lists — the write side is
@@ -1614,11 +1617,13 @@ was originally scheduled before that table existed).
 | 028 | `028_activity_flush_log.sql` | 1 | Create `activity_flush_log`, now with `payload_fingerprint` (R27); owner-SELECT-only RLS |
 | 029 | `029_admin_and_size_estimate_columns.sql` | 1 | `users.is_admin` + `users_prevent_self_admin_grant` trigger (R28); `transcripts` size-estimate columns; `app_write_gate` singleton table (R23) |
 | 030 | `030_practice_round_active_uniqueness.sql` | 1 | **Moved from the old "034"/"Phase 7" (R21)** — audit-logged cleanup of duplicate active rounds + the one-active-round-per-video partial unique index, now run before any function assumes round uniqueness |
-| 031 | `031_fn_record_dictation_attempt.sql` | 2 | Locking, explicit lookup-then-insert Dictation-attempt-plus-completion function (corrected flow, R26) |
-| 032 | `032_fn_record_shadowing_attempt.sql` | 2 | Same, for Shadowing |
-| 033 | `033_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`031`/`032`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 034) |
-| 034 | `034_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply |
-| 035 | `035_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3) |
+| 031 | `031_phase1_privilege_corrections.sql` | 2 | **Not in the original numbered sequence — inserted during Phase 2 implementation (see PHASE2_RUNBOOK.md §1).** Corrects `attempt_logs`/`app_write_gate`/`migration_030_abandoned_rounds_log` table-level GRANTs that a Phase 1 postflight check found broader than intended (RLS itself was already correct — this closes the separate GRANT layer) |
+| 032 | `032_fn_record_dictation_attempt.sql` | 2 | Locking, explicit lookup-then-insert Dictation-attempt-plus-completion function (corrected flow, R26); recomputes `is_correct` server-side from a SQL port of `normalizeText()`'s correctness-determining subset rather than trusting a caller-supplied boolean (Phase 2 trust-boundary correction — see this migration's own header comment) |
+| 033 | `033_fn_record_shadowing_attempt.sql` | 2 | Same shape, for Shadowing — `is_practice_valid` computed from `recording_duration_sec` server-side, never a caller-supplied boolean |
+| 034 | `034_word_match_request_seq.sql` | 2 | **Not in the original numbered sequence — inserted during Phase 2 implementation.** Adds `shadowing_attempts.word_match_request_seq`, mirroring `azure_eval_request_seq`'s shape, so Word Match staleness protection doesn't have to (incorrectly) couple to Azure's own sequence |
+| 035 | `035_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`032`/`033`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated`/`service_role` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 036) |
+| 036 | `036_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply. **Not created or executed in Phase 2.** |
+| 037 | `037_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -1752,11 +1757,12 @@ comment on table learning_sessions is
 ```
 
 The `provenance` default is `'current'` here (schema only, harmless); the actual retroactive
-`'legacy_unverified'` tagging of every pre-existing row happens in migration `034`, deliberately
-co-located with the Dictation route's cutover (§12, R18) rather than here. (Corrected from an
-earlier draft's stale `033` cross-reference — per §8.1's authoritative numbering table, `033`
-bundles Phase 2's RPC functions; the provenance backfill has always meant `034`,
-`034_provenance_backfill_and_completion_cutover.sql`, Phase 3.)
+`'legacy_unverified'` tagging of every pre-existing row happens in migration `036`
+(`036_provenance_backfill_and_completion_cutover.sql`, Phase 3), deliberately co-located with the
+Dictation route's cutover (§12, R18) rather than here. (This cross-reference was originally
+corrected from a stale `033` to `034` during Phase 1, and shifted again to `036` during Phase 2's
+own renumbering — see §8.1's authoritative table and PHASE2_RUNBOOK.md §1 for the full mapping,
+not a specific number repeated in every cross-reference throughout this document.)
 
 ### 8.5 `023_study_sessions.sql`
 
@@ -1833,7 +1839,7 @@ which would have fabricated "no hint used" for every legacy row) — `NULL` mean
 only rows written after this migration, where the client actually reports a hint level, ever have
 a non-null value. `segment_identity_provenance` defaults `'verified'` for all new writes (correct
 under the Phase-0 immutability fix); backfilled legacy rows are tagged `'legacy_unverified'` in
-migration `034`, alongside the round-level `provenance` backfill.
+migration `036`, alongside the round-level `provenance` backfill.
 
 ### 8.7 `025_shadowing_attempts.sql`
 
@@ -2158,10 +2164,12 @@ exists in one early schema batch, per the fix for the review's migration-orderin
 source. The prose subsections below keep their original physical position in this document for
 readability (each function's write-up stays near the ones it mirrors), but §8.15 — migration
 `030`, the duplicate-round reconciliation — now **executes before** §8.12–§8.14's migrations
-(`031`–`034`), per the renumbering in §12. Read §8.1's table, not this section's physical order,
-when the exact deployment sequence matters.
+(`032`, `033`, `035`, `036` — not a contiguous range: `031` and `034` are the two Phase 2
+corrective insertions described in PHASE2_RUNBOOK.md §1, not part of this function-migration
+group), per the renumbering in §12. Read §8.1's table, not this section's physical order, when the
+exact deployment sequence matters.
 
-### 8.12 `031_fn_record_dictation_attempt.sql` / `032_fn_record_shadowing_attempt.sql`
+### 8.12 `032_fn_record_dictation_attempt.sql` / `033_fn_record_shadowing_attempt.sql`
 
 Full logic specified in §6.5 (locking + explicit lookup-then-insert + completion check, one
 function per mode, mirroring each other's shape). Both are `SECURITY DEFINER` (§9.9) and derive
@@ -2184,12 +2192,25 @@ the caller's identity from `auth.uid()` only — never from a request parameter.
    5's completion check, so returning it is free; this is what §11.2/§11.6's direct cache patch of
    `["round", userId, videoId]` actually reads, for both Dictation and Shadowing, §9.3).
 
-Both functions ship with `EXECUTE` revoked from `public`/`anon`/`authenticated` and **no grant
-issued** in this migration — deferred to the Phase 3 cutover runbook's own step (§8.14, issue
-group 1), since each replaces a live legacy writer and must not become callable before that writer
-is actually retired.
+Both functions ship with `EXECUTE` revoked from `public`/`anon`/`authenticated`/`service_role` and
+**no grant issued** in this migration — deferred to the Phase 3 cutover runbook's own step (§8.14,
+issue group 1), since each replaces a live legacy writer and must not become callable before that
+writer is actually retired.
 
-### 8.13 `033_fn_session_activity_and_evaluation_functions.sql`
+**Implemented interface correction (Phase 2 pass):** `fn_record_dictation_attempt` does not accept
+`expected_text`/`is_correct`/a trusted correctness flag as the pseudocode above implies — instead
+it resolves the segment's real text server-side from `(round.transcript_id, segmentIndex)` and
+recomputes `is_correct` itself via `fn_normalize_dictation_text`, a faithful SQL port of
+`normalizeText()`'s correctness-determining subset (not the word-diff/error-classification half,
+which stays display-only, client-computed, and non-authoritative). This closes a fabrication
+vector the literal pseudocode above would otherwise leave open once this function is eventually
+granted to `authenticated` in Phase 3: without it, any signed-in user could call
+`fn_record_dictation_attempt` directly via `.rpc()`, bypassing the Next.js route, and pass
+`is_correct: true` for arbitrary text. See `032_fn_record_dictation_attempt.sql`'s own header
+comment for the full reasoning, and `src/__tests__/integration/phase2-functions.integration.test.ts`
+for the parity verification against representative strings.
+
+### 8.13 `035_fn_session_activity_and_evaluation_functions.sql`
 
 Seven `SECURITY DEFINER` functions, bundled in one migration since all share the same
 execution-identity discipline (§9.9) and this app's scale doesn't warrant a separate file per
@@ -2288,12 +2309,13 @@ never created first and permissioned in a later step, which would leave a privil
 briefly exposed to whatever default grants Postgres/Supabase apply automatically at creation time
 (the same default-privilege gap issue group 2 identifies for `anon`, below).
 
-**The six real, authoritative functions above (`fn_create_or_get_active_round`,
-`fn_update_resume_position`, `fn_restart_round`, and — from `031`/`032` (§8.12) —
+**The five real, authoritative functions above (`fn_create_or_get_active_round`,
+`fn_update_resume_position`, `fn_restart_round`, and — from `032`/`033` (§8.12) —
 `fn_record_dictation_attempt`/`fn_record_shadowing_attempt`) deliberately receive NO grant to
-`authenticated` in this migration.** Each is created with
-`revoke execute on function <name> from public, anon, authenticated;` and no accompanying `grant`
-statement at all — so immediately after Phase 2 deploys, these functions exist, are fully
+`authenticated`, or to any application role, in this migration.** Each is created with
+`revoke execute on function <name> from public, anon, authenticated, service_role;` and no
+accompanying `grant` statement at all — so immediately after Phase 2 deploys, these functions
+exist, are fully
 specified, and are callable by nobody except a superuser/table-owner connection. This is the
 concrete mechanism behind requirement 5 of issue group 1 ("new authoritative writers are not
 accidentally callable early in a way that bypasses the transition"): if the grant were issued here,
@@ -2307,7 +2329,7 @@ are **not** subject to this deferral — they're genuinely new capabilities with
 provenance concept to protect against, §9.9, so their `authenticated` grant is issued normally, in
 this same migration.)
 
-### 8.14 `034_provenance_backfill_and_completion_cutover.sql`
+### 8.14 `036_provenance_backfill_and_completion_cutover.sql`
 
 **This migration now also tightens `learning_sessions`' RLS (§9.9) — moved here from being absent
 entirely, and deliberately not placed in Phase 1, because the *existing* `save-progress`/
@@ -2327,7 +2349,7 @@ issue group 1's core ask):**
 | `dictation/check` route's `attempt_logs` insert | Service-role client → Phase 2: `fn_legacy_record_dictation_attempt` (**added this pass** — see §8.13) | Prep: yes, ungated, until Phase 2 deploys — previously left unfenced entirely, since it's unaffected by RLS. Pause: blocked. Backfill: blocked. Post-activation: replaced by `fn_record_dictation_attempt` | Same `FOR SHARE` gate check, now inside this third bridge |
 | Direct PostgREST write to `learning_sessions` | Authenticated client, RLS | Possible until Part C (below) drops `sessions_owner`/`sessions_anon_insert` — closed as soon as Phase 2 is confirmed live, **not** deferred until the pause window | RLS policy removal (Part C), decoupled from the backfill's timing so this gap doesn't linger any longer than it has to |
 | Direct PostgREST write to `attempt_logs` | Authenticated client, RLS | Already blocked from Phase 1 (`024` drops `attempts_owner`, §8.6) | RLS removal, already in place before this migration runs at all |
-| New real functions (`fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_record_dictation_attempt`, `fn_record_shadowing_attempt`) | `authenticated`, once granted | Created in Phase 2 (`031`–`033`) with **no** `authenticated` grant at all (§8.13); still ungranted through prep/pause/backfill; grant issued for the first time at runbook step 5, atomically with the Phase 3 code deploy | Deferred `GRANT EXECUTE`, not a runtime check (issue group 1, requirement 5) |
+| New real functions (`fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_record_dictation_attempt`, `fn_record_shadowing_attempt`) | `authenticated`, once granted | Created in Phase 2 (`032`, `033`, `035`) with **no** `authenticated` grant at all (§8.13); still ungranted through prep/pause/backfill; grant issued for the first time at runbook step 5, atomically with the Phase 3 code deploy | Deferred `GRANT EXECUTE`, not a runtime check (issue group 1, requirement 5) |
 | Transitional bridges (`fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt`) | `authenticated`/`service_role` per §8.13 | Live and gate-checked through prep/pause/backfill; `DROP FUNCTION`-ed at runbook step 8 | Gate check while they exist; non-existence (not just a revoked grant) afterward — a revoke alone would leave them re-grantable by mistake, a `DROP` cannot be (requirement 6) |
 
 **Part C — tighten `learning_sessions`' RLS, run FIRST, decoupled from the backfill.** This is a
@@ -2558,7 +2580,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `035_fn_delete_transcript_revision.sql`
+### 8.16 `037_fn_delete_transcript_revision.sql`
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -2607,12 +2629,13 @@ after an `is_admin` check inside the function body (§9.9), not expressed as a n
 
 ### 8.18 Rollback
 
-Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`035`. That is
+Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`037`. That is
 **not** the same as every migration being behaviorally reversible-by-default, and this section does
-not claim it is: `030` (formerly `034`'s) `UPDATE` is reversible via its own audit-log table
-(§8.15) — not a bare comment; `034` (formerly `033`'s) provenance-tagging `UPDATE`s are addressed
-separately below (bounded, and not recommended to reverse once Phase 3 is live); and `024`/`025`/
-`034` each remove an existing or newly-added RLS policy granting direct owner-write access — a
+not claim it is: `030` (formerly `034`'s, in the pre-R21 numbering) `UPDATE` is reversible via its
+own audit-log table (§8.15) — not a bare comment; `036`'s (formerly `033`'s, then `034`'s)
+provenance-tagging `UPDATE`s are addressed separately below (bounded, and not recommended to
+reverse once Phase 3 is live); and `024`/`036` each remove an existing or newly-added RLS policy
+granting direct owner-write access, and `031` narrows `attempt_logs`' table-level GRANTs — a
 permission change with its own, separate rollback story (§9.9's tightened policies are reversible
 by re-creating the dropped ones, as §8.14 already specifies for `learning_sessions` specifically;
 `attempt_logs`/`shadowing_attempts` follow the identical pattern if ever needed).
@@ -2654,7 +2677,7 @@ Since Phase 0 now includes the reader-path fix (R21), this also covers the query
 reverting it after Phase 3+ has shipped `roundId`-scoped client state would be part of the same
 one-way commitment, not a separate concern.
 
-**Migration `034`'s (provenance backfill) rollback:** the backfill's `UPDATE`s are, in principle,
+**Migration `036`'s (provenance backfill) rollback:** the backfill's `UPDATE`s are, in principle,
 reversible (`UPDATE learning_sessions SET provenance = 'current' WHERE id IN (...)`, scoped to
 exactly the rows this migration touched — recoverable from `started_at <= :cutover_at`), but doing
 so **after** Phase 3's Dictation cutover has shipped and users have relied on the "legacy
@@ -2675,7 +2698,7 @@ philosophy on the way in — every new request field (`clientAttemptId`, `hintLe
 that omits it (§14.3). `POST /api/practice/evaluate`'s **requirement** of `attemptId` is the one
 deliberate exception — it has no safe fallback (there is no attempt to guess), so an old client's
 request is rejected with a stable `409 stale_client_version` rather than adapted or guessed (§14.3).
-Once migration `034` ships, `save-progress` stops **honoring** an old tab's client-supplied
+Once migration `036` ships, `save-progress` stops **honoring** an old tab's client-supplied
 `status:'completed'` (it's silently ignored, not rejected) — an old tab can still save its resume
 position, it just can no longer mark a round complete by itself; during the write-gate's brief
 pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually true."
@@ -3203,7 +3226,7 @@ grant  execute on function fn_flush_study_activity to authenticated;
 
 -- User-actor functions with a DEFERRED grant (issue group 1, requirement 5 -- these replace a
 -- live legacy writer, so becoming callable early would let a second, uncoordinated write path
--- operate alongside the still-live legacy one). Created here, in Phase 2 (031-033), with the
+-- operate alongside the still-live legacy one). Created here, in Phase 2 (032, 033, 035), with the
 -- REVOKE only; the matching GRANT is issued for the first time at the Phase 3 cutover runbook's
 -- own step (§8.14 step 5), not in this migration:
 revoke execute on function fn_create_or_get_active_round from public, anon, authenticated;
@@ -4015,13 +4038,35 @@ gate's protection in a prior pass, meaning it could still insert a `provenance`-
 `attempt_logs` row during the pause/backfill window. It gets its own transitional bridge here too
 (§8.13/§8.14, below), not because RLS requires it, but because the fence does.
 
-- **Migrate:** `031_fn_record_dictation_attempt.sql`, `032_fn_record_shadowing_attempt.sql`,
-  `033_fn_session_activity_and_evaluation_functions.sql` (bundles `fn_create_or_get_active_round`,
+**Implementation status (as of this pass): implemented and locally verified (mocked/unit tier);
+NOT applied to any Supabase project, linked or otherwise, and NOT database-integration-verified.**
+Includes one corrective migration (`031`) discovered from the user's own Phase 1 postflight check
+(table-level GRANTs on `attempt_logs`/`app_write_gate`/`migration_030_abandoned_rounds_log` were
+broader than intended, despite RLS itself being correct — see PHASE2_RUNBOOK.md §1/§7 for the full
+before/after) and one small additive schema correction (`034`, `word_match_request_seq`) discovered
+while implementing `fn_persist_word_match_result` (§8 below). A writer-inventory search beyond the
+three named routes found one additional live `learning_sessions` write —
+`session/[sessionId]/explain-all/route.ts` updates `ai_assessment`/`ai_assessment_generated_at` via
+the caller's own RLS-respecting client — determined NOT to need a Phase 2 bridge: it touches
+neither round-lifecycle/completion/provenance columns nor anything the write-gate exists to
+protect, and `learning_sessions`' RLS is unchanged in Phase 2, so this writer is simply unaffected;
+it is flagged as a Phase 3 prerequisite to re-check once `learning_sessions`' RLS is actually
+tightened (PHASE2_RUNBOOK.md §7). `npx tsc --noEmit`, `npm run lint`, `npm run build`, and
+`npm test` all pass locally against the resulting application code (exact counts in the Phase 2
+completion report). A new real-Postgres integration suite,
+`src/__tests__/integration/phase2-functions.integration.test.ts`, is written and gated to skip
+cleanly when its required env vars are absent — **not executed**, for the same environment reason
+as the Phase 0/1 suites. See `supabase/PHASE2_RUNBOOK.md` for the exact apply procedure, the old
+plan-number → actual-file mapping, preflight/postflight queries, and corrections to this plan's own
+future Phase 3 runbook assumptions found while documenting this phase.
+
+- **Migrate:** `032_fn_record_dictation_attempt.sql`, `033_fn_record_shadowing_attempt.sql`,
+  `035_fn_session_activity_and_evaluation_functions.sql` (bundles `fn_create_or_get_active_round`,
   `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`,
   `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result`, and the
   temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt`
   bridges — §8.13/§9.9). **The five real round/attempt functions ship with `EXECUTE` revoked from
-  `public`/`anon`/`authenticated` and no grant issued at all** (§8.13/§8.14/§9.9, issue group 1
+  `public`/`anon`/`authenticated`/`service_role` and no grant issued at all** (§8.13/§8.14/§9.9, issue group 1
   requirement 5) — they exist and are fully specified after this phase, but nobody can call them
   yet; `fn_get_or_create_study_session`/`fn_flush_study_activity` are granted to `authenticated`
   normally, in this same migration, since they're new capabilities with no legacy writer to
@@ -4104,7 +4149,7 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   retired here, not merely bypassed.
 - **Modify:** `src/app/api/session/restart/route.ts` — replace `fn_legacy_restart_round` with
   `fn_restart_round`.
-- **Migrate:** `034_provenance_backfill_and_completion_cutover.sql`, run per the bounded, fenced
+- **Migrate:** `036_provenance_backfill_and_completion_cutover.sql`, run per the bounded, fenced
   runbook in §8.14, not as an ordinary "just apply it" migration.
 - **Modify:** `src/app/dictation/[videoId]/useDictationSession.ts` — generate/attach
   `clientAttemptId` per submit; switch the optimistic accuracy display from a running tally to the
@@ -4226,7 +4271,7 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `035_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
+- **Migrate:** `037_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
   **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
   merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
@@ -4345,7 +4390,7 @@ none of the jsdom tests below are described as real-device verification.
 | 67 | A Listening flush naming a `transcriptId` that belongs to the correct video but is a superseded (non-`is_current`), `status='ready'` revision is accepted, since the user may genuinely be listening under it (§8.8 state 4) | §9.6/§9.7's `status='ready'` (not `is_current`) check | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
 | 68 | `fn_flush_study_activity` executed against the actual migrated schema writes `listening_observed_sec`/`listening_newly_covered_sec` to `study_sessions` and `covered_intervals`/`covered_sec` to `listening_progress` without a missing-column error | §8.5/§8.8's actual DDL vs. §9.6's corrected SQL (issue group 5a) | `fn_flush_study_activity.integration.test.ts` | **Real Postgres** |
 | 69 | A caller with no EXECUTE grant on a user-actor function (`anon`) is rejected by PostgREST before any function body runs; an authenticated user calling a backend-only function (`fn_publish_transcript_revision`, `fn_persist_azure_result`, `fn_persist_word_match_result`) is rejected the same way; an authenticated user cannot call another user's-scoped function with someone else's identifiers and have it succeed | §9.9's per-function `REVOKE`/`GRANT`, verified as effective privileges, not just SQL text (issue group 2) | new `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
-| 70 | Immediately after migration `033` deploys (Phase 2), `anon` and `authenticated` cannot execute `fn_create_or_get_active_round`/`fn_update_resume_position`/`fn_restart_round`/`fn_record_dictation_attempt`/`fn_record_shadowing_attempt` — the grant is withheld until the Phase 3 cutover runbook's own step, not issued at creation time | §8.14's deferred-grant mechanism (issue group 1, requirement 5) | `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
+| 70 | Immediately after migration `035` deploys (Phase 2), `anon`, `authenticated`, and `service_role` cannot execute `fn_create_or_get_active_round`/`fn_update_resume_position`/`fn_restart_round`/`fn_record_dictation_attempt`/`fn_record_shadowing_attempt` — the grant is withheld until the Phase 3 cutover runbook's own step, not issued at creation time | §8.14's deferred-grant mechanism (issue group 1, requirement 5) | `rpc-execution-privileges.integration.test.ts` | **Real Postgres** |
 | 71 | An in-flight `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` call that already acquired `FOR SHARE` before the pause transaction requests `FOR UPDATE` is allowed to finish and commit; its row is correctly included in the bounded backfill | §8.14's corrected fence semantics — a holder is drained, not aborted mid-flight | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
 | 72 | An old Dictation request (`dictation/check`'s legacy insert path) attempting to write after the gate closes is blocked by `fn_legacy_record_dictation_attempt`'s own fence check, the same as the round-lifecycle bridges | §8.14/§12 Phase 2's third bridge function (issue group 1) | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
 | 73 | After Phase 3's real functions are granted `EXECUTE`, the dropped `fn_legacy_*` functions cannot be re-invoked even with a cached/replayed old client bundle — the functions no longer exist, not merely unreachable via the app's current routes | §8.14 runbook step 8 (DROP, not just revoke) | `cutover-write-gate.integration.test.ts` | **Real Postgres** |
@@ -4365,7 +4410,7 @@ none of the jsdom tests below are described as real-device verification.
   practice page mid-flush) confirmed to unmount the practice page before the flush's response
   lands, and to still invalidate Dashboard/Library/History correctly once it commits (scenario
   #65) — manual, since this repo has no browser-automation test runner (§13's note above).
-- Real Supabase project: confirm all 19 original + 16 new migrations (`020`–`035`) apply cleanly
+- Real Supabase project: confirm all 19 original + 18 new migrations (`020`–`037`) apply cleanly
   against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
   `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
   the §8.15 duplicate-active-round cleanup (migration `030`, run early in Phase 1) affects the
@@ -4501,7 +4546,7 @@ R21) is a one-way commitment** once Phase 1+ has shipped — reverting it afterw
 corrupt every pinned `transcript_id`/`segment_id` reference created since. Migration `030`'s
 (duplicate-round reconciliation, moved into Phase 1 by R21) cleanup is reversible via its own
 audit-log table (§8.15), **but only in the correct order — drop the unique index before restoring
-rows, and only cleanly before Phase 2 ships** (§8.18's corrected version, R23). Migration `034`'s
+rows, and only cleanly before Phase 2 ships** (§8.18's corrected version, R23). Migration `036`'s
 (provenance backfill) rollback is bounded and technically possible but not recommended once Phase
 3 is live, for the reasons §8.18 states — recovery from a *failed* cutover uses the runbook's own
 steps (§12 Phase 3), not a migration-level reversal after the fact.

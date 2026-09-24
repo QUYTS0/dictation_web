@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { mapLegacyBridgeError } from "@/lib/supabase/legacyBridgeErrors";
 
 interface RestartSessionRequest {
   videoId: string;
   sessionId?: string;
 }
 
+// Phase 2: delegates to fn_legacy_restart_round (migration 035), called
+// via the caller's own RLS-respecting client — identical behavior to the
+// previous raw .update() (abandons the active round(s) for this
+// user/video, optionally scoped to one sessionId; does not itself create a
+// new round), now gate-aware (write_gate_paused -> 503). See
+// supabase/PHASE2_RUNBOOK.md.
 export async function POST(request: NextRequest) {
   try {
     const body: RestartSessionRequest = await request.json();
@@ -24,24 +31,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    let query = supabase
-      .from("learning_sessions")
-      .update({
-        status: "abandoned",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", user.id)
-      .eq("youtube_video_id", videoId)
-      .eq("status", "active");
+    const { data, error } = await supabase.rpc("fn_legacy_restart_round", {
+      p_youtube_video_id: videoId,
+      p_session_id: sessionId ?? null,
+    });
 
-    if (sessionId) {
-      query = query.eq("id", sessionId);
-    }
-
-    const { error } = await query;
-    if (error) {
-      console.error("[session/restart] update error:", error);
-      return NextResponse.json({ error: "Failed to restart session" }, { status: 500 });
+    if (error || !data) {
+      return mapLegacyBridgeError(error, "Failed to restart session");
     }
 
     return NextResponse.json({ status: "ok" });
