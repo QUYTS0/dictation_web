@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { VocabularyAudioSource, VocabularyPronounceErrorResponse, VocabularyPronounceResponse } from "@/lib/types";
 
-export type PronunciationStatus = "idle" | "loading" | "ready" | "playing" | "error";
+export type PronunciationStatus = "idle" | "loading" | "playing" | "error";
 
 const ERROR_MESSAGES: Record<string, string> = {
   TTS_NOT_CONFIGURED: "Pronunciation isn't available right now.",
@@ -58,10 +58,17 @@ function releasePlaybackSlot(stop: () => void) {
  * discarded and playback resets to idle, re-seeded from the fresh
  * `knownAudioUrl`.
  *
- * Does NOT auto-play after a successful resolve — an awaited fetch breaks
- * the synchronous user-gesture chain iOS Safari requires for reliable
- * playback, so the hook instead flips to "ready" and waits for the next
- * (fresh-gesture) tap to actually call play().
+ * Always a single tap: whether the URL is already known (dictionary audio,
+ * or a previously resolved clip) or has to be resolved from the server
+ * first, the very tap that triggers resolution also plays it the instant it
+ * arrives — there is no intermediate "ready, tap again" step. (Some strict
+ * mobile browsers can reject a `play()` call that follows a network round
+ * trip even though it originated from a click handler; if that happens the
+ * button simply falls back to idle with no alarming error text, so the very
+ * next tap — now a fresh, uninterrupted gesture — plays the already-resolved
+ * URL immediately with no further network call.) Tapping again while
+ * already playing restarts the same clip from the beginning rather than
+ * stopping it — repeat, never pause, is what this control is for.
  */
 export function usePronunciationPlayback({
   itemId,
@@ -153,8 +160,26 @@ export function usePronunciationPlayback({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  const handlePlaybackError = (url: string) => {
+  const handlePlaybackError = (url: string, options: { auto?: boolean } = {}) => {
     releasePlaybackSlot(stopSelf);
+
+    if (options.auto) {
+      // This play() attempt was fired automatically, immediately after a
+      // fresh server resolution, not from the tap itself — on a strict
+      // mobile browser that can reject a `play()` call that follows a
+      // network round trip, this is very likely just that policy rejecting
+      // an otherwise-perfectly-good, freshly-resolved URL, not a real
+      // playback failure. Showing an alarming error for that would be
+      // misleading, and the URL is already cached in resolvedUrlRef — so
+      // just fall back to idle with no error text. The very next tap is a
+      // fresh, uninterrupted gesture and plays this same URL immediately,
+      // with no further network call. A genuine failure (dead link, decode
+      // error) will surface for real on that direct-tap attempt instead,
+      // via the non-auto path below.
+      setStatus("idle");
+      return;
+    }
+
     setErrorMessage(DEFAULT_ERROR_MESSAGE);
     setStatus("error");
 
@@ -180,7 +205,7 @@ export function usePronunciationPlayback({
     }
   };
 
-  const playUrl = (url: string) => {
+  const playUrl = (url: string, options: { auto?: boolean } = {}) => {
     let audio = audioRef.current;
     if (!audio) {
       audio = new Audio(url);
@@ -193,12 +218,24 @@ export function usePronunciationPlayback({
     } else if (audio.src !== url) {
       audio.src = url;
     }
+    try {
+      // Always restart from the beginning — this is what makes tapping the
+      // button again while it's already playing "repeat immediately"
+      // instead of a no-op (the element may already be at/near this
+      // position anyway, but a currently-playing clip needs the explicit
+      // seek back to 0).
+      audio.currentTime = 0;
+    } catch {
+      // Some environments (a media element with no source loaded yet) can
+      // throw on a seek attempt — harmless, playback still starts from the
+      // beginning naturally in that case.
+    }
     claimPlaybackSlot(stopSelf);
     setStatus("loading");
     audio
       .play()
       .then(() => setStatus("playing"))
-      .catch(() => handlePlaybackError(url));
+      .catch(() => handlePlaybackError(url, options));
   };
 
   const resolveAndFetch = async (options: { preferGenerated?: boolean } = {}) => {
@@ -228,7 +265,12 @@ export function usePronunciationPlayback({
       resolvedIsKnownRef.current = false;
       failedOnceRef.current = null;
       if (data.source) onResolved?.(data.source);
-      setStatus("ready");
+      // Play immediately — no intermediate "ready, tap again" step,
+      // whether this is the very first resolution for this item (Azure
+      // synthesis just happened) or a later one serving an already-cached
+      // asset. See playUrl's `auto` option for what happens if a strict
+      // browser rejects this particular play() call.
+      playUrl(data.audioUrl, { auto: true });
     } catch {
       if (generationRef.current !== myGeneration) return;
       setErrorMessage(DEFAULT_ERROR_MESSAGE);
@@ -237,14 +279,15 @@ export function usePronunciationPlayback({
   };
 
   const toggle = () => {
-    if (status === "playing") {
-      stopAndReleaseSlot();
-      return;
-    }
     if (status === "loading") return;
+    // Tapping again while already playing repeats the clip from the start
+    // rather than stopping it — this button is a "hear it again" control,
+    // never a pause button.
+    //
     // Retry-same-source-first: a known URL (dictionary audio, or a
-    // previously resolved Azure clip) is always retried before ever
-    // spending a fresh synthesis call, including after a playback error.
+    // previously resolved Azure clip) is always played/replayed directly
+    // before ever spending a fresh synthesis call, including after a
+    // playback error.
     if (resolvedUrlRef.current) {
       playUrl(resolvedUrlRef.current);
       return;

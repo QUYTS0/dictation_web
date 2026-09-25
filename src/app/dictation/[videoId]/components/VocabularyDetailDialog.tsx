@@ -131,12 +131,12 @@ function MoreActionsMenu({
  *  see lookupWordDetails in src/lib/dictionary.ts) or, for anything else
  *  (a word with no dictionary audio, or any phrase — dictionary lookup
  *  never applies to phrases), an on-demand Azure TTS clip resolved via
- *  POST /api/vocabulary/pronounce on first tap. Always rendered now: every
- *  saved item is a pronunciation candidate. Never autoplays — `play()` only
- *  ever runs inside a click handler, satisfying iOS's synchronous-gesture
- *  requirement; a freshly-resolved (not-yet-played) clip surfaces a
- *  distinct "ready" affordance instead of playing itself, since the
- *  `await fetch` that resolved it already broke that gesture chain. */
+ *  POST /api/vocabulary/pronounce. Always rendered now: every saved item is
+ *  a pronunciation candidate. Always a single tap — whether the clip is
+ *  already known or has to be resolved from the server first, it plays the
+ *  instant it's available, with no separate "ready, tap again" step (see
+ *  usePronunciationPlayback for the rare fallback case). Tapping again while
+ *  already playing repeats the clip from the start rather than pausing it. */
 function PronunciationButton({
   itemId,
   audioUrl,
@@ -166,12 +166,7 @@ function PronunciationButton({
     onResolved: onSourceResolved,
   });
 
-  const label =
-    status === "playing"
-      ? `Stop pronunciation of "${term}"`
-      : status === "ready"
-      ? `Tap to play pronunciation of "${term}"`
-      : `Play pronunciation of "${term}"`;
+  const label = status === "playing" ? `Repeat pronunciation of "${term}"` : `Play pronunciation of "${term}"`;
 
   return (
     <span className="inline-flex items-center gap-1">
@@ -181,7 +176,7 @@ function PronunciationButton({
         aria-label={label}
         className={clsx(
           "flex h-7 w-7 items-center justify-center rounded-full border transition-colors",
-          status === "playing" || status === "ready"
+          status === "playing"
             ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
             : "border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent-border)] hover:text-[var(--accent)]"
         )}
@@ -192,7 +187,6 @@ function PronunciationButton({
           <Volume2 size={14} />
         )}
       </button>
-      {status === "ready" && <span className="text-[11px] text-[var(--accent)]">Tap to play</span>}
       {status === "error" && (
         <span role="status" className="flex items-center gap-1.5 text-[11px] text-[var(--red)]">
           {errorMessage ?? "Couldn't play pronunciation."}

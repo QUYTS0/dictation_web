@@ -577,7 +577,8 @@ describe("VocabularyDetailDialog part of speech / phonetic / pronunciation", () 
     expect(screen.getByRole("button", { name: /play pronunciation of "reimburse"/i })).toBeInTheDocument();
   });
 
-  it("resolves pronunciation on demand via the pronounce route and shows a 'ready to play' state instead of auto-playing", async () => {
+  it("resolves pronunciation on demand via the pronounce route and plays it immediately — no separate 'ready to play' step", async () => {
+    const playSpy = jest.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ audioUrl: "https://cdn.example.com/azure/abc.mp3", source: "synthesized" }),
@@ -593,16 +594,21 @@ describe("VocabularyDetailDialog part of speech / phonetic / pronunciation", () 
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/vocabulary/pronounce",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ itemId: "1" }) })
     );
-    expect(screen.getByRole("button", { name: /tap to play pronunciation of "reimburse"/i })).toBeInTheDocument();
-    expect(screen.getByText("Tap to play")).toBeInTheDocument();
+    expect(playSpy).toHaveBeenCalledTimes(1);
+    // No "ready"/"tap to play" affordance — the same single click both
+    // resolved and played the clip.
+    expect(screen.queryByText("Tap to play")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /repeat pronunciation of "reimburse"/i })).toBeInTheDocument();
 
     global.fetch = originalFetch;
+    playSpy.mockRestore();
   });
 
   it("backfills canonical_form/learning_pattern via PATCH when a legacy item resolves them only from the live highlight cache", async () => {

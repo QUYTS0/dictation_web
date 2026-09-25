@@ -36,12 +36,7 @@ function VocabularyCardPronunciationButton({ item }: { item: VocabularyItem }) {
     canonicalForm: item.canonical_form,
   });
 
-  const label =
-    status === "playing"
-      ? `Stop pronunciation for ${item.term}`
-      : status === "ready"
-      ? `Tap to play pronunciation for ${item.term}`
-      : `Play pronunciation for ${item.term}`;
+  const label = status === "playing" ? `Repeat pronunciation for ${item.term}` : `Play pronunciation for ${item.term}`;
 
   return (
     <span className="inline-flex items-center gap-1">
@@ -51,7 +46,7 @@ function VocabularyCardPronunciationButton({ item }: { item: VocabularyItem }) {
         aria-label={label}
         className={clsx(
           "rounded-md border p-1 shadow-sm transition-colors",
-          status === "playing" || status === "ready"
+          status === "playing"
             ? "border-primary-200 bg-primary-50 text-primary-600"
             : "border-white/40 bg-white/50 text-slate-400 hover:text-primary-500"
         )}
