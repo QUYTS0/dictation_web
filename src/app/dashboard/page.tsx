@@ -3,7 +3,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   ArrowRight,
@@ -23,10 +22,11 @@ import ErrorPatternsPanel from "@/components/ErrorPatternsPanel";
 import MetricCard from "@/components/MetricCard";
 import VocabRow from "@/components/VocabRow";
 import { useAuth } from "@/context/auth";
+import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
-import type { ErrorType, ResumableSession } from "@/lib/types";
+import type { ResumableSession } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
 
@@ -94,21 +94,6 @@ function ModeCard({
   );
 }
 
-interface DashboardData {
-  completedVideos: number;
-  avgAccuracy: number;
-  totalPracticeMinutes: number;
-  vocabularyCount: number;
-  streakDays: number;
-  recentVocabulary: Array<{
-    id: string;
-    term: string;
-    sentence_context: string;
-    created_at: string;
-  }>;
-  resumableSessions: ResumableSession[];
-}
-
 function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
   return (
     <span
@@ -123,11 +108,6 @@ function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
 }
 
 const MAX_DASHBOARD_HISTORY_SESSIONS = 8;
-
-interface ErrorPatternsData {
-  total: number;
-  patterns: Array<{ errorType: ErrorType; count: number; percentage: number }>;
-}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -178,29 +158,14 @@ export default function DashboardPage() {
 
   // useQuery caches by key across navigations, so leaving /dashboard and
   // coming back shows the last-fetched data instantly instead of refetching
-  // from a blank state every time.
-  const { data: dashboardData, isError: hasDashboardError } = useQuery({
-    queryKey: ["dashboard-summary", userId],
-    queryFn: async (): Promise<DashboardData> => {
-      const res = await fetch("/api/dashboard/summary");
-      if (!res.ok) throw new Error("Failed to fetch dashboard summary");
-      return res.json();
-    },
-    enabled: !!userId,
-  });
+  // from a blank state every time. Defined in lib/queries/dashboard.ts and
+  // shared with the History page, which renders this same summary data.
+  const { data: dashboardData, isError: hasDashboardError } = useDashboardSummaryQuery(userId);
   const dashboardError = hasDashboardError
     ? "Failed to load dashboard data. Please refresh and try again."
     : null;
 
-  const { data: errorPatternsData, isLoading: errorPatternsLoading } = useQuery({
-    queryKey: ["dashboard-error-patterns", userId],
-    queryFn: async (): Promise<ErrorPatternsData> => {
-      const res = await fetch("/api/dashboard/error-patterns");
-      if (!res.ok) throw new Error("Failed to fetch error patterns");
-      return res.json();
-    },
-    enabled: !!userId,
-  });
+  const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
   const activeSessions = useMemo(
     () => dashboardData?.resumableSessions.filter((session) => session.status === "active") ?? [],
@@ -370,7 +335,10 @@ export default function DashboardPage() {
                             <div className="mt-auto">
                               <div className="mb-1 flex justify-between text-xs text-slate-600">
                                 <span>
-                                  {(firstSession.currentSegmentIndex ?? 0) + 1} segments · {firstSession.totalAttempts ?? 0} attempts
+                                  {/* currentSegmentIndex is the saved resume position (0-based),
+                                      not a count of the video's segments — labeled accordingly so
+                                      an early/default position never reads as "coverage". */}
+                                  Saved at sentence {(firstSession.currentSegmentIndex ?? 0) + 1} · {firstSession.totalAttempts ?? 0} attempts
                                 </span>
                                 <span className="font-medium">{firstSession.accuracy ?? 0}%</span>
                               </div>

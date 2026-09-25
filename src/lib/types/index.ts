@@ -138,6 +138,18 @@ export interface TranscriptResponse {
   source?: "cache" | "ai" | "manual";
   title?: string | null;
   segments: TranscriptSegment[];
+  /** The revision this response actually describes — null only when no
+   *  transcript row exists for this video/language at all yet (Phase 0).
+   *  When a `transcriptId` was requested (`?transcriptId=`), this always
+   *  echoes that exact id; a request for one that doesn't exist or belongs
+   *  to a different video/language gets a 404 instead, never a silent
+   *  substitution with the current revision. */
+  transcriptId?: string | null;
+  /** The real `transcripts.version` integer for this revision, when the
+   *  row is known (never present for the "processing"/"no transcript yet"
+   *  responses) — a genuine identifier, never a fabricated/guessed number.
+   *  Used only as secondary display metadata (e.g. transcript export). */
+  version?: number | null;
 }
 
 // ---- Listening practice / translation types ----
@@ -273,6 +285,11 @@ export interface ResumeSessionResponse {
     totalAttempts: number;
     updatedAt: string;
     status: "active" | "completed" | "abandoned";
+    /** The transcript revision this session is pinned to — null only for a
+     *  session created before this column was ever populated (Phase 0). A
+     *  client must fetch this exact revision to resume/practice against,
+     *  never "whatever is current now". */
+    transcriptId: string | null;
   } | null;
 }
 
@@ -444,6 +461,26 @@ export interface VocabularyItem {
   ease_factor: number;
   repetitions: number;
   last_reviewed_at: string | null;
+}
+
+/** Server-computed, exact-count aggregate stats for the Vocabulary Bank
+ *  page (GET /api/vocabulary/stats) — deliberately separate from the
+ *  GET /api/vocabulary item list so these numbers stay correct regardless
+ *  of any row cap the list fetch might be subject to, and so the two can
+ *  load/error independently. `new`/`learning`/`due` are computed via
+ *  getVocabularyLearningStatus's SQL equivalent (src/lib/utils/vocabulary.ts)
+ *  and are mutually exclusive and exhaustive: new + learning + due === total. */
+export interface VocabularyStatsResponse {
+  total: number;
+  new: number;
+  learning: number;
+  due: number;
+  /** Count of items currently admissible into the review queue
+   *  (next_review_at <= now(), regardless of last_reviewed_at) — the exact
+   *  same predicate GET /api/vocabulary/review uses to admit items, kept as
+   *  its own field rather than derived client-side from new+due so the two
+   *  can never drift apart (see isVocabularyItemReviewable). */
+  reviewable: number;
 }
 
 export interface VocabularyRequest {

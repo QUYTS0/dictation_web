@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 
-const insertMock = jest.fn().mockResolvedValue({ error: null });
-const fromMock = jest.fn().mockReturnValue({ insert: insertMock });
+// Phase 2: the service-role write moved from a raw .from("attempt_logs")
+// .insert() to .rpc("fn_legacy_record_dictation_attempt", ...) — see
+// migration 035 / src/app/api/dictation/check/route.ts.
+const rpcMock = jest.fn().mockResolvedValue({ data: { attemptId: "attempt-1" }, error: null });
 
 const getUserMock = jest.fn().mockResolvedValue({ data: { user: { id: "user-1" } } });
 const maybeSingleMock = jest.fn().mockResolvedValue({ data: { id: "session-1" } });
@@ -16,7 +18,7 @@ const ownershipFromMock = jest.fn().mockReturnValue({
 });
 
 jest.mock("@/lib/supabase/server", () => ({
-  createServiceClient: () => ({ from: fromMock }),
+  createServiceClient: () => ({ rpc: rpcMock }),
   createClient: async () => ({
     auth: { getUser: getUserMock },
     from: ownershipFromMock,
@@ -35,8 +37,8 @@ function makeRequest(body: unknown): NextRequest {
 
 describe("POST /api/dictation/check", () => {
   beforeEach(() => {
-    insertMock.mockClear();
-    fromMock.mockClear();
+    rpcMock.mockClear();
+    rpcMock.mockResolvedValue({ data: { attemptId: "attempt-1" }, error: null });
     ownershipFromMock.mockClear();
     getUserMock.mockClear();
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
@@ -84,7 +86,7 @@ describe("POST /api/dictation/check", () => {
     expect(body.matchMode).toBe("relaxed");
   });
 
-  it("logs the attempt when sessionId is provided and owned by the caller", async () => {
+  it("logs the attempt via fn_legacy_record_dictation_attempt when sessionId is provided and owned by the caller", async () => {
     await POST(
       makeRequest({
         sessionId: "session-1",
@@ -93,9 +95,9 @@ describe("POST /api/dictation/check", () => {
         expectedText: "He goes to school.",
       })
     );
-    expect(fromMock).toHaveBeenCalledWith("attempt_logs");
-    expect(insertMock).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: "session-1", segment_index: 2 })
+    expect(rpcMock).toHaveBeenCalledWith(
+      "fn_legacy_record_dictation_attempt",
+      expect.objectContaining({ p_session_id: "session-1", p_segment_index: 2 })
     );
   });
 
@@ -107,7 +109,7 @@ describe("POST /api/dictation/check", () => {
         expectedText: "hello",
       })
     );
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it("does not log an attempt when the session is not owned by the caller", async () => {
@@ -120,7 +122,7 @@ describe("POST /api/dictation/check", () => {
         expectedText: "hello",
       })
     );
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it("does not log an attempt when the caller is unauthenticated", async () => {
@@ -133,6 +135,21 @@ describe("POST /api/dictation/check", () => {
         expectedText: "hello",
       })
     );
-    expect(fromMock).not.toHaveBeenCalled();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("a paused write gate is non-fatal — the grading response is still returned", async () => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: "write_gate_paused" } });
+    const res = await POST(
+      makeRequest({
+        sessionId: "session-1",
+        segmentIndex: 0,
+        userText: "hello world",
+        expectedText: "Hello, world!",
+      })
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.isCorrect).toBe(true);
   });
 });

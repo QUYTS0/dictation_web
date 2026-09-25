@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRequireAuth } from "@/context/auth";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth, useRequireAuth } from "@/context/auth";
 import { VocabularyEditForm } from "@/components/VocabularyEditForm";
+import { invalidateVocabularyQueries } from "@/lib/queries/vocabulary";
 
 interface VocabularySaveButtonProps {
   videoId: string;
@@ -16,6 +18,8 @@ export default function VocabularySaveButton({
   sentenceContext,
 }: VocabularySaveButtonProps) {
   const requireAuth = useRequireAuth();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");
   const [note, setNote] = useState("");
@@ -40,6 +44,7 @@ export default function VocabularySaveButton({
         }),
       });
       if (!res.ok) throw new Error();
+      invalidateVocabularyQueries(queryClient, user?.id);
       setSaved(true);
       setOpen(false);
       setTerm("");

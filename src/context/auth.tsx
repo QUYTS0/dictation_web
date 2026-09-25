@@ -8,6 +8,7 @@ import React, {
   useState,
 } from "react";
 import type { User } from "@supabase/supabase-js";
+import { useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import AuthModal from "@/components/AuthModal";
 
@@ -34,6 +35,7 @@ const AuthContext = createContext<AuthContextValue>({
 // ---- Provider ----
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -67,7 +69,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const supabase = createClient();
     await supabase.auth.signOut();
     setUser(null);
-  }, []);
+    // Defense in depth beyond userId-scoped query keys (which already
+    // prevent a different account from ever reading this one's cache
+    // entries): purges everything immediately so nothing from this account
+    // lingers in memory once signed out, and a late-resolving in-flight
+    // request has nowhere stale to land.
+    queryClient.clear();
+  }, [queryClient]);
 
   const openAuthModal = useCallback(() => setModalOpen(true), []);
 

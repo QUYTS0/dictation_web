@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
+import { invalidateBookmarksQuery } from "@/lib/queries/bookmarks";
 import type { Bookmark } from "@/lib/types";
 
 /**
@@ -7,6 +9,7 @@ import type { Bookmark } from "@/lib/types";
  * and listening pages (unlike vocabulary capture, which is dictation-only).
  */
 export function useBookmarks(videoId: string, user: User | null) {
+  const queryClient = useQueryClient();
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +72,7 @@ export function useBookmarks(videoId: string, user: User | null) {
         });
         if (!res.ok) throw new Error("Failed to remove bookmark");
         setBookmarks((prev) => prev.filter((b) => b.id !== existing.id));
+        invalidateBookmarksQuery(queryClient, user?.id);
         return;
       }
 
@@ -80,26 +84,35 @@ export function useBookmarks(videoId: string, user: User | null) {
       if (!res.ok) throw new Error("Failed to save bookmark");
       const data = (await res.json()) as { item: Bookmark };
       setBookmarks((prev) => [data.item, ...prev.filter((b) => b.id !== data.item.id)]);
+      invalidateBookmarksQuery(queryClient, user?.id);
     },
-    [bookmarks, videoId]
+    [bookmarks, queryClient, user?.id, videoId]
   );
 
-  const deleteBookmark = useCallback(async (id: string) => {
-    const res = await fetch(`/api/bookmarks?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to remove bookmark");
-    setBookmarks((prev) => prev.filter((b) => b.id !== id));
-  }, []);
+  const deleteBookmark = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/bookmarks?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to remove bookmark");
+      setBookmarks((prev) => prev.filter((b) => b.id !== id));
+      invalidateBookmarksQuery(queryClient, user?.id);
+    },
+    [queryClient, user?.id]
+  );
 
-  const updateBookmarkNote = useCallback(async (id: string, note: string) => {
-    const res = await fetch("/api/bookmarks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, note }),
-    });
-    if (!res.ok) throw new Error("Failed to update bookmark");
-    const data = (await res.json()) as { item: Bookmark };
-    setBookmarks((prev) => prev.map((b) => (b.id === id ? data.item : b)));
-  }, []);
+  const updateBookmarkNote = useCallback(
+    async (id: string, note: string) => {
+      const res = await fetch("/api/bookmarks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, note }),
+      });
+      if (!res.ok) throw new Error("Failed to update bookmark");
+      const data = (await res.json()) as { item: Bookmark };
+      setBookmarks((prev) => prev.map((b) => (b.id === id ? data.item : b)));
+      invalidateBookmarksQuery(queryClient, user?.id);
+    },
+    [queryClient, user?.id]
+  );
 
   return {
     bookmarks,

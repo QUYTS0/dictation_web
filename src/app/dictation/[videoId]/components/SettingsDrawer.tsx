@@ -86,6 +86,8 @@ export function SettingsDrawer({
   onRegenerateScript,
   regenerating,
   regenerateError,
+  pendingRevisionNotice,
+  onDismissPendingRevisionNotice,
   onLoadSrtFile,
   srtParsing,
   srtUploadError,
@@ -123,6 +125,11 @@ export function SettingsDrawer({
   onRegenerateScript: () => void;
   regenerating: boolean;
   regenerateError: string | null;
+  /** Set when a regenerate/manual-save published a different revision while
+   *  the current lesson kept showing its own — an explicit Restart is
+   *  needed to pick it up. Null when there's nothing to report. */
+  pendingRevisionNotice: string | null;
+  onDismissPendingRevisionNotice: () => void;
   onLoadSrtFile: () => void;
   srtParsing: boolean;
   srtUploadError: string | null;
@@ -324,6 +331,18 @@ export function SettingsDrawer({
                   {srtParsing ? "Loading…" : "📄 Load .srt/.vtt file"}
                 </button>
                 {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
+                {pendingRevisionNotice && (
+                  <p className="flex items-center justify-between gap-2 text-xs text-[var(--accent)]">
+                    <span>{pendingRevisionNotice}</span>
+                    <button
+                      type="button"
+                      onClick={onDismissPendingRevisionNotice}
+                      className="shrink-0 text-[var(--text-muted)] hover:text-[var(--text)]"
+                    >
+                      Dismiss
+                    </button>
+                  </p>
+                )}
                 {srtUploadError && <p className="text-xs text-[var(--red)]">{srtUploadError}</p>}
                 {regenerateTranslationError && <p className="text-xs text-[var(--red)]">{regenerateTranslationError}</p>}
                 {regenerateHighlightsError && <p className="text-xs text-[var(--red)]">{regenerateHighlightsError}</p>}

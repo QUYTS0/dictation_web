@@ -18,7 +18,6 @@ import {
   Volume2,
   Undo2,
   Flame,
-  Download,
   Settings,
   Maximize,
   Minimize,
@@ -65,6 +64,7 @@ import { deriveEvaluationUiState, feedbackFor, weakestMetric } from "./evaluatio
 import { ConfettiBurst } from "./components/ConfettiBurst";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { KeyboardShortcutsButton } from "./components/KeyboardShortcutsButton";
+import { TranscriptDownloadMenu } from "./components/TranscriptDownloadMenu";
 import { RightPanelTabs } from "./components/RightPanelTabs";
 import { DefaultLayout } from "./components/layouts/DefaultLayout";
 import {
@@ -148,11 +148,14 @@ export default function DictationPage({ params }: PageProps) {
     previousReview,
     regenerating,
     regenerateError,
+    pendingRevisionNotice,
+    dismissPendingRevisionNotice,
     autoGenerateErrorCode,
     nextAutoRetryAt,
     checkAnswerError,
     segments,
     transcriptTitle,
+    transcriptVersion,
     ytPlayerRef,
     restoredInputState,
     consumeRestoredInputState,
@@ -669,20 +672,6 @@ export default function DictationPage({ params }: PageProps) {
     [jumpToSegment]
   );
 
-  const handleDownloadTranscript = useCallback(() => {
-    if (segments.length === 0) return;
-    const text = segments.map((segment) => segment.text).join("\n");
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(transcriptTitle ?? `video-${videoId}`).replace(/[^\w.-]+/g, "_")}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }, [segments, transcriptTitle, videoId]);
-
   useEffect(() => {
     const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -816,11 +805,18 @@ export default function DictationPage({ params }: PageProps) {
 
   useEffect(() => {
     const wasShowingVideo = previousShowVideoRef.current;
+    // Reads the store fresh at the moment showVideo actually flips, rather
+    // than subscribing to playerStore.currentTimeSec/uxState (which would
+    // re-run this effect on every ~200ms tick and risk seeking from a
+    // value captured in an unrelated earlier render). The player itself is
+    // the one continuously updating currentTimeSec while visible; this
+    // effect only needs to (re)sync once, on a real hidden→shown edge.
     if (!wasShowingVideo && showVideo) {
-      ytPlayerRef.current?.seekTo(playerStore.currentTimeSec, uxState === "playing");
+      const live = usePlayerStore.getState();
+      ytPlayerRef.current?.seekTo(live.currentTimeSec, live.status === "playing");
     }
     previousShowVideoRef.current = showVideo;
-  }, [showVideo, playerStore.currentTimeSec, uxState, ytPlayerRef]);
+  }, [showVideo, ytPlayerRef]);
 
   useEffect(() => {
     ytPlayerRef.current?.setPlaybackRate(playbackRate);
@@ -896,15 +892,14 @@ export default function DictationPage({ params }: PageProps) {
                   </div>
                 )}
                 <div className="hidden h-6 w-px bg-[var(--border)] md:block" />
-                <button
-                  onClick={handleDownloadTranscript}
-                  disabled={segments.length === 0}
-                  className="hidden h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 md:flex"
-                  title="Download transcript"
-                  aria-label="Download transcript"
-                >
-                  <Download size={15} />
-                </button>
+                <div className="hidden md:block">
+                  <TranscriptDownloadMenu
+                    segments={segments}
+                    videoId={videoId}
+                    title={transcriptTitle}
+                    version={transcriptVersion}
+                  />
+                </div>
                 <button
                   onClick={handleToggleCurrentBookmark}
                   disabled={!currentSegment}
@@ -1000,6 +995,8 @@ export default function DictationPage({ params }: PageProps) {
             onRegenerateScript={handleRegenerateClick}
             regenerating={regenerating}
             regenerateError={regenerateError}
+            pendingRevisionNotice={pendingRevisionNotice}
+            onDismissPendingRevisionNotice={dismissPendingRevisionNotice}
             onLoadSrtFile={handleLoadSrtClick}
             srtParsing={srtParsing}
             srtUploadError={srtUploadError}

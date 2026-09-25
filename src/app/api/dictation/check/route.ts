@@ -56,17 +56,30 @@ export async function POST(request: NextRequest) {
 
       if (owned) {
         try {
-          const supabase = createServiceClient();
-          await supabase.from("attempt_logs").insert({
-            session_id: sessionId,
-            segment_index: segmentIndex,
-            expected_text: expectedText,
-            user_text: userText,
-            normalized_expected_text: result.normalizedExpected,
-            normalized_user_text: result.normalizedUser,
-            is_correct: result.isCorrect,
-            error_type: result.errorType === "none" ? null : result.errorType,
+          // Phase 2: delegates to fn_legacy_record_dictation_attempt
+          // (migration 035), called via the SAME service-role client as
+          // before — identical insert shape, now gate-aware
+          // (write_gate_paused). Ownership was already verified above
+          // using the caller's own RLS-respecting client; session_id is
+          // passed as an already-trusted parameter, unchanged from today.
+          const serviceClient = createServiceClient();
+          const { error: rpcError } = await serviceClient.rpc("fn_legacy_record_dictation_attempt", {
+            p_session_id: sessionId,
+            p_segment_index: segmentIndex,
+            p_expected_text: expectedText,
+            p_user_text: userText,
+            p_normalized_expected_text: result.normalizedExpected,
+            p_normalized_user_text: result.normalizedUser,
+            p_is_correct: result.isCorrect,
+            p_error_type: result.errorType === "none" ? null : result.errorType,
           });
+          if (rpcError) {
+            // Non-fatal — log and continue, exactly like the previous raw
+            // .insert()'s try/catch: a persistence failure (including a
+            // paused write gate) never blocks returning the grading
+            // result to the client.
+            console.error("[dictation/check] attempt log error:", rpcError);
+          }
         } catch (dbErr) {
           // Non-fatal — log and continue
           console.error("[dictation/check] attempt log error:", dbErr);

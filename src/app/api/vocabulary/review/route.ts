@@ -6,6 +6,18 @@ import type { VocabularyItem, VocabularyReviewSubmitRequest } from "@/lib/types"
 const REVIEW_BATCH_SIZE = 20;
 const VALID_GRADES: ReviewGrade[] = ["again", "hard", "good", "easy"];
 
+/**
+ * DEFERRED (product decision, not yet designed): this ordering is purely
+ * `next_review_at ASC` across New and Due items together — it does not
+ * prioritize Due over New, nor interleave New into a Due-first queue. The
+ * intended behavior is Due-first with New items mixed in at some TBD
+ * ratio/algorithm; that design is a separate follow-up, not implemented
+ * here. Until it lands, the Vocabulary Bank's review hero deliberately does
+ * not claim this ordering exists (see `deriveHeroState`'s own comment in
+ * src/app/vocabulary/page.tsx) — update that copy in lockstep with whatever
+ * ships here.
+ */
+
 export async function GET() {
   try {
     const supabase = await createClient();

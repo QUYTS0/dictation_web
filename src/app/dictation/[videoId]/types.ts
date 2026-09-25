@@ -63,6 +63,10 @@ export interface ResumeState {
   status: "active" | "completed" | "abandoned";
   accuracy: number;
   totalAttempts: number;
+  /** The transcript revision this session is pinned to (Phase 0) — null for
+   *  a session created before this column existed. Drives which revision
+   *  the transcript query fetches: this exact one, never "current". */
+  transcriptId: string | null;
 }
 
 // ---- Shadowing evaluation — see "Shadowing and Pronunciation Practice

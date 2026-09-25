@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+# sample files written by tests for manual inspection (see transcriptPdf.test.ts)
+/test-output
 
 # next.js
 /.next/
