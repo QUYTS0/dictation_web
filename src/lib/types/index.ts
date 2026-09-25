@@ -239,12 +239,42 @@ export interface CheckAnswerRequest {
   sessionId?: string;
   segmentIndex: number;
   userText: string;
-  expectedText: string;
+  /** Only used when the answer is NOT recorded (guest / no round). A
+   *  recorded answer is always graded against the round's pinned segment,
+   *  resolved server-side. */
+  expectedText?: string;
   matchMode?: MatchMode;
+  /** Phase 3 — all optional for old tabs (see the route for defaults). */
+  clientAttemptId?: string;
+  hintLevelUsed?: number | null;
+  studySessionId?: string | null;
+  transcriptId?: string | null;
+  youtubeVideoId?: string | null;
+}
+
+/** Round progress as computed by the database (Phase 3). */
+export interface RoundProgress {
+  requiredSentenceCount: number | null;
+  coveredSentences: { dictation: number; shadowing: number; overall: number };
+  coverage: { dictation: number | null; shadowing: number | null; overall: number | null };
+  /** All Dictation submissions recorded for the round (retries included). */
+  attemptCount: number;
+  /** Correct LATEST Dictation attempt per practiced sentence ÷ practiced sentences. */
+  sentenceAccuracy: { correct: number; practiced: number; percent: number | null };
 }
 
 export interface CheckAnswerResponse extends CheckResult {
   sessionId?: string;
+  /** false when the answer was graded but not persisted (guest / no round). */
+  recorded?: boolean;
+  attemptId?: string;
+  clientAttemptId?: string;
+  wasInserted?: boolean;
+  roundCompletedByThisRequest?: boolean;
+  roundStatus?: "active" | "completed" | "abandoned";
+  progress?: RoundProgress;
+  coverage?: RoundProgress["coverage"];
+  studySessionId?: string | null;
 }
 
 export interface AIExplainRequest {
@@ -290,6 +320,13 @@ export interface ResumeSessionResponse {
      *  client must fetch this exact revision to resume/practice against,
      *  never "whatever is current now". */
     transcriptId: string | null;
+    /** Phase 3 additions (optional for compatibility). */
+    roundNumber?: number;
+    provenance?: "current" | "legacy_unverified";
+    requiredSentenceCount?: number | null;
+    /** Latest Dictation result per practiced sentence of this round — seeds
+     *  the client's sentence-accuracy map on resume. */
+    latestDictationResults?: Array<{ segmentIndex: number; isCorrect: boolean }>;
   } | null;
 }
 
@@ -328,6 +365,9 @@ export interface ResumableSession {
   videoTitle: string | null;
   updatedAt: string;
   status: "active" | "completed" | "abandoned";
+  /** Dictation rounds only: 'legacy_unverified' for rounds from before the
+   *  Phase 3 cutover (their completion is shown as unverified history). */
+  provenance?: "current" | "legacy_unverified";
   /** Dictation-only — undefined for listening sessions. */
   accuracy?: number;
   currentSegmentIndex?: number;
@@ -406,6 +446,9 @@ export interface SessionExplainAllResponse {
   uniquePatternsExplained: number;
   /** True when there were more distinct patterns than the per-request cap — only the first batch got a full explanation. */
   truncated: boolean;
+  /** Whether the assessment was persisted (it is still returned for display
+   *  when saving failed — it just won't be there after a reload). */
+  assessmentSaved?: boolean;
 }
 
 export interface VocabularyItem {

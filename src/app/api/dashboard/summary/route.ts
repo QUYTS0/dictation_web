@@ -13,6 +13,7 @@ interface UnifiedSessionRow {
   accuracy?: number;
   current_segment_index?: number;
   total_attempts?: number;
+  provenance?: "current" | "legacy_unverified";
 }
 
 export async function GET() {
@@ -34,7 +35,7 @@ export async function GET() {
         supabase
           .from("learning_sessions")
           .select(
-            "id, youtube_video_id, status, accuracy, video_current_time, updated_at, current_segment_index, total_attempts"
+            "id, youtube_video_id, status, accuracy, video_current_time, updated_at, current_segment_index, total_attempts, provenance"
           )
           .eq("user_id", user.id),
         supabase
@@ -61,7 +62,21 @@ export async function GET() {
     // Grading stats (completed-video count, average accuracy) are inherently
     // a dictation concept — listening has no correct/incorrect notion.
     const completedDictationSessions = (dictationRows ?? []).filter((s) => s.status === "completed");
-    const completedVideos = new Set(completedDictationSessions.map((s) => s.youtube_video_id)).size;
+    // Phase 3: only rounds completed under the authoritative (server-owned)
+    // completion rule count as completed videos. Rounds from before the
+    // cutover (provenance 'legacy_unverified') were marked completed by the
+    // client and are reported separately, never blended into the headline.
+    // Both counts are distinct VIDEOS, and disjoint: a video with any
+    // verified completion is counted only as completed.
+    const verifiedCompletedVideoIds = new Set(
+      completedDictationSessions.filter((s) => s.provenance !== "legacy_unverified").map((s) => s.youtube_video_id)
+    );
+    const completedVideos = verifiedCompletedVideoIds.size;
+    const legacyCompletedVideos = new Set(
+      completedDictationSessions
+        .filter((s) => s.provenance === "legacy_unverified" && !verifiedCompletedVideoIds.has(s.youtube_video_id))
+        .map((s) => s.youtube_video_id)
+    ).size;
     const avgAccuracy =
       completedDictationSessions.length > 0
         ? Math.round(
@@ -185,6 +200,7 @@ export async function GET() {
           currentSegmentIndex: Number(session.current_segment_index ?? 0),
           totalAttempts: Number(session.total_attempts ?? 0),
           mistakesCount: mistakeCountBySessionId[session.id] ?? 0,
+          provenance: session.provenance,
         };
       }
       return { ...base, videoCurrentTimeSec: Number(session.video_current_time ?? 0) };
@@ -192,6 +208,7 @@ export async function GET() {
 
     return NextResponse.json({
       completedVideos,
+      legacyCompletedVideos,
       avgAccuracy,
       totalPracticeMinutes,
       vocabularyCount: vocabularyCount ?? 0,

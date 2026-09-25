@@ -233,7 +233,7 @@ beforeEach(() => {
   useSessionStore.getState().reset();
   window.sessionStorage.clear();
   apiMock.saveProgress.mockResolvedValue({ sessionId: "sess-1" });
-  apiMock.restartSession.mockResolvedValue(undefined);
+  apiMock.restartSession.mockResolvedValue({});
   apiMock.requestTranscriptGeneration.mockResolvedValue({ status: "processing" });
   apiMock.fetchTranscript.mockImplementation(async (_v, pinned) => ready(pinned ?? "rev-A"));
 });

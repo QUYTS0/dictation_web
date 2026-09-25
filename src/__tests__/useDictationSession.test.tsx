@@ -103,7 +103,7 @@ beforeEach(() => {
     diff: [],
   } as never);
   apiMock.saveProgress.mockResolvedValue({ sessionId: "sess-1" });
-  apiMock.restartSession.mockResolvedValue(undefined);
+  apiMock.restartSession.mockResolvedValue({});
   // The background auto-generate scheduler (triggerAutoGenerate) fires
   // whenever a video's transcript is "processing" with no segments yet —
   // relevant to any test that puts a second video into that state (e.g.

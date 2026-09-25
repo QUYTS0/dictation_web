@@ -26,7 +26,7 @@ import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
-import { formatAnswerAccuracy, formatResumePoint, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
+import { formatAnswerAccuracy, formatResumePoint, formatRoundStatus, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
 import type { ResumableSession } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
@@ -281,7 +281,16 @@ export default function DashboardPage() {
               </section>
 
               <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <MetricCard title="Completed Videos" value={String(dashboardData.completedVideos)} icon={<PlayCircle size={20} />} />
+                <MetricCard
+                  title="Completed Videos"
+                  value={String(dashboardData.completedVideos)}
+                  icon={<PlayCircle size={20} />}
+                  trend={
+                    (dashboardData.legacyCompletedVideos ?? 0) > 0
+                      ? `+${dashboardData.legacyCompletedVideos} earlier (unverified)`
+                      : undefined
+                  }
+                />
                 <MetricCard title="Avg. Accuracy" value={`${dashboardData.avgAccuracy}%`} icon={<CheckCircle2 size={20} />} positive />
                 <MetricCard title="Practice Time" value={formatMinutesAsHm(dashboardData.totalPracticeMinutes)} icon={<Clock size={20} />} />
                 <MetricCard title="Vocab Saved" value={String(dashboardData.vocabularyCount)} icon={<BookOpen size={20} />} trend={dashboardData.vocabularyCount > 0 ? `+${dashboardData.vocabularyCount} words` : undefined} />
@@ -418,7 +427,7 @@ export default function DashboardPage() {
                                     : "bg-primary-50 text-primary-600"
                                 )}
                               >
-                                {session.status === "completed" ? "Completed" : "In progress"}
+                                {formatRoundStatus(session)}
                               </span>
                             </Link>
                           </li>

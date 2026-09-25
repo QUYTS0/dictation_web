@@ -24,7 +24,7 @@ import type { ResumableSession } from "@/lib/types";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
-import { formatAnswerAccuracy, formatResumePoint, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
+import { formatAnswerAccuracy, formatResumePoint, formatRoundStatus, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
 
 // Only rendered when the record's mode is actually known — see
 // recordModeBadgeLabel for why learning_sessions rows get no badge.
@@ -213,7 +213,7 @@ function HistoryPageContent() {
                                     : "bg-primary-50 text-primary-600"
                                 }`}
                               >
-                                {item.status === "completed" ? "Completed" : "In progress"}
+                                {formatRoundStatus(item)}
                               </span>
                               {item.mode === "dictation" && (
                                 <p className="text-sm font-medium text-slate-500">

@@ -67,6 +67,8 @@ export interface ResumeState {
    *  a session created before this column existed. Drives which revision
    *  the transcript query fetches: this exact one, never "current". */
   transcriptId: string | null;
+  /** 'legacy_unverified' for a round from before the Phase 3 cutover. */
+  provenance?: "current" | "legacy_unverified";
 }
 
 // ---- Shadowing evaluation — see "Shadowing and Pronunciation Practice

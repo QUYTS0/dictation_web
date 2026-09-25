@@ -85,7 +85,9 @@ export function ControlBar({
 }: {
   currentSegIdx: number;
   totalSegments: number;
-  accuracy: number;
+  /** Sentence accuracy (latest answer per practiced sentence), or null
+   *  when no sentence has been answered yet in this round. */
+  accuracy: number | null;
   onReset: () => void;
   onPrevious: () => void;
   onReplay: () => void;
@@ -290,7 +292,9 @@ export function ControlBar({
     totalSegments > 0
       ? !isDictationMode
         ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
-        : `${accuracy}% accuracy`
+        : accuracy === null
+          ? "Sentence accuracy —"
+          : `${accuracy}% sentence accuracy`
       : "";
 
   return (
@@ -393,7 +397,7 @@ export function ControlBar({
                 </span>
               ) : (
                 <span>
-                  {currentSegIdx + 1} / {totalSegments} · Accuracy {accuracy}%
+                  {currentSegIdx + 1} / {totalSegments} · Sentence accuracy {accuracy === null ? "—" : `${accuracy}%`}
                 </span>
               )
             ) : (

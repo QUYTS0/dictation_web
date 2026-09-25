@@ -83,19 +83,47 @@ export async function requestTranscriptGeneration(videoId: string): Promise<Gene
   return postGenerate({ videoId });
 }
 
-export async function checkAnswerApi(
-  segmentIndex: number,
-  userText: string,
-  expectedText: string,
-  matchMode: MatchMode,
-  sessionId?: string
-): Promise<CheckAnswerResponse> {
+/**
+ * A failed practice write, with the server's stable `code` and whether the
+ * same request may simply be retried later (maintenance pause).
+ */
+export class PracticeWriteError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string | null, readonly retryable: boolean) {
+    super(message);
+    this.name = "PracticeWriteError";
+  }
+}
+
+async function toPracticeWriteError(res: Response, fallback: string): Promise<PracticeWriteError> {
+  let body: { error?: string; code?: string; retryable?: boolean } = {};
+  try {
+    body = await res.json();
+  } catch {
+    // non-JSON error body
+  }
+  return new PracticeWriteError(body.error ?? fallback, res.status, body.code ?? null, body.retryable === true || res.status === 503);
+}
+
+export interface CheckAnswerParams {
+  segmentIndex: number;
+  userText: string;
+  expectedText: string;
+  matchMode: MatchMode;
+  sessionId?: string;
+  /** One id per logical submission — reused verbatim on retry. */
+  clientAttemptId?: string;
+  hintLevelUsed?: number;
+  transcriptId?: string;
+  youtubeVideoId?: string;
+}
+
+export async function checkAnswerApi(params: CheckAnswerParams): Promise<CheckAnswerResponse> {
   const res = await fetch("/api/dictation/check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ segmentIndex, userText, expectedText, matchMode, sessionId }),
+    body: JSON.stringify(params),
   });
-  if (!res.ok) throw new Error("Failed to check answer");
+  if (!res.ok) throw await toPracticeWriteError(res, "Failed to check answer");
   return res.json();
 }
 
@@ -123,7 +151,7 @@ export async function saveProgress(
       status,
     }),
   });
-  if (!res.ok) throw new Error("Failed to save progress");
+  if (!res.ok) throw await toPracticeWriteError(res, "Failed to save progress");
   return res.json();
 }
 
@@ -163,11 +191,24 @@ export async function fetchVocabHighlights(
   return res.json();
 }
 
-export async function restartSession(videoId: string, sessionId?: string): Promise<void> {
+/** The new round when the server creates it on restart (Phase 3); absent
+ *  from a preparation-release server, which only abandons the old round. */
+export interface RestartSessionResult {
+  sessionId?: string;
+  transcriptId?: string;
+}
+
+export async function restartSession(videoId: string, sessionId?: string): Promise<RestartSessionResult> {
   const res = await fetch("/api/session/restart", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ videoId, sessionId }),
   });
-  if (!res.ok) throw new Error("Failed to restart session");
+  if (!res.ok) throw await toPracticeWriteError(res, "Failed to restart session");
+  try {
+    const body = await res.json();
+    return { sessionId: body?.sessionId, transcriptId: body?.transcriptId };
+  } catch {
+    return {};
+  }
 }

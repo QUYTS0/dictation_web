@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("learning_sessions")
       .select(
-        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status, transcript_id"
+        "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status, transcript_id, round_number, provenance, required_sentence_count"
       )
       .eq("user_id", user.id)
       .eq("youtube_video_id", videoId)
@@ -37,6 +37,31 @@ export async function GET(request: NextRequest) {
     if (error) {
       console.error("[session/resume] query error:", error);
       return NextResponse.json({ error: "Failed to fetch session" }, { status: 500 });
+    }
+
+    // Latest Dictation result per practiced sentence of this round (Phase 3
+    // sentence accuracy) — owner-readable via RLS. Same ordering rule as
+    // the database (created_at, then id), so client and server agree.
+    let latestDictationResults: Array<{ segmentIndex: number; isCorrect: boolean }> = [];
+    if (data) {
+      const { data: attempts, error: attemptsError } = await supabase
+        .from("attempt_logs")
+        .select("segment_index, is_correct, created_at, id")
+        .eq("session_id", data.id)
+        .eq("is_practice_valid", true)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
+      if (attemptsError) {
+        console.error("[session/resume] attempts query error:", attemptsError);
+      } else {
+        const seen = new Map<number, boolean>();
+        for (const a of attempts ?? []) {
+          if (!seen.has(a.segment_index)) seen.set(a.segment_index, a.is_correct);
+        }
+        latestDictationResults = [...seen.entries()]
+          .sort((x, y) => x[0] - y[0])
+          .map(([segmentIndex, isCorrect]) => ({ segmentIndex, isCorrect }));
+      }
     }
 
     const response: ResumeSessionResponse = {
@@ -53,6 +78,10 @@ export async function GET(request: NextRequest) {
             // (GET /api/transcript, useDictationSession) must fetch exactly
             // this revision when it's non-null, never "whatever is current".
             transcriptId: data.transcript_id ?? null,
+            roundNumber: data.round_number ?? undefined,
+            provenance: data.provenance ?? undefined,
+            requiredSentenceCount: data.required_sentence_count ?? null,
+            latestDictationResults,
           }
         : null,
     };

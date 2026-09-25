@@ -1624,7 +1624,7 @@ was originally scheduled before that table existed).
 | 034 | `034_word_match_request_seq.sql` | 2 | **Not in the original numbered sequence — inserted during Phase 2 implementation.** Adds `shadowing_attempts.word_match_request_seq`, mirroring `azure_eval_request_seq`'s shape, so Word Match staleness protection doesn't have to (incorrectly) couple to Azure's own sequence |
 | 035 | `035_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`032`/`033`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated`/`service_role` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 036) |
 | 036 | `036_phase2_user_rpc_privilege_corrections.sql` | 2 (post-Phase-2 repair) | Revokes the `service_role` EXECUTE that `035` left on the four user-actor functions (`fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_legacy_save_progress`, `fn_legacy_restart_round`) — `035` revoked them from `public, anon, authenticated` only, so Supabase's default per-role function grant to `service_role` survived. Exact signatures only, re-grants `authenticated`, and asserts the effective matrix with `has_function_privilege` in the same transaction (PHASE2_RUNBOOK.md §8). |
-| 037 | `037_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply. **Not created or executed in Phase 2.** |
+| 037 | `037_phase3_prepare_authoritative_cutover.sql` | 3 | **Implemented (Phase 3 pass).** Preparation only under `db push`: corrected authoritative functions (dormant + refuse writes until activated), TS↔SQL grading parity (`fn_normalize_dictation_text`, `fn_classify_dictation_error`), `fn_persist_session_assessment` (explain-all, service_role), `fn_practice_write_status`, cutover state/audit tables, and owner-only stage functions `fn_phase3_restrict_direct_writes` / `fn_phase3_close_gate` / `fn_phase3_backfill` / `fn_phase3_activate` / `fn_phase3_reopen_legacy`. The RLS tightening, fence, backfill and activation run from `supabase/phase3/*.sql` per `supabase/PHASE3_RUNBOOK.md` — never as a side effect of the migration. (Previously planned file name: `037_provenance_backfill_and_completion_cutover.sql`.) |
 | 038 | `038_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
@@ -2331,7 +2331,40 @@ are **not** subject to this deferral — they're genuinely new capabilities with
 provenance concept to protect against, §9.9, so their `authenticated` grant is issued normally, in
 this same migration.)
 
-### 8.14 `037_provenance_backfill_and_completion_cutover.sql`
+### 8.14 `037_provenance_backfill_and_completion_cutover.sql` (as designed) → implemented as `037_phase3_prepare_authoritative_cutover.sql` + `supabase/phase3/*.sql`
+
+> **Implementation note (Phase 3 pass):** the design below is implemented with
+> these deliberate differences, all rehearsed on real PostgreSQL
+> (`supabase/PHASE3_RUNBOOK.md` §9): (1) Part C/A/B and activation are
+> owner-only functions run by operator scripts, not migration SQL, so
+> `db push` cannot trigger them; (2) the cohort is "every row still
+> `current`/`verified` at backfill time" rather than a `started_at` bound —
+> before activation no authoritative writer can run, and client-writable
+> timestamps after the boundary are reported as anomalies instead of silently
+> escaping; (3) original values are captured in audit tables first and
+> `updated_at` is never touched; (4) runbook steps 7–8 ("reopen", "drop") are
+> folded into one activation transaction together with the grants, and a
+> permanent `legacy_writes_retired` flag checked inside the bridges' own gate
+> read stops a legacy call that was already queued behind activation (a
+> `DROP FUNCTION` alone does not); (5) the application ships as two
+> configurations of one codebase (`PRACTICE_WRITE_PATH=legacy` for the
+> preparation release, default `authoritative`), because explain-all must move
+> off direct writes before Part C while the other writers still need the
+> bridges.
+>
+> **Review corrections (before any remote apply of `037`):** (a) Dictation
+> idempotency also compares the effective grading mode, stored in a new
+> nullable `attempt_logs.match_mode` (NULL on all pre-existing rows, never
+> inferred; reusing such a key is a conflict); (b) practice validity uses the
+> JS whitespace set (`fn_js_has_content`) instead of `btrim`, so tab/CR/LF/NBSP-only
+> answers never earn coverage; (c) supplied and automatic study-session ids
+> share one rule set (`fn_attribute_study_session`): 30-minute inactivity,
+> ended/expired/round-less sessions never reused or re-pointed, `modes_used`
+> kept, retries side-effect free, and late attempts on a superseded round never
+> close the current round's session (attributed to none if no open session of
+> that round exists). Dashboard: the "earlier (unverified)" count excludes
+> videos already counted as verified-completed. Rehearsed in
+> `phase3-review-fixes` (runbook §2.1, §9).
 
 **This migration now also tightens `learning_sessions`' RLS (§9.9) — moved here from being absent
 entirely, and deliberately not placed in Phase 1, because the *existing* `save-progress`/
@@ -4170,6 +4203,36 @@ the `session/[sessionId]/explain-all` `learning_sessions` writer before tighteni
   `postphase2-privileges.integration.test.ts` (post-Phase-2 repair).
 
 ### Phase 3 — Dictation route cutover, via a genuine write-fence, not a bare "same deploy" claim
+
+**Implementation status (Phase 3 pass) — operational procedure in `supabase/PHASE3_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes | `037_phase3_prepare_authoritative_cutover.sql`, `supabase/phase3/*.sql`, routes (`dictation/check`, `save-progress`, `restart`, `explain-all`, `resume`, `dashboard/summary`), `useDictationSession` (attempt ids, latest-per-sentence accuracy, server-owned completion), Dashboard/History labels |
+| Unit/mock verified | Yes | route + hook suites (incl. `phase3-submission-client`, `explain-all-persistence`), tsc, lint, build |
+| Real database verified | Yes, locally | 51 tests on a disposable PostgreSQL 17.9 with the Supabase shim (parity, permissions under real roles, concurrency, idempotency incl. grading mode, whitespace-only validity, study-session attribution, 036→037 upgrade with historical data) |
+| Cutover rehearsal verified | Yes, locally | full drain → backfill → activate with a queued legacy call; recovery boundaries; the operator scripts themselves |
+| Browser verified | No | manual checklist in the runbook §8 |
+| Applied to the user's project | No (`001`–`036` only) | — |
+| Deployed | No | — |
+
+Deviations from the task list below, with reasons: completion is decided only
+by the database (eligible-sentence coverage); `learning_sessions.total_attempts`
+/ `accuracy` are now maintained by `fn_record_dictation_attempt` with their
+**legacy attempt-based meaning** (so existing readers stay truthful rather than
+frozen), while the new "sentence accuracy" (latest answer per sentence) is a
+separate, separately-labeled metric; the dashboard headline counts only
+`provenance = 'current'` completions and shows legacy ones as
+"earlier (unverified)"; the Phase 2 dormant functions were re-created with new
+signatures (never granted, so safe) to fix gaps found while activating them —
+see the 037 header. A real TS↔SQL parity defect in 032 (Unicode whitespace)
+and one in the first 037 draft (Unicode lowercasing in `exact` mode) were found
+by the parity suite and fixed; the parity suite is the evidence, not the port.
+A later review found three more defects in the not-yet-applied 037 (grading
+mode missing from the idempotency identity, `btrim`-based practice validity,
+supplied study-session ids bypassing the attribution rules); all three were
+fixed in 037 itself, with regression tests that failed before the fix
+(`phase3-review-fixes`; see the §8.14 note).
 
 **Corrects two things a prior pass got wrong:** (1) "ships as one deploy" named a goal without a
 mechanism; (2) the mechanism that followed only gated `save-progress`'s *completion* branch, so an

@@ -4,7 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import type { ErrorType, ResumableSession } from "@/lib/types";
 
 export interface DashboardSummary {
+  /** Videos with a round completed under the server-owned (Phase 3) rule. */
   completedVideos: number;
+  /** Videos whose only completions predate the cutover (client-reported,
+   *  unverified). Optional: older servers don't send it. */
+  legacyCompletedVideos?: number;
   avgAccuracy: number;
   totalPracticeMinutes: number;
   vocabularyCount: number;

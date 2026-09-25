@@ -31,6 +31,19 @@ export function formatResumePoint(currentSegmentIndex: number | undefined): stri
 }
 
 /**
+ * Status badge text for a history record. A round completed before the
+ * Phase 3 cutover was marked complete by the client (not by the coverage
+ * rule), so it is labeled as earlier/unverified rather than "Completed".
+ */
+export function formatRoundStatus(session: Pick<ResumableSession, "status" | "provenance">): string {
+  if (session.status === "completed") {
+    return session.provenance === "legacy_unverified" ? "Completed (earlier, unverified)" : "Completed";
+  }
+  if (session.status === "abandoned") return "Ended";
+  return "In progress";
+}
+
+/**
  * Badge text for a history record, or null when no truthful mode label
  * exists. `mode: "dictation"` only means "a learning_sessions row" — the one
  * checkpoint all three modes of the practice page share — so it says nothing

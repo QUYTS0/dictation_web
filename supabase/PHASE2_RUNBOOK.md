@@ -31,7 +31,7 @@ shifting everything after them by two:
 | *(none — new)* | `034_word_match_request_seq.sql` | `shadowing_attempts` needed a Word-Match-specific sequence column, independent of `azure_eval_request_seq`, to implement `fn_persist_word_match_result`'s staleness protection at all — discovered while implementing §8 |
 | `033_fn_session_activity_and_evaluation_functions.sql` | `035_fn_session_activity_and_evaluation_functions.sql` | Shifted +2 |
 | *(none — new, post-Phase-2 repair)* | `036_phase2_user_rpc_privilege_corrections.sql` | Removes the `service_role` EXECUTE that `035` left on the four user-actor functions (§8) |
-| `034_provenance_backfill_and_completion_cutover.sql` | **`037_provenance_backfill_and_completion_cutover.sql`** | Shifted +3 (was `036` after the Phase 2 pass) — **not created** |
+| `034_provenance_backfill_and_completion_cutover.sql` | **`037_phase3_prepare_authoritative_cutover.sql`** + `supabase/phase3/*.sql` | Implemented in the Phase 3 pass — see `supabase/PHASE3_RUNBOOK.md` (not applied) |
 | `035_fn_delete_transcript_revision.sql` | **`038_fn_delete_transcript_revision.sql`** | Shifted +3 (was `037` after the Phase 2 pass) — **not created** |
 
 `.claude/video-learning-management-plan.md` is updated throughout to use
@@ -67,7 +67,7 @@ none were modified, renamed, repaired, or reapplied.
    project after stages 1-3.
 5. **Phase 3 — separately authorized and executed later.** Grants EXECUTE
    on the five dormant functions to `authenticated`, runs the provenance
-   backfill (`037`), retires the legacy bridges, and tightens
+   backfill (`037` + `supabase/phase3/`, see PHASE3_RUNBOOK.md), retires the legacy bridges, and tightens
    `learning_sessions`' RLS. **None of this happens as part of Phase 2.**
    The gate stays open (`completion_writes_paused = false`) through all of
    Phase 2's ordinary operation — Phase 2 does not pause it, and nothing

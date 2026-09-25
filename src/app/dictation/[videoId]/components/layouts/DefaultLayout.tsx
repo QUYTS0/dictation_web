@@ -117,7 +117,7 @@ export function DefaultLayout({
   previousReview: CompletedSentenceReview | null;
   reviewTextContainerRef: RefObject<HTMLDivElement | null>;
   handleReviewMouseUp: (event: React.MouseEvent<HTMLDivElement>) => void;
-  accuracy: number;
+  accuracy: number | null;
   translationText: string | undefined;
   initialInputState?: PersistedInputState | null;
   onRestoreConsumed?: () => void;

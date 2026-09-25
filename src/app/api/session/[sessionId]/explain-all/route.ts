@@ -364,16 +364,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // later visit to this report instead of only living in React state.
     // Logged, not fatal: if the 010_session_assessment migration hasn't
     // been applied yet, the column won't exist and this just no-ops.
-    const { error: assessmentSaveError } = await supabase
-      .from("learning_sessions")
-      .update({ ai_assessment: assessment, ai_assessment_generated_at: new Date().toISOString() })
-      .eq("id", sessionId)
-      .eq("user_id", user.id);
-    if (assessmentSaveError) {
-      console.warn(
-        "[session/explain-all] failed to persist assessment (migration 010 may not be applied yet):",
-        assessmentSaveError
+    // Phase 3: direct UPDATEs of learning_sessions are removed by the
+    // cutover, so this goes through the backend-only
+    // fn_persist_session_assessment (migration 037), which writes ONLY the
+    // two assessment fields and re-checks (id, user_id). Ownership was
+    // already verified above with the caller's own RLS client; the service
+    // client is used only for this narrow, server-authored write — the
+    // assessment itself comes from the AI call above, never from the client.
+    let assessmentSaved = false;
+    if (assessment) {
+      const { data: saved, error: assessmentSaveError } = await createServiceClient().rpc(
+        "fn_persist_session_assessment",
+        { p_session_id: sessionId, p_user_id: user.id, p_assessment: assessment }
       );
+      assessmentSaved = saved === true;
+      if (assessmentSaveError || !assessmentSaved) {
+        console.warn("[session/explain-all] failed to persist assessment:", assessmentSaveError ?? "no matching row");
+      }
     }
 
     // parsedItems is empty specifically in the assessment-only fallback
@@ -412,6 +419,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       mistakesReviewed: mistakes.length,
       uniquePatternsExplained: parsedItems.length > 0 ? explainPatterns.length : 0,
       truncated,
+      assessmentSaved,
     });
   } catch (err) {
     console.error("[session/explain-all] unexpected error:", err);

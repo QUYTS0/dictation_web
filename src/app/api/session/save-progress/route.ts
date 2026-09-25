@@ -1,16 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { mapLegacyBridgeError } from "@/lib/supabase/legacyBridgeErrors";
+import { mapPracticeWriteError } from "@/lib/supabase/practiceWriteErrors";
+import { getPracticeWritePath } from "@/lib/practice/writePath";
 import type { SaveProgressRequest, SaveProgressResponse } from "@/lib/types";
 
-// Phase 2: this route's create/update logic now lives in
-// fn_legacy_save_progress (migration 035), called via the caller's own
-// RLS-respecting client — identical behavior to the previous raw
-// .from("learning_sessions") calls (including the transcript-pin
-// validation and the concurrent-first-save race handling), with one
-// addition: the write is now gate-aware (write_gate_paused -> 503), and
-// the race-winner-reuse path also validates the winner's transcript pin
-// against this request. See supabase/PHASE2_RUNBOOK.md.
+// Saves the practice checkpoint (sentence + playhead) and, on first touch,
+// creates the round. Which database path serves it is fixed per deployment
+// (src/lib/practice/writePath.ts):
+//   authoritative — fn_update_resume_position when the round is known,
+//     fn_create_or_get_active_round otherwise (the server resolves the
+//     current transcript and rejects a stale client revision atomically).
+//     Client-supplied accuracy/totalAttempts/status are IGNORED: counters
+//     and completion are owned by the database. An old tab that still sends
+//     status "completed" saves its checkpoint but cannot complete a round.
+//   legacy — the Phase 2 bridge (preparation release only).
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
@@ -35,33 +39,58 @@ export async function POST(request: NextRequest) {
     } = body;
 
     if (!youtubeVideoId) {
-      return NextResponse.json(
-        { error: "youtubeVideoId is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "youtubeVideoId is required" }, { status: 400 });
     }
 
-    const { data, error } = await supabase.rpc("fn_legacy_save_progress", {
-      p_session_id: sessionId ?? null,
+    if (getPracticeWritePath() === "legacy") {
+      const { data, error } = await supabase.rpc("fn_legacy_save_progress", {
+        p_session_id: sessionId ?? null,
+        p_youtube_video_id: youtubeVideoId,
+        p_transcript_id: transcriptId ?? null,
+        p_current_segment_index: currentSegmentIndex,
+        p_video_current_time_sec: videoCurrentTimeSec,
+        p_accuracy: accuracy,
+        p_total_attempts: totalAttempts,
+        p_status: status,
+      });
+      if (error || !data) return mapLegacyBridgeError(error, "Failed to save session");
+      const result = data as { sessionId: string; status: string };
+      return NextResponse.json<SaveProgressResponse>({ sessionId: result.sessionId, status: result.status });
+    }
+
+    if (!Number.isInteger(currentSegmentIndex) || currentSegmentIndex < 0) {
+      return NextResponse.json({ error: "currentSegmentIndex must be a non-negative integer" }, { status: 400 });
+    }
+    const timeSec =
+      typeof videoCurrentTimeSec === "number" && Number.isFinite(videoCurrentTimeSec) && videoCurrentTimeSec >= 0
+        ? videoCurrentTimeSec
+        : null;
+    if (status !== "active") {
+      console.log(`[save-progress] ignoring client-supplied status "${status}" (completion is server-owned)`);
+    }
+
+    if (sessionId) {
+      const { data, error } = await supabase.rpc("fn_update_resume_position", {
+        p_round_id: sessionId,
+        p_youtube_video_id: youtubeVideoId,
+        p_segment_index: currentSegmentIndex,
+        p_video_current_time_sec: timeSec,
+        p_expected_transcript_id: transcriptId ?? null,
+      });
+      if (error || !data) return mapPracticeWriteError(supabase, error, "Failed to save session");
+      const result = data as { roundId: string; roundStatus: string };
+      return NextResponse.json<SaveProgressResponse>({ sessionId: result.roundId, status: result.roundStatus });
+    }
+
+    const { data, error } = await supabase.rpc("fn_create_or_get_active_round", {
       p_youtube_video_id: youtubeVideoId,
-      p_transcript_id: transcriptId ?? null,
-      p_current_segment_index: currentSegmentIndex,
-      p_video_current_time_sec: videoCurrentTimeSec,
-      p_accuracy: accuracy,
-      p_total_attempts: totalAttempts,
-      p_status: status,
+      p_expected_transcript_id: transcriptId ?? null,
+      p_segment_index: currentSegmentIndex,
+      p_video_current_time_sec: timeSec,
     });
-
-    if (error || !data) {
-      return mapLegacyBridgeError(error, "Failed to save session");
-    }
-
-    const result = data as { sessionId: string; status: string };
-    console.log(`[save-progress] saved session ${result.sessionId} (status=${result.status})`);
-    return NextResponse.json<SaveProgressResponse>({
-      sessionId: result.sessionId,
-      status: result.status,
-    });
+    if (error || !data) return mapPracticeWriteError(supabase, error, "Failed to save session");
+    const result = data as { roundId: string; roundStatus: string };
+    return NextResponse.json<SaveProgressResponse>({ sessionId: result.roundId, status: result.roundStatus });
   } catch (err) {
     console.error("[save-progress] unexpected error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

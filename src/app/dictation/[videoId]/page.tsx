@@ -92,7 +92,10 @@ export default function DictationPage({ params }: PageProps) {
   // Stores
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
-  const accuracy = selectAccuracy(sessionStore);
+  // Legacy attempt-based answer accuracy (correct submissions ÷ all
+  // submissions) — only used for the "vs your last run" comparison, whose
+  // baseline is stored with that same meaning.
+  const answerAccuracy = selectAccuracy(sessionStore);
   // Local state
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("script");
@@ -153,6 +156,9 @@ export default function DictationPage({ params }: PageProps) {
     autoGenerateErrorCode,
     nextAutoRetryAt,
     checkAnswerError,
+    restartError,
+    sentenceAccuracy,
+    roundState,
     segments,
     transcriptTitle,
     transcriptVersion,
@@ -1046,7 +1052,7 @@ export default function DictationPage({ params }: PageProps) {
             previousReview={previousReview}
             reviewTextContainerRef={reviewTextContainerRef}
             handleReviewMouseUp={handleReviewMouseUp}
-            accuracy={accuracy}
+            accuracy={sentenceAccuracy.percent}
             translationText={translationBySegmentIndex.get(currentSegIdx)}
             initialInputState={restoredInputState}
             onRestoreConsumed={consumeRestoredInputState}
@@ -1196,9 +1202,11 @@ export default function DictationPage({ params }: PageProps) {
                 {resumeState?.status === "completed" ? (
                   <>
                     <p className="text-sm text-[var(--text-muted)]">
-                      You already completed this video with{" "}
-                      <span className="font-semibold">{resumeState.accuracy}% accuracy</span> over{" "}
-                      {resumeState.totalAttempts} attempts.
+                      {resumeState.provenance === "legacy_unverified"
+                        ? "You finished this video before completion tracking was verified"
+                        : "You already completed this video"}{" "}
+                      — <span className="font-semibold">{resumeState.accuracy}% of answers correct</span> over{" "}
+                      {resumeState.totalAttempts} {resumeState.totalAttempts === 1 ? "attempt" : "attempts"}.
                     </p>
                     <div className="flex items-center gap-3 mt-1">
                       <Link
@@ -1234,6 +1242,7 @@ export default function DictationPage({ params }: PageProps) {
                   </>
                 )}
                 {resumeLoading && <p className="text-xs text-[var(--text-muted)]">Checking for saved progress...</p>}
+                {restartError && <p className="text-xs text-[var(--red)]" role="alert">{restartError}</p>}
               </div>
             )}
 
@@ -1258,13 +1267,38 @@ export default function DictationPage({ params }: PageProps) {
 
             {uxState === "session_completed" && (
               <div className="relative overflow-hidden rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] backdrop-blur-md p-6 flex flex-col gap-4 mt-6">
-                {(mistakes.length === 0 || (previousRunSnapshot && accuracy > previousRunSnapshot.accuracy)) && (
-                  <ConfettiBurst />
-                )}
+                {/* Whether the ROUND is complete is the server's call (every
+                    eligible sentence practiced — Phase 3). The celebration only
+                    fires when a submission from this page completed it, so a
+                    retry or a reload never celebrates twice. Without a server
+                    status (guest / preparation release) the previous
+                    end-of-video behavior applies. */}
+                {(roundState.status
+                  ? roundState.completedByThisPage
+                  : mistakes.length === 0 || (previousRunSnapshot && answerAccuracy > previousRunSnapshot.accuracy)) && <ConfettiBurst />}
                 <div className="text-center">
-                  <p className="text-3xl">🎉</p>
-                  <p className="text-[var(--accent)] font-bold text-xl">Session Complete!</p>
-                  <p className="text-[var(--text-muted)] text-sm mt-1">Final accuracy: <span className="font-bold text-[var(--text)]">{accuracy}%</span> over {sessionStore.totalAttempts} attempts.</p>
+                  <p className="text-3xl">{roundState.status && roundState.status !== "completed" ? "🏁" : "🎉"}</p>
+                  <p className="text-[var(--accent)] font-bold text-xl">
+                    {roundState.status === "completed"
+                      ? "Round complete!"
+                      : roundState.status
+                        ? "You reached the end of the video"
+                        : "Session Complete!"}
+                  </p>
+                  {roundState.status && roundState.status !== "completed" && roundState.progress?.requiredSentenceCount ? (
+                    <p className="text-[var(--text-muted)] text-sm mt-1">
+                      {roundState.progress.coveredSentences.overall} of {roundState.progress.requiredSentenceCount} sentences practiced —
+                      practice the skipped ones to complete this round.
+                    </p>
+                  ) : null}
+                  <p className="text-[var(--text-muted)] text-sm mt-1">
+                    Sentence accuracy:{" "}
+                    <span className="font-bold text-[var(--text)]">
+                      {sentenceAccuracy.percent === null ? "—" : `${sentenceAccuracy.percent}%`}
+                    </span>{" "}
+                    ({sentenceAccuracy.correct}/{sentenceAccuracy.practiced} sentences correct on your latest answer) ·{" "}
+                    {sessionStore.totalAttempts} {sessionStore.totalAttempts === 1 ? "attempt" : "attempts"}.
+                  </p>
                   <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs font-semibold">
                     {bestCombo > 1 && (
                       <span className="rounded-full bg-[var(--red)]/15 px-3 py-1 text-[var(--red)]">
@@ -1278,17 +1312,17 @@ export default function DictationPage({ params }: PageProps) {
                       <span
                         className={clsx(
                           "rounded-full px-3 py-1",
-                          accuracy > previousRunSnapshot.accuracy
+                          answerAccuracy > previousRunSnapshot.accuracy
                             ? "bg-[var(--green)]/20 text-[var(--green)]"
                             : "bg-[var(--surface-2)] text-[var(--text-muted)]"
                         )}
                       >
-                        {accuracy > previousRunSnapshot.accuracy
-                          ? `+${accuracy - previousRunSnapshot.accuracy}%`
-                          : accuracy < previousRunSnapshot.accuracy
-                          ? `${accuracy - previousRunSnapshot.accuracy}%`
+                        {answerAccuracy > previousRunSnapshot.accuracy
+                          ? `+${answerAccuracy - previousRunSnapshot.accuracy}%`
+                          : answerAccuracy < previousRunSnapshot.accuracy
+                          ? `${answerAccuracy - previousRunSnapshot.accuracy}%`
                           : "Same as"}{" "}
-                        vs your last run ({previousRunSnapshot.accuracy}%)
+                        answers correct vs your last run ({previousRunSnapshot.accuracy}%)
                       </span>
                     )}
                   </div>

@@ -63,6 +63,19 @@ declare global {
   }
 }
 
+/** Unloads YouTube's native caption module (undocumented but long-stable
+ *  IFrame API method) — the only reliable way to keep captions off when the
+ *  viewer's YouTube account has "always show captions" enabled. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hideNativeCaptions(player: any) {
+  try {
+    player.unloadModule?.("captions");
+    player.unloadModule?.("cc");
+  } catch {
+    // Module not loaded (yet) — nothing to hide.
+  }
+}
+
 const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
   function YouTubePlayer({ videoId, segments, onSegmentEnd, onReady, continuous = false, onActiveSegmentChange }, ref) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,15 +251,18 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           disablekb: 1,
           rel: 0,
           modestbranding: 1,
-          // We show our own script/transcript UI instead, so force YouTube's native
-          // captions off — otherwise a viewer's own YouTube "always show captions"
-          // account preference can override the unset default and show them anyway.
+          // cc_load_policy can only force captions ON (1); 0/unset defers to the
+          // viewer's own YouTube "always show captions" preference. We show our
+          // own script/transcript UI instead, so native captions are actually
+          // suppressed via hideNativeCaptions() in onReady/onStateChange.
           cc_load_policy: 0,
+          iv_load_policy: 3,
         },
         events: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           onReady: (event: any) => {
             if (instanceIdRef.current !== myInstanceId) return;
+            hideNativeCaptions(event.target);
             playerReadyRef.current = true;
             setStatus("ready");
             setDuration(event.target.getDuration());
@@ -258,6 +274,9 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           onStateChange: (event: any) => {
             if (instanceIdRef.current !== myInstanceId) return;
             if (event.data === window.YT.PlayerState.PLAYING) {
+              // The captions module loads lazily on first play, so an unload
+              // in onReady alone isn't enough.
+              hideNativeCaptions(event.target);
               hasStartedPlaybackRef.current = true;
               startTargetRef.current = null;
               setStatus("playing");

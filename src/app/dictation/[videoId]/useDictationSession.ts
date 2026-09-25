@@ -7,7 +7,7 @@ import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
 import { dashboardKeys } from "@/lib/queries/dashboard";
 import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
-import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState } from "@/lib/types";
+import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState, RoundProgress } from "@/lib/types";
 import { CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
 import { resolveResumeTarget, type ResumeTarget } from "@/lib/utils/resumeTarget";
 import {
@@ -19,6 +19,7 @@ import {
   regenerateTranscript,
   saveManualTranscript,
   requestTranscriptGeneration,
+  PracticeWriteError,
 } from "./api";
 import type { ManualSegmentInput } from "@/lib/utils/segment";
 import type { MistakeRecord, CompletedSentenceReview, ResumeState } from "./types";
@@ -50,6 +51,30 @@ const ACTIVE_SESSION_UX_STATES: UXState[] = [
 const AUTO_RETRYABLE_CODES = new Set(["GENERATION_IN_PROGRESS", "FETCH_COOLDOWN", "NETWORK_ERROR", "TIMEOUT"]);
 const AUTO_RETRY_MAX_ATTEMPTS = 3;
 const AUTO_RETRY_DEFAULT_DELAY_MS = 4000;
+
+/** Client-generated idempotency key for one logical answer submission. */
+function newAttemptId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** What the server last said about the current round (Phase 3). */
+export interface RoundState {
+  status: "active" | "completed" | "abandoned" | null;
+  progress: RoundProgress | null;
+  /** The server reported that a submission from THIS page completed the
+   *  round — the only trigger for the completion celebration, so a retry,
+   *  a reload or an already-completed round never celebrates again. */
+  completedByThisPage: boolean;
+}
+const EMPTY_ROUND_STATE: RoundState = { status: null, progress: null, completedByThisPage: false };
 
 interface UseDictationSessionOptions {
   videoId: string;
@@ -117,6 +142,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // exposed so the UI can show "retrying shortly" instead of a dead end.
   const [nextAutoRetryAt, setNextAutoRetryAt] = useState<number | null>(null);
   const [checkAnswerError, setCheckAnswerError] = useState<string | null>(null);
+  const [restartError, setRestartError] = useState<string | null>(null);
   // Consecutive correct answers — a hint or a retry doesn't break it, only a wrong
   // submit resets it to 0. "Clean" (first-try, no-hint) solves are tracked separately
   // below via cleanSolveCount/isLastResultClean, for the "First try" badge and recap.
@@ -136,6 +162,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // A restored snapshot's word/caret state, consumed once by SentenceWordInput
   // to seed itself, then cleared so later segment changes reset normally.
   const [restoredInputState, setRestoredInputState] = useState<PersistedInputState | null>(null);
+  // Latest Dictation result per sentence of the CURRENT round (seeded from
+  // the server on resume, updated by each graded submission) — the source
+  // of "sentence accuracy": correct latest answers ÷ practiced sentences.
+  // Repeated attempts on a sentence replace its entry, never add to it.
+  const [latestResults, setLatestResults] = useState<Record<number, boolean>>({});
+  const [roundState, setRoundState] = useState<RoundState>(EMPTY_ROUND_STATE);
+  // The logical submission awaiting a definitive answer (see handleAnswerSubmit).
+  const pendingSubmissionRef = useRef<{ segIdx: number; text: string; hint: number; roundId: string | null; id: string } | null>(null);
+  const submitSeqRef = useRef(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
   // Tracks whether the user manually triggered a replay while already paused
@@ -245,6 +280,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     setResumeChecked(false);
     setPinnedRevisionId(undefined);
     firstAttemptBySegmentRef.current = {};
+    pendingSubmissionRef.current = null;
+    setLatestResults({});
+    setRoundState(EMPTY_ROUND_STATE);
     // The session store (sessionId, attempt/correct counts) is global and
     // persisted, so it must be wiped whenever the active video changes —
     // otherwise the accuracy shown for this video is actually the running
@@ -551,8 +589,14 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
             void queryClient.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(user.id) });
           }
         })
-        .catch(() => {
-          if (state.sessionId) sessionStore.setSessionId(null);
+        .catch((err: unknown) => {
+          // Only forget the round when the server says it doesn't exist for
+          // this user (the next save then creates/gets the active round). A
+          // maintenance pause or network error leaves the round untouched —
+          // the next save retries the same checkpoint.
+          if (state.sessionId && err instanceof PracticeWriteError && err.status === 404) {
+            sessionStore.setSessionId(null);
+          }
         });
     },
     [pinnedRevisionId, queryClient, sessionStore, transcriptId, user, videoId, getPersistablePositionSec]
@@ -589,24 +633,62 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // ---- Answer submission ----
   const handleAnswerSubmit = useCallback(
     async (userText: string) => {
-      if (!segments[currentSegIdx]) return;
-      if (firstAttemptBySegmentRef.current[currentSegIdx] === undefined) {
-        firstAttemptBySegmentRef.current[currentSegIdx] = userText;
+      const segIdx = currentSegIdx;
+      if (!segments[segIdx]) return;
+      if (firstAttemptBySegmentRef.current[segIdx] === undefined) {
+        firstAttemptBySegmentRef.current[segIdx] = userText;
       }
+
+      // One id per LOGICAL submission: re-pressing Check after a failed/
+      // unanswered request with the same answer on the same sentence and
+      // round is a retry and reuses the id (the server returns the stored
+      // attempt instead of recording it twice); anything else is a new
+      // submission with a new id — even the same text on the same sentence
+      // once the previous one got an answer.
+      const roundId = sessionStore.sessionId ?? null;
+      const pending = pendingSubmissionRef.current;
+      const clientAttemptId =
+        pending && pending.segIdx === segIdx && pending.text === userText && pending.hint === hintLevel && pending.roundId === roundId
+          ? pending.id
+          : newAttemptId();
+      pendingSubmissionRef.current = { segIdx, text: userText, hint: hintLevel, roundId, id: clientAttemptId };
+      const seq = ++submitSeqRef.current;
+      const epoch = contextEpochRef.current;
+
       setUxState("checking_answer");
       setCheckAnswerError(null);
 
       try {
-        const result = await checkAnswerApi(
-          currentSegIdx,
+        const result = await checkAnswerApi({
+          segmentIndex: segIdx,
           userText,
-          segments[currentSegIdx].text,
-          "relaxed",
-          sessionStore.sessionId ?? undefined
-        );
+          expectedText: segments[segIdx].text,
+          matchMode: "relaxed",
+          sessionId: roundId ?? undefined,
+          clientAttemptId,
+          hintLevelUsed: hintLevel,
+          transcriptId,
+          youtubeVideoId: videoId,
+        });
+        // Definitive answer for this logical submission.
+        if (pendingSubmissionRef.current?.id === clientAttemptId) pendingSubmissionRef.current = null;
+        // A response for another video/user/round/restart must not touch
+        // this context at all.
+        if (contextEpochRef.current !== epoch || (sessionStore.sessionId ?? null) !== roundId) return;
+        setLatestResults((prev) => ({ ...prev, [segIdx]: result.isCorrect }));
+        if (result.roundStatus) {
+          setRoundState((prev) => ({
+            status: result.roundStatus ?? null,
+            progress: result.progress ?? prev.progress,
+            completedByThisPage: prev.completedByThisPage || result.roundCompletedByThisRequest === true,
+          }));
+        }
+        // A newer submission (or navigation) superseded this one's UI.
+        if (seq !== submitSeqRef.current || currentSegIdxRef.current !== segIdx) return;
 
         setCheckResult(result);
-        sessionStore.incrementAttempt(result.isCorrect);
+        // A retry the server had already recorded is not a new attempt.
+        if (result.wasInserted !== false) sessionStore.incrementAttempt(result.isCorrect);
 
         if (result.isCorrect) {
           const isClean = wrongAttempts === 0 && hintLevel === 0;
@@ -643,6 +725,11 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
               setUxState("playing");
               ytPlayerRef.current?.playSegment(nextIdx);
             } else {
+              // End of the video reached. Whether the ROUND is complete is
+              // the server's decision (coverage of every eligible sentence,
+              // Phase 3) — see roundState; the "completed" status sent here
+              // only matters to a preparation-release (legacy) server and is
+              // ignored by the authoritative one.
               setUxState("session_completed");
               triggerAutoSave(nextIdx, "completed");
             }
@@ -672,11 +759,25 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
           setUxState("paused_waiting_input");
         }
       } catch (err) {
-        setCheckAnswerError(err instanceof Error ? err.message : "Failed to check your answer.");
+        if (contextEpochRef.current !== epoch || seq !== submitSeqRef.current) return;
+        // Retryable (maintenance pause, or no response at all): keep the
+        // pending id so pressing Check again is recognized as the same
+        // submission. The typed answer stays in the input; nothing advances
+        // and nothing is counted.
+        const isNetworkError = !(err instanceof PracticeWriteError);
+        const retryable = isNetworkError || err.retryable;
+        if (!retryable && pendingSubmissionRef.current?.id === clientAttemptId) pendingSubmissionRef.current = null;
+        setCheckAnswerError(
+          err instanceof PracticeWriteError && err.retryable
+            ? "Saving is paused for maintenance. Your answer is kept — press Check again in a moment."
+            : isNetworkError
+              ? "Couldn't reach the server. Your answer is kept — press Check again."
+              : err.message
+        );
         setUxState("paused_waiting_input");
       }
     },
-    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout, sentenceStartSec]
+    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout, sentenceStartSec, transcriptId, videoId]
   );
 
   // ---- Start session (seek to segment 0 and play) ----
@@ -987,7 +1088,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
             accuracy: data.session.accuracy,
             totalAttempts: data.session.totalAttempts,
             transcriptId: data.session.transcriptId,
+            provenance: data.session.provenance,
           });
+          // Seed sentence accuracy from what the server recorded for this
+          // round, so a resumed page never shows a score computed only from
+          // its own new submissions.
+          setLatestResults(
+            Object.fromEntries((data.session.latestDictationResults ?? []).map((r) => [r.segmentIndex, r.isCorrect]))
+          );
+          setRoundState({ status: data.session.status, progress: null, completedByThisPage: false });
           // null (no pinned revision on a legacy/pre-Phase-0 row) falls back
           // to fetching current, same as "no session at all".
           setPinnedRevisionId(data.session.transcriptId ?? null);
@@ -1202,8 +1311,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
 
   const handleRestart = useCallback(() => {
     if (!user) return;
-    void restartSession(videoId, resumeState?.sessionId)
-      .then(() => {
+    setRestartError(null);
+    void restartSession(videoId, resumeState?.sessionId ?? sessionStore.sessionId ?? undefined)
+      .then((restarted) => {
         // An explicit restart establishes a new context — invalidate any
         // regenerate/resume-fetch still in flight for the abandoned
         // session so its late result can't restore stale state into what
@@ -1221,18 +1331,22 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // remounts) must leave it intact.
         clearDictationSessionSnapshot(videoId);
         firstAttemptBySegmentRef.current = {};
+        pendingSubmissionRef.current = null;
+        setLatestResults({});
+        setRoundState(restarted.sessionId ? { status: "active", progress: null, completedByThisPage: false } : EMPTY_ROUND_STATE);
         setResumeState(null);
-        // Phase 0: the abandoned round's pin no longer applies — the next
-        // round (created lazily on the next save-progress call) pins
-        // whatever is current at that time, so re-target the transcript
-        // query to current now rather than continuing to show the
-        // abandoned round's revision.
-        setPinnedRevisionId(null);
+        // Phase 0: the abandoned round's pin no longer applies. A Phase 3
+        // server creates the next round in the same transaction and returns
+        // its id and pinned revision — adopt both directly. A preparation-
+        // release server only abandons; the next save-progress then creates
+        // the round pinned to whatever is current, so target current.
+        setPinnedRevisionId(restarted.transcriptId ?? null);
         setCombo(0);
         setBestCombo(0);
         setCleanSolveCount(0);
         setIsLastResultClean(false);
         sessionStore.reset();
+        if (restarted.sessionId) sessionStore.setSessionId(restarted.sessionId);
         // Restart marks the session "abandoned" server-side (see
         // /api/session/restart) — that changes resumableSessions on
         // Dashboard/History. It never touches attempt_logs, so
@@ -1240,8 +1354,26 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // left alone.
         if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        // Nothing was reset locally (that only happens after the server
+        // confirmed), so the current lesson is untouched — just say why.
+        setRestartError(
+          err instanceof PracticeWriteError && err.retryable
+            ? "Restarting is paused for maintenance. Please try again in a moment."
+            : "Couldn't restart the lesson. Please try again."
+        );
+      });
   }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId, clearAllPendingTimeouts, clearResumeTarget]);
+
+  const sentenceAccuracy = useMemo(() => {
+    const values = Object.values(latestResults);
+    const correct = values.filter(Boolean).length;
+    return {
+      correct,
+      practiced: values.length,
+      percent: values.length > 0 ? Math.round((100 * correct) / values.length) : null,
+    };
+  }, [latestResults]);
 
   return {
     currentSegIdx,
@@ -1267,6 +1399,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     autoGenerateErrorCode,
     nextAutoRetryAt,
     checkAnswerError,
+    restartError,
+    sentenceAccuracy,
+    roundState,
     segments,
     transcriptStatus,
     transcriptTitle: transcriptQuery.data?.title,
