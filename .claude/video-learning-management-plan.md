@@ -1467,7 +1467,7 @@ with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above)
 
 **Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
 hidden button is not sufficient if a directly callable RPC can still delete):**
-`fn_delete_transcript_revision` **is created by migration `037` fully specified, but with no
+`fn_delete_transcript_revision` **is created by migration `038` fully specified, but with no
 `EXECUTE` grant issued to any application role at all** — `revoke execute on function
 fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
 statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
@@ -1585,13 +1585,14 @@ satisfying acceptance scenario #10 (§13).
 ## 8. Database changes
 
 **Schema is additive throughout — no existing column is dropped, renamed, or retyped anywhere in
-`020`–`037` — but this is not the same claim as "every migration is behaviorally additive," and
+`020`–`038` — but this is not the same claim as "every migration is behaviorally additive," and
 this document does not make the broader claim.** Several migrations change *existing* behavior on
-purpose: `024` and `036` remove or replace RLS policies that currently grant direct owner-write
+purpose: `024` and `037` remove or replace RLS policies that currently grant direct owner-write
 access (§9.9 — a real permission *removal*, not an addition, verified against actual policy text
 rather than assumed), and `031` narrows table-level GRANTs on `attempt_logs` that were never
 policy-gated in the first place (a corrective privilege migration, not part of the original
-numbered sequence — see PHASE2_RUNBOOK.md §1); `030` and `036` `UPDATE` existing rows (`status`,
+numbered sequence — see PHASE2_RUNBOOK.md §1, like `036`, which narrows function EXECUTE
+grants and changes nothing else); `030` and `037` `UPDATE` existing rows (`status`,
 `provenance`).
 Each is called out explicitly where it happens, not folded into a blanket "additive" claim. RLS
 follows the exact pattern every existing owner-scoped table already uses
@@ -1622,8 +1623,9 @@ was originally scheduled before that table existed).
 | 033 | `033_fn_record_shadowing_attempt.sql` | 2 | Same shape, for Shadowing — `is_practice_valid` computed from `recording_duration_sec` server-side, never a caller-supplied boolean |
 | 034 | `034_word_match_request_seq.sql` | 2 | **Not in the original numbered sequence — inserted during Phase 2 implementation.** Adds `shadowing_attempts.word_match_request_seq`, mirroring `azure_eval_request_seq`'s shape, so Word Match staleness protection doesn't have to (incorrectly) couple to Azure's own sequence |
 | 035 | `035_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`032`/`033`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated`/`service_role` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 036) |
-| 036 | `036_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply. **Not created or executed in Phase 2.** |
-| 037 | `037_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
+| 036 | `036_phase2_user_rpc_privilege_corrections.sql` | 2 (post-Phase-2 repair) | Revokes the `service_role` EXECUTE that `035` left on the four user-actor functions (`fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_legacy_save_progress`, `fn_legacy_restart_round`) — `035` revoked them from `public, anon, authenticated` only, so Supabase's default per-role function grant to `service_role` survived. Exact signatures only, re-grants `authenticated`, and asserts the effective matrix with `has_function_privilege` in the same transaction (PHASE2_RUNBOOK.md §8). |
+| 037 | `037_provenance_backfill_and_completion_cutover.sql` | 3 | Tags every pre-existing round `legacy_unverified`, **bounded by `started_at <= cutover_at` AND the `app_write_gate` row-lock fence** — a timestamp alone is insufficient while old writers could still create rows; the fence is what makes the bound trustworthy. Also tightens `learning_sessions`' RLS (`sessions_owner`/`sessions_anon_insert` dropped, §9.9) — moved here from being absent entirely; run via the write-gate runbook (§12/§14.2), never a bare migration apply. **Not created or executed in Phase 2.** |
+| 038 | `038_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -1757,11 +1759,11 @@ comment on table learning_sessions is
 ```
 
 The `provenance` default is `'current'` here (schema only, harmless); the actual retroactive
-`'legacy_unverified'` tagging of every pre-existing row happens in migration `036`
-(`036_provenance_backfill_and_completion_cutover.sql`, Phase 3), deliberately co-located with the
+`'legacy_unverified'` tagging of every pre-existing row happens in migration `037`
+(`037_provenance_backfill_and_completion_cutover.sql`, Phase 3), deliberately co-located with the
 Dictation route's cutover (§12, R18) rather than here. (This cross-reference was originally
-corrected from a stale `033` to `034` during Phase 1, and shifted again to `036` during Phase 2's
-own renumbering — see §8.1's authoritative table and PHASE2_RUNBOOK.md §1 for the full mapping,
+corrected from a stale `033` to `034` during Phase 1, shifted to `036` during Phase 2's own
+renumbering, and to `037` by the post-Phase-2 repair's `036` insertion — see §8.1's authoritative table and PHASE2_RUNBOOK.md §1 for the full mapping,
 not a specific number repeated in every cross-reference throughout this document.)
 
 ### 8.5 `023_study_sessions.sql`
@@ -1839,7 +1841,7 @@ which would have fabricated "no hint used" for every legacy row) — `NULL` mean
 only rows written after this migration, where the client actually reports a hint level, ever have
 a non-null value. `segment_identity_provenance` defaults `'verified'` for all new writes (correct
 under the Phase-0 immutability fix); backfilled legacy rows are tagged `'legacy_unverified'` in
-migration `036`, alongside the round-level `provenance` backfill.
+migration `037`, alongside the round-level `provenance` backfill.
 
 ### 8.7 `025_shadowing_attempts.sql`
 
@@ -2164,9 +2166,9 @@ exists in one early schema batch, per the fix for the review's migration-orderin
 source. The prose subsections below keep their original physical position in this document for
 readability (each function's write-up stays near the ones it mirrors), but §8.15 — migration
 `030`, the duplicate-round reconciliation — now **executes before** §8.12–§8.14's migrations
-(`032`, `033`, `035`, `036` — not a contiguous range: `031` and `034` are the two Phase 2
-corrective insertions described in PHASE2_RUNBOOK.md §1, not part of this function-migration
-group), per the renumbering in §12. Read §8.1's table, not this section's physical order, when the
+(`032`, `033`, `035`, `037` — not a contiguous range: `031` and `034` are the two Phase 2
+corrective insertions and `036` the post-Phase-2 privilege repair, described in
+PHASE2_RUNBOOK.md §1/§8, not part of this function-migration group), per the renumbering in §12. Read §8.1's table, not this section's physical order, when the
 exact deployment sequence matters.
 
 ### 8.12 `032_fn_record_dictation_attempt.sql` / `033_fn_record_shadowing_attempt.sql`
@@ -2329,7 +2331,7 @@ are **not** subject to this deferral — they're genuinely new capabilities with
 provenance concept to protect against, §9.9, so their `authenticated` grant is issued normally, in
 this same migration.)
 
-### 8.14 `036_provenance_backfill_and_completion_cutover.sql`
+### 8.14 `037_provenance_backfill_and_completion_cutover.sql`
 
 **This migration now also tightens `learning_sessions`' RLS (§9.9) — moved here from being absent
 entirely, and deliberately not placed in Phase 1, because the *existing* `save-progress`/
@@ -2580,7 +2582,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `037_fn_delete_transcript_revision.sql`
+### 8.16 `038_fn_delete_transcript_revision.sql`
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -2629,12 +2631,12 @@ after an `is_admin` check inside the function body (§9.9), not expressed as a n
 
 ### 8.18 Rollback
 
-Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`037`. That is
+Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`038`. That is
 **not** the same as every migration being behaviorally reversible-by-default, and this section does
 not claim it is: `030` (formerly `034`'s, in the pre-R21 numbering) `UPDATE` is reversible via its
-own audit-log table (§8.15) — not a bare comment; `036`'s (formerly `033`'s, then `034`'s)
+own audit-log table (§8.15) — not a bare comment; `037`'s (formerly `033`'s, then `034`'s, then `036`'s)
 provenance-tagging `UPDATE`s are addressed separately below (bounded, and not recommended to
-reverse once Phase 3 is live); and `024`/`036` each remove an existing or newly-added RLS policy
+reverse once Phase 3 is live); and `024`/`037` each remove an existing or newly-added RLS policy
 granting direct owner-write access, and `031` narrows `attempt_logs`' table-level GRANTs — a
 permission change with its own, separate rollback story (§9.9's tightened policies are reversible
 by re-creating the dropped ones, as §8.14 already specifies for `learning_sessions` specifically;
@@ -2677,7 +2679,7 @@ Since Phase 0 now includes the reader-path fix (R21), this also covers the query
 reverting it after Phase 3+ has shipped `roundId`-scoped client state would be part of the same
 one-way commitment, not a separate concern.
 
-**Migration `036`'s (provenance backfill) rollback:** the backfill's `UPDATE`s are, in principle,
+**Migration `037`'s (provenance backfill) rollback:** the backfill's `UPDATE`s are, in principle,
 reversible (`UPDATE learning_sessions SET provenance = 'current' WHERE id IN (...)`, scoped to
 exactly the rows this migration touched — recoverable from `started_at <= :cutover_at`), but doing
 so **after** Phase 3's Dictation cutover has shipped and users have relied on the "legacy
@@ -2698,7 +2700,7 @@ philosophy on the way in — every new request field (`clientAttemptId`, `hintLe
 that omits it (§14.3). `POST /api/practice/evaluate`'s **requirement** of `attemptId` is the one
 deliberate exception — it has no safe fallback (there is no attempt to guess), so an old client's
 request is rejected with a stable `409 stale_client_version` rather than adapted or guessed (§14.3).
-Once migration `036` ships, `save-progress` stops **honoring** an old tab's client-supplied
+Once migration `037` ships, `save-progress` stops **honoring** an old tab's client-supplied
 `status:'completed'` (it's silently ignored, not rejected) — an old tab can still save its resume
 position, it just can no longer mark a round complete by itself; during the write-gate's brief
 pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually true."
@@ -4052,13 +4054,82 @@ neither round-lifecycle/completion/provenance columns nor anything the write-gat
 protect, and `learning_sessions`' RLS is unchanged in Phase 2, so this writer is simply unaffected;
 it is flagged as a Phase 3 prerequisite to re-check once `learning_sessions`' RLS is actually
 tightened (PHASE2_RUNBOOK.md §7). `npx tsc --noEmit`, `npm run lint`, `npm run build`, and
-`npm test` all pass locally against the resulting application code (exact counts in the Phase 2
-completion report). A new real-Postgres integration suite,
+the mocked/unit tier of `npm test` pass locally against the resulting application code. A new
+real-Postgres integration suite,
 `src/__tests__/integration/phase2-functions.integration.test.ts`, is written and gated to skip
-cleanly when its required env vars are absent — **not executed**, for the same environment reason
-as the Phase 0/1 suites. See `supabase/PHASE2_RUNBOOK.md` for the exact apply procedure, the old
-plan-number → actual-file mapping, preflight/postflight queries, and corrections to this plan's own
-future Phase 3 runbook assumptions found while documenting this phase.
+cleanly when its required env vars are absent — **written and skipped, never executed** (the
+Phase 2 report's "passed" count covered only the mocked/unit tier; the Phase 0/1/2 real-database
+suites were all skipped), for the same environment reason as the Phase 0/1 suites. See
+`supabase/PHASE2_RUNBOOK.md` for the exact apply procedure, the old plan-number → actual-file
+mapping, preflight/postflight queries, and corrections to this plan's own future Phase 3 runbook
+assumptions found while documenting this phase.
+
+**Phase 2 status, by evidence:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes (`031`-`035` + bridges + route changes) | Repository |
+| Locally verified | Mocked/unit tier only | tsc, lint, build, Jest (real-DB suites skipped) |
+| Real database integration verified | **No** | No local Postgres/Docker; suites skipped |
+| Applied to the user's project | `001`-`035`: **yes, per the user**; `036`: **no** | User's postflight report |
+| Deployed | Not confirmed from here | — |
+
+The user's own postflight after applying `001`-`035` found the only known Phase 2 defect: the four
+user-actor functions were also executable by `service_role` (`035` omitted `service_role` from
+their REVOKE, so Supabase's default per-role function grant survived). The five dormant functions,
+the backend-only functions and the private helpers matched the intended matrix.
+
+#### Post-Phase-2 repair (resume/first-Play, Continue Learning truthfulness, `036`)
+
+A focused repair after Phase 2, not part of Phase 3. Details and the operational procedure:
+PHASE2_RUNBOOK.md §8. Summary of confirmed causes:
+
+- **First Play/Space started at 0:00 after reopening** — a pre-existing defect, not a Phase 2
+  regression (Phase 2 changed no client code). The restore set the selected sentence and called
+  `seekTo()` on the cued, never-played YouTube player (from `onReady`/the restore effect); the
+  IFrame API documents that `seekTo()` on a cued video starts playback, which autoplay policy
+  blocks without a user gesture, so that seek is not a reliable way to position the video. Play
+  and Space then called a bare `playVideo()`. Outside continuous (Listening) mode the player's
+  per-sentence auto-pause also still pointed at sentence 1. Fixed by arming a start target on the
+  player and seeking inside the first user-initiated `playVideo()` (the seek-then-play Replay
+  always used). Browser behavior is modeled in a mocked player test, **not verified in a real
+  browser**.
+- **Initialization could overwrite the checkpoint** — pre-existing: saves before first playback
+  sent the player's 0:00 default as `video_current_time`; a failed resume check followed by the
+  Listening/Shadowing auto-enter created/overwrote the round at sentence 1 / 0:00; the
+  sessionStorage snapshot also stored 0:00. Fixed (saves before first playback use the restored
+  target; passive saves wait until the checkpoint is known).
+- **Continue Learning** — the bar was `firstSession.accuracy` (legacy attempt-based answer
+  accuracy) drawn as progress; the "Dictation" badge only meant "a `learning_sessions` row", which
+  all three modes write; "1 attempts". The summary cache was only invalidated on completion.
+  Fixed in Dashboard and History (the same accuracy-as-progress bar existed there).
+- **Listening persistence audit** — no Phase 2 bridge regression: `fn_legacy_save_progress`
+  writes exactly the fields the pre-Phase-2 route wrote. Listening playback has had no save
+  trigger of its own since commit `a2848d9` merged Listening into the practice page and removed
+  the standalone page's `listening_sessions` writer (long before Phase 2): the continuous-mode
+  index sync never saves, and in-app navigation fires neither `pagehide` nor
+  `visibilitychange`. So "listened to sentence 6" is never persisted; the shared checkpoint
+  honestly stays at the last practice/navigation save. This is **Phase 5** functionality (an
+  independent Listening position + coverage) and was deliberately not built here.
+- **`036`** — revokes `service_role` (and PUBLIC/anon, idempotently) from the four user-actor
+  functions by exact signature, re-grants `authenticated`, and asserts the effective matrix in the
+  same transaction.
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes | Repository (`036`, `resumeTarget.ts`, `sessionLabels.ts`, player/hook/Dashboard/History changes) |
+| Automatically verified | Mocked/unit tier | tsc, lint, build, Jest incl. new `resumePlayback`, `continueLearning`, `resumeTarget` suites |
+| Real-browser verified | **No** | No browser automation here; PHASE2_RUNBOOK.md §8.5 is the manual checklist |
+| Real-database verified | **No** | `postphase2-privileges.integration.test.ts` written, skipped (no local Postgres) |
+| Applied to the user's project | **No** | — |
+| Deployed | **No** | — |
+
+Phase 3 prerequisites that remain visible and unchanged by this repair: run the Phase 0/1/2 and
+post-Phase-2 real-database suites (concurrency, idempotency, write fence, privilege matrix) on a
+disposable stack; prove TypeScript/SQL normalization parity (`normalizeText` vs.
+`fn_normalize_dictation_text`) before `fn_record_dictation_attempt` becomes authoritative; migrate
+the `session/[sessionId]/explain-all` `learning_sessions` writer before tightening
+`learning_sessions` RLS; plus PHASE2_RUNBOOK.md §7's corrections.
 
 - **Migrate:** `032_fn_record_dictation_attempt.sql`, `033_fn_record_shadowing_attempt.sql`,
   `035_fn_session_activity_and_evaluation_functions.sql` (bundles `fn_create_or_get_active_round`,
@@ -4094,7 +4165,9 @@ future Phase 3 runbook assumptions found while documenting this phase.
   `completion_writes_paused` happens to already be `true` (the fencing property, not just the flag
   — scenario #71); and `anon`/`authenticated` cannot yet execute any of the five real functions
   immediately after this migration deploys, confirming the withheld-grant mechanism actually holds
-  (scenario #70).
+  (scenario #70). The full effective matrix — including `service_role` being **denied** the four
+  user-actor functions, which the original Phase 2 suite never asserted — is covered by
+  `postphase2-privileges.integration.test.ts` (post-Phase-2 repair).
 
 ### Phase 3 — Dictation route cutover, via a genuine write-fence, not a bare "same deploy" claim
 
@@ -4149,7 +4222,7 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   retired here, not merely bypassed.
 - **Modify:** `src/app/api/session/restart/route.ts` — replace `fn_legacy_restart_round` with
   `fn_restart_round`.
-- **Migrate:** `036_provenance_backfill_and_completion_cutover.sql`, run per the bounded, fenced
+- **Migrate:** `037_provenance_backfill_and_completion_cutover.sql`, run per the bounded, fenced
   runbook in §8.14, not as an ordinary "just apply it" migration.
 - **Modify:** `src/app/dictation/[videoId]/useDictationSession.ts` — generate/attach
   `clientAttemptId` per submit; switch the optimistic accuracy display from a running tally to the
@@ -4271,7 +4344,7 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `037_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
+- **Migrate:** `038_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
   **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
   merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
@@ -4410,7 +4483,7 @@ none of the jsdom tests below are described as real-device verification.
   practice page mid-flush) confirmed to unmount the practice page before the flush's response
   lands, and to still invalidate Dashboard/Library/History correctly once it commits (scenario
   #65) — manual, since this repo has no browser-automation test runner (§13's note above).
-- Real Supabase project: confirm all 19 original + 18 new migrations (`020`–`037`) apply cleanly
+- Real Supabase project: confirm all 19 original + 19 new migrations (`020`–`038`) apply cleanly
   against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
   `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
   the §8.15 duplicate-active-round cleanup (migration `030`, run early in Phase 1) affects the
@@ -4546,7 +4619,7 @@ R21) is a one-way commitment** once Phase 1+ has shipped — reverting it afterw
 corrupt every pinned `transcript_id`/`segment_id` reference created since. Migration `030`'s
 (duplicate-round reconciliation, moved into Phase 1 by R21) cleanup is reversible via its own
 audit-log table (§8.15), **but only in the correct order — drop the unique index before restoring
-rows, and only cleanly before Phase 2 ships** (§8.18's corrected version, R23). Migration `036`'s
+rows, and only cleanly before Phase 2 ships** (§8.18's corrected version, R23). Migration `037`'s
 (provenance backfill) rollback is bounded and technically possible but not recommended once Phase
 3 is live, for the reasons §8.18 states — recovery from a *failed* cutover uses the runbook's own
 steps (§12 Phase 3), not a migration-level reversal after the fact.

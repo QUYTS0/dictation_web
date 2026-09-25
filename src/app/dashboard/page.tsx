@@ -26,6 +26,7 @@ import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
+import { formatAnswerAccuracy, formatResumePoint, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
 import type { ResumableSession } from "@/lib/types";
 
 type StudyMode = "dictation" | "listening";
@@ -94,15 +95,14 @@ function ModeCard({
   );
 }
 
+// Only rendered when the record's mode is actually known — see
+// recordModeBadgeLabel for why learning_sessions rows get no badge.
 function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
+  const label = recordModeBadgeLabel(mode);
+  if (!label) return null;
   return (
-    <span
-      className={clsx(
-        "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-        mode === "listening" ? "bg-purple-50 text-purple-600" : "bg-indigo-50 text-indigo-600"
-      )}
-    >
-      {mode === "listening" ? "Listening" : "Dictation"}
+    <span className="shrink-0 rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-600">
+      {label}
     </span>
   );
 }
@@ -332,22 +332,22 @@ export default function DashboardPage() {
                           </p>
 
                           {firstSession.mode === "dictation" ? (
-                            <div className="mt-auto">
-                              <div className="mb-1 flex justify-between text-xs text-slate-600">
-                                <span>
-                                  {/* currentSegmentIndex is the saved resume position (0-based),
-                                      not a count of the video's segments — labeled accordingly so
-                                      an early/default position never reads as "coverage". */}
-                                  Saved at sentence {(firstSession.currentSegmentIndex ?? 0) + 1} · {firstSession.totalAttempts ?? 0} attempts
-                                </span>
-                                <span className="font-medium">{firstSession.accuracy ?? 0}%</span>
-                              </div>
-                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                                <div
-                                  className="h-full rounded-full bg-primary-500"
-                                  style={{ width: `${Math.min(100, Math.max(0, firstSession.accuracy ?? 0))}%` }}
-                                />
-                              </div>
+                            // No completion bar: nothing here measures how much of the
+                            // video has been practiced yet (that coverage arrives with the
+                            // scheduled cutover). The stored percentage is attempt-based
+                            // answer accuracy, so it's shown as text with that meaning.
+                            <div className="mt-auto flex flex-wrap gap-x-2 text-xs text-slate-600" data-testid="continue-learning-stats">
+                              <span>{formatResumePoint(firstSession.currentSegmentIndex)}</span>
+                              <span aria-hidden="true">·</span>
+                              <span>{pluralize(firstSession.totalAttempts ?? 0, "attempt")}</span>
+                              {formatAnswerAccuracy(firstSession.accuracy, firstSession.totalAttempts) && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="font-medium">
+                                    {formatAnswerAccuracy(firstSession.accuracy, firstSession.totalAttempts)}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           ) : (
                             <p className="mt-auto text-xs text-slate-600">
@@ -446,7 +446,7 @@ export default function DashboardPage() {
                         ) : (
                           <>
                             <p className="mb-3 leading-relaxed text-indigo-100">
-                              You made {latestMistakeSession.mistakesCount} mistakes in your most recent challenge.
+                              You made {pluralize(latestMistakeSession.mistakesCount ?? 0, "mistake")} in your most recent challenge.
                             </p>
                             <Link
                               href={

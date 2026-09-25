@@ -24,16 +24,15 @@ import type { ResumableSession } from "@/lib/types";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
 import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
 import { resumableSessionHref } from "@/lib/utils/sessions";
+import { formatAnswerAccuracy, formatResumePoint, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
 
+// Only rendered when the record's mode is actually known — see
+// recordModeBadgeLabel for why learning_sessions rows get no badge.
 function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
+  const label = recordModeBadgeLabel(mode);
+  if (!label) return null;
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-        mode === "listening" ? "bg-purple-50 text-purple-600" : "bg-indigo-50 text-indigo-600"
-      }`}
-    >
-      {mode === "listening" ? "Listening" : "Dictation"}
-    </span>
+    <span className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-600">{label}</span>
   );
 }
 
@@ -219,7 +218,7 @@ function HistoryPageContent() {
                               {item.mode === "dictation" && (
                                 <p className="text-sm font-medium text-slate-500">
                                   {(item.mistakesCount ?? 0) > 0
-                                    ? `${item.mistakesCount} mistakes to review`
+                                    ? `${pluralize(item.mistakesCount ?? 0, "mistake")} to review`
                                     : "No mistakes logged"}
                                 </p>
                               )}
@@ -235,26 +234,22 @@ function HistoryPageContent() {
                                 </div>
                                 <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
                                   <Clock size={14} className="text-slate-400" />
-                                  {item.totalAttempts ?? 0} attempts
+                                  {pluralize(item.totalAttempts ?? 0, "attempt")}
                                 </div>
-                                <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                                  <CheckCircle2 size={14} className="text-emerald-500" />
-                                  {item.accuracy ?? 0}% Accuracy
-                                </div>
+                                {formatAnswerAccuracy(item.accuracy, item.totalAttempts) && (
+                                  <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                                    <CheckCircle2 size={14} className="text-emerald-500" />
+                                    {formatAnswerAccuracy(item.accuracy, item.totalAttempts)}
+                                  </div>
+                                )}
                               </div>
 
-                              <div>
-                                <div className="mb-1.5 flex justify-between text-xs font-bold text-slate-500">
-                                  <span className="text-[10px] uppercase tracking-widest">Progress</span>
-                                  <span>Sentence {(item.currentSegmentIndex ?? 0) + 1}</span>
-                                </div>
-                                <div className="flex h-2 w-full overflow-hidden rounded-full border border-white/40 bg-white/50 shadow-inner">
-                                  <div
-                                    className="h-full rounded-full bg-primary-500 transition-all duration-1000"
-                                    style={{ width: `${Math.max(0, Math.min(100, item.accuracy ?? 0))}%` }}
-                                  />
-                                </div>
-                              </div>
+                              {/* No progress bar: the old one was drawn from answer
+                                  accuracy, not from how much of the video was practiced.
+                                  Real coverage arrives with the scheduled cutover. */}
+                              <p className="text-xs font-bold text-slate-500">
+                                {formatResumePoint(item.currentSegmentIndex)}
+                              </p>
                             </div>
                           ) : (
                             <div className="flex flex-wrap gap-4">

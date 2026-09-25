@@ -813,7 +813,12 @@ export default function DictationPage({ params }: PageProps) {
     // effect only needs to (re)sync once, on a real hidden→shown edge.
     if (!wasShowingVideo && showVideo) {
       const live = usePlayerStore.getState();
-      ytPlayerRef.current?.seekTo(live.currentTimeSec, live.status === "playing");
+      // Only re-sync a player that has actually played: before first
+      // playback currentTimeSec is the 0:00 initialization default, and
+      // seeking there would discard an armed resume target.
+      if (live.status === "playing" || live.status === "paused" || live.status === "ended") {
+        ytPlayerRef.current?.seekTo(live.currentTimeSec, live.status === "playing");
+      }
     }
     previousShowVideoRef.current = showVideo;
   }, [showVideo, ytPlayerRef]);

@@ -3,14 +3,41 @@
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { usePlayerStore } from "@/store/playerStore";
 import { findSegmentIndexAtTime } from "@/lib/utils/segment";
+import { SEGMENT_START_PRE_ROLL_SEC } from "@/lib/utils/resumeTarget";
 import type { TranscriptSegment } from "@/lib/types";
 
+/** Where this player instance's FIRST playback should start — see
+ *  setStartTarget below. */
+export interface PlayerStartTarget {
+  segmentIndex: number;
+  timeSec: number;
+}
+
 export interface YouTubePlayerHandle {
-  playSegment: (segIdx: number) => void;
+  /** Seeks to the segment's start (or to `fromSec`, when given) and plays —
+   *  an explicit navigation, so it also discards any armed start target. */
+  playSegment: (segIdx: number, fromSec?: number) => void;
+  /** Plays from the live playhead. The first call on an instance that has
+   *  never played honors an armed start target instead of starting at 0. */
   playVideo: () => void;
   pauseVideo: () => void;
   seekTo: (timeSec: number, autoPlay?: boolean) => void;
   setPlaybackRate: (rate: number) => void;
+  /** Arms (or with null, clears) the position the instance's first playback
+   *  starts from. Deliberately does NOT seek the cued player: the IFrame
+   *  API documents that seekTo() on a cued video starts playback, and a
+   *  seek issued outside a user gesture on a never-played video is not a
+   *  reliable way to position it. The seek happens inside the first
+   *  playVideo() call instead (the same seek-then-play pattern Replay
+   *  uses). Ignored once the instance has started playing — a restore that
+   *  arrives after real playback must never move the user's playhead.
+   *  Returns whether the target was accepted. */
+  setStartTarget: (target: PlayerStartTarget | null) => boolean;
+  /** The real player's playhead, or null while this instance has never
+   *  played — before first playback the player sits at an initialization
+   *  default (0:00), which is not a position anyone chose and must never be
+   *  persisted as progress. */
+  getLivePlayheadSec: () => number | null;
 }
 
 interface YouTubePlayerProps {
@@ -27,10 +54,6 @@ interface YouTubePlayerProps {
    *  segment's time range, so the page can keep the active sentence in sync. */
   onActiveSegmentChange?: (segmentIndex: number) => void;
 }
-
-// Small safety margin subtracted from a segment's start time before seeking, so that
-// YouTube's keyframe-snapping jitter on seekTo() can't clip the first spoken word.
-const SEGMENT_START_PRE_ROLL_SEC = 0.2;
 
 declare global {
   interface Window {
@@ -70,6 +93,12 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     // tells the tick to hold the manually-set index instead of trusting that
     // stale/pre-roll time-derived reading.
     const pendingManualTargetRef = useRef<number | null>(null);
+    // Per-instance: whether this player has ever reached PLAYING, and the
+    // armed start target its first playVideo() honors (see setStartTarget).
+    // Both reset whenever initPlayer() creates a new instance, so a target
+    // armed for a previous video/instance can never leak into a new one.
+    const hasStartedPlaybackRef = useRef(false);
+    const startTargetRef = useRef<PlayerStartTarget | null>(null);
 
     const setStatus = usePlayerStore((s) => s.setStatus);
     const setCurrentTime = usePlayerStore((s) => s.setCurrentTime);
@@ -190,6 +219,8 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         playerRef.current.destroy();
       }
       playerReadyRef.current = false;
+      hasStartedPlaybackRef.current = false;
+      startTargetRef.current = null;
       // This instance is now the sole owner of the shared player store —
       // mint a fresh token (invalidating any callback still in flight from
       // whatever instance owned it before, even if destroy() above doesn't
@@ -227,6 +258,8 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
           onStateChange: (event: any) => {
             if (instanceIdRef.current !== myInstanceId) return;
             if (event.data === window.YT.PlayerState.PLAYING) {
+              hasStartedPlaybackRef.current = true;
+              startTargetRef.current = null;
               setStatus("playing");
               isPausedRef.current = false;
               startTick(myInstanceId);
@@ -286,23 +319,44 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
     // Resumes playback from wherever the player currently sits — unlike
     // playSegment/seekTo, this never seeks. Used by the Listening Mode
     // Play/Pause control, where pausing must preserve the current timestamp.
+    //
+    // Exception: the very first playback of an instance with an armed start
+    // target (a resumed lesson) seeks to that target first, in the same user
+    // gesture, and aligns the per-sentence auto-pause with the selected
+    // sentence — otherwise the first Play/Space would start the video at 0:00
+    // (and, outside continuous mode, auto-pause against sentence 1's end).
+    // After the instance has played once, this is a plain resume again, so
+    // Pause → Play continues from the paused playhead.
     const playVideoFn = useCallback(() => {
       if (!playerRef.current || !playerReadyRef.current) return;
       isPausedRef.current = false;
+      const target = hasStartedPlaybackRef.current ? null : startTargetRef.current;
+      if (target && segmentsRef.current[target.segmentIndex]) {
+        activeSegmentIdxRef.current = target.segmentIndex;
+        pendingManualTargetRef.current = target.segmentIndex;
+        setCurrentSegmentIndex(target.segmentIndex);
+        playerRef.current.seekTo(target.timeSec, true);
+      }
       playerRef.current.playVideo();
-    }, []);
+    }, [setCurrentSegmentIndex]);
 
     const playSegmentFn = useCallback(
-      (segIdx: number) => {
+      (segIdx: number, fromSec?: number) => {
         const seg = segmentsRef.current[segIdx];
         if (!seg || !playerRef.current || !playerReadyRef.current) return;
+        // Explicit navigation supersedes any armed resume target.
+        startTargetRef.current = null;
         activeSegmentIdxRef.current = segIdx;
         pendingManualTargetRef.current = segIdx;
         isPausedRef.current = false;
         // YouTube's seekTo() snaps to the nearest keyframe with run-to-run jitter, so
         // seeking exactly to seg.start sometimes lands a beat past it and clips the
         // first word. Seeking slightly earlier keeps that jitter on the silent side.
-        playerRef.current.seekTo(Math.max(0, seg.start - SEGMENT_START_PRE_ROLL_SEC), true);
+        const startSec =
+          typeof fromSec === "number" && Number.isFinite(fromSec) && fromSec >= 0
+            ? fromSec
+            : Math.max(0, seg.start - SEGMENT_START_PRE_ROLL_SEC);
+        playerRef.current.seekTo(startSec, true);
         playerRef.current.playVideo();
       },
       []
@@ -310,6 +364,7 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
 
     const seekToFn = useCallback((timeSec: number, autoPlay = false) => {
       if (!playerRef.current || !playerReadyRef.current) return;
+      startTargetRef.current = null;
       playerRef.current.seekTo(timeSec, true);
       if (autoPlay) playerRef.current.playVideo();
     }, []);
@@ -320,7 +375,21 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       playerRef.current.setPlaybackRate(rate);
     }, []);
 
+    const setStartTargetFn = useCallback((target: PlayerStartTarget | null) => {
+      if (hasStartedPlaybackRef.current) return false;
+      startTargetRef.current = target;
+      return true;
+    }, []);
+
+    const getLivePlayheadSecFn = useCallback((): number | null => {
+      if (!playerRef.current || !playerReadyRef.current || !hasStartedPlaybackRef.current) return null;
+      const t = playerRef.current.getCurrentTime?.();
+      return typeof t === "number" && Number.isFinite(t) ? t : null;
+    }, []);
+
     useImperativeHandle(ref, () => ({
+      setStartTarget: setStartTargetFn,
+      getLivePlayheadSec: getLivePlayheadSecFn,
       playSegment: playSegmentFn,
       playVideo: playVideoFn,
       pauseVideo: pauseVideoFn,

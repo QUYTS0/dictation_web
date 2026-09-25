@@ -8,7 +8,8 @@ import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
 import { dashboardKeys } from "@/lib/queries/dashboard";
 import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
 import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState } from "@/lib/types";
-import { RESUME_SEEK_DELAY_MS, CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
+import { CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
+import { resolveResumeTarget, type ResumeTarget } from "@/lib/utils/resumeTarget";
 import {
   fetchTranscript,
   checkAnswerApi,
@@ -154,10 +155,28 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // set the instant we've decided (found a snapshot or not), so a later
   // background transcript refetch can't re-trigger it.
   const snapshotRestoreAttemptedRef = useRef(false);
-  // A video timestamp to seek to once the YouTube player reports ready —
-  // set by the snapshot restore if the player isn't ready yet at that point.
-  const pendingRestoreSeekSecRef = useRef<number | null>(null);
-  const playerReadyForRestoreRef = useRef(false);
+  // The resolved resume target (selected sentence + playhead) a restore
+  // established, kept until the player's first real playback consumes it or
+  // an explicit user action / context change supersedes it. Deliberately
+  // distinct from currentSegIdx (the selected sentence) and from the
+  // player's live playhead: restoring the sentence index does not position
+  // the YouTube player, so the target is armed on the player (see
+  // YouTubePlayerHandle.setStartTarget) and honored by its first Play/Space.
+  // `epoch` ties it to the context it was resolved for (contextEpochRef).
+  const resumeTargetRef = useRef<{ target: ResumeTarget; epoch: number } | null>(null);
+  // Whether passive saves (tab hidden / pagehide) may write the practice
+  // checkpoint. False until this visit's checkpoint is actually known —
+  // restored from the server/snapshot, confirmed absent by the server, or
+  // replaced by a deliberate user action — so a failed/pending resume check
+  // is never mistaken for "the user restarted at sentence 1, 0:00".
+  const passiveSaveAllowedRef = useRef(false);
+  // The server resume check failed (network etc.): a checkpoint may exist
+  // but is unknown, so nothing may write sentence 1 / 0:00 over it on the
+  // user's behalf until they act deliberately.
+  const resumeCheckFailedRef = useRef(false);
+  // One Listening/Shadowing auto-enter per video/user context (see the
+  // autoEnterPaused effect below).
+  const autoEnterAttemptedRef = useRef(false);
   // Guards src/app/dictation/[videoId]/api.ts's requestTranscriptGeneration
   // call against duplicate concurrent POSTs from React re-renders/StrictMode
   // double-invocation — the server-side lock (see
@@ -201,8 +220,14 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     clearAllPendingTimeouts();
     resumeLoadedRef.current = false;
     snapshotRestoreAttemptedRef.current = false;
-    pendingRestoreSeekSecRef.current = null;
-    playerReadyForRestoreRef.current = false;
+    resumeTargetRef.current = null;
+    passiveSaveAllowedRef.current = false;
+    resumeCheckFailedRef.current = false;
+    autoEnterAttemptedRef.current = false;
+    // The selected sentence belongs to the previous video/user — it must not
+    // carry over (the new context's own restore sets it, or it stays at 1).
+    currentSegIdxRef.current = 0;
+    setCurrentSegIdx(0);
     setPendingRevisionNotice(null);
     // A regenerate left in flight for the previous context is now stale
     // (see the isStale() guard in handleRegenerateTranscript) and will
@@ -273,6 +298,34 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments]);
 
+  // ---- Resume target plumbing (see resumeTargetRef) ----
+  const armResumeTarget = useCallback((target: ResumeTarget | null) => {
+    if (!target) return;
+    resumeTargetRef.current = { target, epoch: contextEpochRef.current };
+    // No-op if the player isn't mounted yet — handlePlayerReady re-arms it.
+    ytPlayerRef.current?.setStartTarget({ segmentIndex: target.segmentIndex, timeSec: target.timeSec });
+  }, []);
+
+  // Any explicit navigation (Replay, Next/Previous, jump, Start, Restart)
+  // supersedes a restore that hasn't been consumed yet.
+  const clearResumeTarget = useCallback(() => {
+    resumeTargetRef.current = null;
+    ytPlayerRef.current?.setStartTarget(null);
+  }, []);
+
+  // The playhead a save should record: the real player's position once it
+  // has actually played; before that, the still-pending resume target (so
+  // merely reopening a lesson re-saves the checkpoint it restored instead of
+  // the player's 0:00 initialization default); otherwise the store's value
+  // (0 for a genuinely fresh lesson).
+  const getPersistablePositionSec = useCallback((): number => {
+    const live = ytPlayerRef.current?.getLivePlayheadSec() ?? null;
+    if (live !== null) return live;
+    const pending = resumeTargetRef.current;
+    if (pending && pending.epoch === contextEpochRef.current) return pending.target.timeSec;
+    return usePlayerStore.getState().currentTimeSec;
+  }, []);
+
   // ---- Restore an active session persisted in sessionStorage (see
   // sessionPersistence.ts) — takes priority over the "Start Dictation" screen
   // and even the server-side resume banner, since it reflects this exact
@@ -329,29 +382,36 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // and the transcript already fetched against that correct revision.
       resumeLoadedRef.current = true;
       setResumeState(null);
-
-      if (snapshot.videoCurrentTimeSec > 0) {
-        if (playerReadyForRestoreRef.current) {
-          ytPlayerRef.current?.seekTo(snapshot.videoCurrentTimeSec, false);
-        } else {
-          pendingRestoreSeekSecRef.current = snapshot.videoCurrentTimeSec;
-        }
-      }
+      passiveSaveAllowedRef.current = true;
+      armResumeTarget(resolveResumeTarget(segments, segIdx, snapshot.videoCurrentTimeSec));
       return true;
     },
-    [segments.length, sessionStore]
+    [segments, sessionStore, armResumeTarget]
   );
 
-  // Called when the YouTube player reports ready — applies a seek that a
-  // snapshot restore queued up before the player existed yet.
+  // Called when a (new) YouTube player instance reports ready — re-arms a
+  // resume target resolved before this instance existed (resume data
+  // first), or one a remount's fresh instance doesn't know about yet. A
+  // target from a previous context (epoch mismatch) is dropped instead.
   const handlePlayerReady = useCallback(() => {
-    playerReadyForRestoreRef.current = true;
-    if (pendingRestoreSeekSecRef.current !== null) {
-      const timeSec = pendingRestoreSeekSecRef.current;
-      pendingRestoreSeekSecRef.current = null;
-      ytPlayerRef.current?.seekTo(timeSec, false);
+    const pending = resumeTargetRef.current;
+    if (!pending) return;
+    if (pending.epoch !== contextEpochRef.current) {
+      resumeTargetRef.current = null;
+      return;
     }
+    ytPlayerRef.current?.setStartTarget({
+      segmentIndex: pending.target.segmentIndex,
+      timeSec: pending.target.timeSec,
+    });
   }, []);
+
+  // The first real playback consumed the target (the player clears its own
+  // copy on PLAYING); from here on the live playhead is authoritative.
+  const playerStatus = playerStore.status;
+  useEffect(() => {
+    if (playerStatus === "playing") resumeTargetRef.current = null;
+  }, [playerStatus]);
 
   // Update UX state based on transcript status. Keyed on dataUpdatedAt (not
   // just status/segments.length) because a first-generation retry can land
@@ -444,7 +504,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   }, []);
 
   const triggerAutoSave = useCallback(
-    (segmentIndex: number, status: "active" | "completed" | "abandoned" = "active") => {
+    (segmentIndex: number, status: "active" | "completed" | "abandoned" = "active", timeSecOverride?: number) => {
       if (!user) return;
       // Identity (pinned revision) hasn't resolved yet — never send a save
       // built from default/initialization values before we actually know
@@ -457,11 +517,13 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // recreated this callback (which — since currentTimeSec ticks every
       // ~200ms — would also churn this function's identity constantly and
       // make callers that depend on it, like the pagehide/visibilitychange
-      // listeners below, re-register on every tick).
+      // listeners below, re-register on every tick). Navigation saves pass
+      // the target sentence's start explicitly, since the player hasn't
+      // moved there yet at the moment they're issued.
       void saveProgress(
         videoId,
         segmentIndex,
-        usePlayerStore.getState().currentTimeSec,
+        timeSecOverride ?? getPersistablePositionSec(),
         selectAccuracy(state),
         state.totalAttempts,
         state.sessionId ?? undefined,
@@ -470,6 +532,12 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       )
         .then((r) => {
           if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
+          // Every confirmed save changes what Continue Learning shows
+          // (saved sentence, attempts, last practiced). Invalidation only
+          // marks the cached summary stale: it refetches right away only if
+          // Dashboard/History is mounted, otherwise on their next mount — so
+          // this adds no requests while practicing.
+          if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
           if (status === "completed" && user) {
             // Dashboard/History cache the persisted data this write just
             // changed (completedVideos/avgAccuracy/resumableSessions, error
@@ -477,11 +545,8 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
             // + the attempt_logs rows this session accumulated) — mark them
             // stale so returning to either page picks up this session
             // instead of showing pre-completion numbers for up to
-            // staleTime. Intermediate "active" autosaves deliberately don't
-            // do this: they're too frequent to invalidate on every one
-            // without hammering these endpoints for data the user isn't
-            // looking at yet.
-            void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+            // staleTime (the summary itself is invalidated above on every
+            // confirmed save).
             void queryClient.invalidateQueries({ queryKey: dashboardKeys.errorPatterns(user.id) });
             void queryClient.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(user.id) });
           }
@@ -490,7 +555,35 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
           if (state.sessionId) sessionStore.setSessionId(null);
         });
     },
-    [pinnedRevisionId, queryClient, sessionStore, transcriptId, user, videoId]
+    [pinnedRevisionId, queryClient, sessionStore, transcriptId, user, videoId, getPersistablePositionSec]
+  );
+
+  // Start of a sentence as a checkpoint time (undefined past the last one).
+  const sentenceStartSec = useCallback(
+    (segIdx: number): number | undefined =>
+      segIdx >= 0 && segIdx < segments.length ? resolveResumeTarget(segments, segIdx, null)?.timeSec : undefined,
+    [segments]
+  );
+
+  // A deliberate navigation to `segIdx`: replaces any pending restore with
+  // the user's own choice (its sentence start) and makes the checkpoint
+  // "known" again for passive saves. The caller's playSegment() consumes it
+  // immediately when the player is ready; if it isn't ready yet (the choice
+  // was made while the lesson was still restoring), the target is armed on
+  // the player once it is, so the first Play/Space honors the newest intent
+  // rather than 0:00 or the superseded restore.
+  const markUserAction = useCallback(
+    (segIdx: number) => {
+      passiveSaveAllowedRef.current = true;
+      // Once the player has actually played, the live playhead is
+      // authoritative and playSegment() positions it directly.
+      if (ytPlayerRef.current?.getLivePlayheadSec() != null) {
+        clearResumeTarget();
+        return;
+      }
+      armResumeTarget(resolveResumeTarget(segments, segIdx, null));
+    },
+    [armResumeTarget, clearResumeTarget, segments]
   );
 
   // ---- Answer submission ----
@@ -541,7 +634,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
           setHintLevel(0);
 
           const nextIdx = currentSegIdx + 1;
-          triggerAutoSave(nextIdx, "active");
+          triggerAutoSave(nextIdx, "active", sentenceStartSec(nextIdx));
           scheduleTimeout(() => {
             setCheckResult(null);
             if (nextIdx < segments.length) {
@@ -583,16 +676,17 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         setUxState("paused_waiting_input");
       }
     },
-    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout]
+    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout, sentenceStartSec]
   );
 
   // ---- Start session (seek to segment 0 and play) ----
   const handleStart = useCallback(() => {
     firstAttemptBySegmentRef.current = {};
-    triggerAutoSave(0, "active");
+    markUserAction(0);
+    triggerAutoSave(0, "active", sentenceStartSec(0));
     setUxState("playing");
     ytPlayerRef.current?.playSegment(0);
-  }, [triggerAutoSave]);
+  }, [triggerAutoSave, markUserAction, sentenceStartSec]);
 
   // ---- Replay current segment ----
   const handleReplay = useCallback(() => {
@@ -600,17 +694,21 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     // segment-end handler won't reset the input or typed words.
     const isAlreadyPaused = uxState === "paused_waiting_input";
     isManualReplayWhilePaused.current = isAlreadyPaused;
+    // Replay deliberately starts at the selected sentence's beginning — it
+    // supersedes any pending resume target (see markUserAction).
+    markUserAction(currentSegIdx);
     if (!isAlreadyPaused) {
       setUxState("playing");
       setCheckResult(null); // Clear stale check result when replaying from playing state
     }
     ytPlayerRef.current?.playSegment(currentSegIdx);
-  }, [currentSegIdx, uxState]);
+  }, [currentSegIdx, uxState, markUserAction]);
 
   // ---- Skip current segment ----
   const handleSkip = useCallback(() => {
     const nextIdx = currentSegIdx + 1;
     if (nextIdx < segments.length) {
+      markUserAction(nextIdx);
       currentSegIdxRef.current = nextIdx;
       setCurrentSegIdx(nextIdx);
       ytPlayerRef.current?.playSegment(nextIdx);
@@ -618,14 +716,15 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       setWrongAttempts(0);
       setHintLevel(0);
       setUxState("playing");
-      triggerAutoSave(nextIdx, "active");
+      triggerAutoSave(nextIdx, "active", sentenceStartSec(nextIdx));
     }
-  }, [currentSegIdx, segments.length, triggerAutoSave]);
+  }, [currentSegIdx, segments.length, triggerAutoSave, markUserAction, sentenceStartSec]);
 
   // ---- Go to previous segment ----
   const handlePrevious = useCallback(() => {
     const prevIdx = currentSegIdx - 1;
     if (prevIdx >= 0) {
+      markUserAction(prevIdx);
       currentSegIdxRef.current = prevIdx;
       setCurrentSegIdx(prevIdx);
       ytPlayerRef.current?.playSegment(prevIdx);
@@ -633,9 +732,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       setWrongAttempts(0);
       setHintLevel(0);
       setUxState("playing");
-      triggerAutoSave(prevIdx, "active");
+      triggerAutoSave(prevIdx, "active", sentenceStartSec(prevIdx));
     }
-  }, [currentSegIdx, triggerAutoSave]);
+  }, [currentSegIdx, triggerAutoSave, markUserAction, sentenceStartSec]);
 
   // Live-updated mirror of videoId, read from inside triggerAutoGenerate's
   // async callbacks to detect a video switch that happened while a request
@@ -857,6 +956,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   useEffect(() => {
     if (resumeLoadedRef.current) return;
     if (!user) {
+      passiveSaveAllowedRef.current = true;
       resumeLoadedRef.current = true;
       setResumeChecked(true);
       setPinnedRevisionId(null); // guest: no session possible — fetch current
@@ -892,11 +992,14 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
           // to fetching current, same as "no session at all".
           setPinnedRevisionId(data.session.transcriptId ?? null);
         } else {
+          // The server confirmed there is no checkpoint to protect.
+          passiveSaveAllowedRef.current = true;
           setPinnedRevisionId(null);
         }
       })
       .catch(() => {
         if (contextEpochRef.current !== requestEpoch) return;
+        resumeCheckFailedRef.current = true;
         // Resume check failed (network error, etc.) — fetch current rather
         // than leaving the transcript query blocked indefinitely.
         setPinnedRevisionId(null);
@@ -923,6 +1026,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // as bogus in-progress state even for a video the user already
       // completed (or never touched).
       if (!user || !practicingStates.includes(uxStateRef.current)) return;
+      // Never write initialization defaults over a checkpoint this visit
+      // hasn't established yet (see passiveSaveAllowedRef).
+      if (!passiveSaveAllowedRef.current) return;
       triggerAutoSave(currentSegIdxRef.current, "active");
     };
     const onVisibilityChange = () => {
@@ -967,7 +1073,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         isLastResultClean,
         previousRunSnapshot,
         firstAttemptBySegment: firstAttemptBySegmentRef.current,
-        videoCurrentTimeSec: playerStore.currentTimeSec,
+        videoCurrentTimeSec: getPersistablePositionSec(),
         inputState: liveInputState,
         sessionId: state.sessionId,
         totalAttempts: state.totalAttempts,
@@ -993,6 +1099,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     previousRunSnapshot,
     liveInputState,
     playerStore.currentTimeSec,
+    getPersistablePositionSec,
   ]);
 
   // Consumed once by SentenceWordInput after it seeds itself from a restored
@@ -1002,6 +1109,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   const handleResume = useCallback(() => {
     if (!resumeState || segments.length === 0) return;
     const segIdx = Math.min(Math.max(resumeState.currentSegmentIndex, 0), segments.length - 1);
+    const target = resolveResumeTarget(segments, segIdx, resumeState.videoCurrentTimeSec);
     sessionStore.setSessionId(resumeState.sessionId);
     // Restore this video's own accuracy tally so continued practice blends
     // with what was already recorded, instead of starting from the counts
@@ -1014,14 +1122,13 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     setCurrentSegIdx(segIdx);
     setResumeState(null);
     setUxState("playing");
-    ytPlayerRef.current?.playSegment(segIdx);
-    const resumeTimeSec = resumeState.videoCurrentTimeSec;
-    if (resumeTimeSec > 0) {
-      scheduleTimeout(() => {
-        ytPlayerRef.current?.seekTo(resumeTimeSec, true);
-      }, RESUME_SEEK_DELAY_MS);
-    }
-  }, [resumeState, segments.length, sessionStore, scheduleTimeout]);
+    // An explicit click: play the checkpoint's sentence from the resolved
+    // target in a single seek-then-play (the previous delayed second seek,
+    // RESUME_SEEK_DELAY_MS after playSegment, raced the first one).
+    clearResumeTarget();
+    passiveSaveAllowedRef.current = true;
+    ytPlayerRef.current?.playSegment(segIdx, target?.timeSec);
+  }, [resumeState, segments, sessionStore, clearResumeTarget]);
 
   // ---- Auto-enter a paused, ready-to-continue state for Listening Mode
   // entries (see autoEnterPaused) — the equivalent of clicking "Start
@@ -1030,7 +1137,6 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // and mistake "no saved progress" for "still loading". Reuses the same
   // pending-seek/player-ready plumbing as the sessionStorage snapshot restore
   // above, since the player may not be ready yet this early in the mount.
-  const autoEnterAttemptedRef = useRef(false);
   useEffect(() => {
     if (!autoEnterPaused || autoEnterAttemptedRef.current) return;
     if (uxState !== "transcript_ready" || segments.length === 0 || !resumeChecked) return;
@@ -1043,31 +1149,34 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         resumeState.totalAttempts,
         Math.round((resumeState.accuracy / 100) * resumeState.totalAttempts)
       );
-      currentSegIdxRef.current = segIdx;
-      setCurrentSegIdx(segIdx);
       setResumeState(null);
       setUxState("paused_waiting_input");
-      const resumeTimeSec = resumeState.videoCurrentTimeSec;
-      if (resumeTimeSec > 0) {
-        if (playerReadyForRestoreRef.current) {
-          ytPlayerRef.current?.seekTo(resumeTimeSec, false);
-        } else {
-          pendingRestoreSeekSecRef.current = resumeTimeSec;
-        }
-      }
+      passiveSaveAllowedRef.current = true;
+      // If the user already started playback themselves (Play/Space before
+      // this restore ran), their action wins: keep the session identity
+      // above, but don't move the selected sentence or arm a stale target.
+      const liveStatus = usePlayerStore.getState().status;
+      if (liveStatus === "playing" || liveStatus === "paused" || liveStatus === "ended") return;
+      currentSegIdxRef.current = segIdx;
+      setCurrentSegIdx(segIdx);
+      armResumeTarget(resolveResumeTarget(segments, segIdx, resumeState.videoCurrentTimeSec));
     } else {
       // No saved progress: sentence 1, timestamp 0 — which is already where a
       // freshly loaded player sits, so no seek is needed, just leave the
-      // "Start Dictation" screen for the paused practicing view.
-      triggerAutoSave(0, "active");
+      // "Start Dictation" screen for the paused practicing view. The round
+      // is only created when the server positively confirmed there's no
+      // checkpoint — if the resume check failed, one may exist and writing
+      // sentence 1 / 0:00 would overwrite it.
+      if (!resumeCheckFailedRef.current) triggerAutoSave(0, "active", 0);
       setUxState("paused_waiting_input");
     }
-  }, [autoEnterPaused, uxState, segments.length, resumeChecked, resumeState, sessionStore, triggerAutoSave]);
+  }, [autoEnterPaused, uxState, segments, resumeChecked, resumeState, sessionStore, triggerAutoSave, armResumeTarget]);
 
   // ---- Jump directly to an arbitrary segment (e.g. from a bookmark deep link) ----
   const jumpToSegment = useCallback(
     (segIdx: number) => {
       if (segIdx < 0 || segIdx >= segments.length) return;
+      markUserAction(segIdx);
       currentSegIdxRef.current = segIdx;
       setCurrentSegIdx(segIdx);
       setCheckResult(null);
@@ -1075,9 +1184,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       setHintLevel(0);
       setUxState("playing");
       ytPlayerRef.current?.playSegment(segIdx);
-      triggerAutoSave(segIdx, "active");
+      triggerAutoSave(segIdx, "active", sentenceStartSec(segIdx));
     },
-    [segments.length, triggerAutoSave]
+    [segments.length, triggerAutoSave, markUserAction, sentenceStartSec]
   );
 
   // ---- Listening Mode continuous playback: silently keep currentSegIdx in
@@ -1102,6 +1211,8 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // answer's auto-advance) tied to the session being abandoned.
         contextEpochRef.current += 1;
         clearAllPendingTimeouts();
+        clearResumeTarget();
+        passiveSaveAllowedRef.current = true;
         setPendingRevisionNotice(null);
         setRegenerating(false);
         setRegenerateError(null);
@@ -1130,7 +1241,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
       })
       .catch(() => {});
-  }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId, clearAllPendingTimeouts]);
+  }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId, clearAllPendingTimeouts, clearResumeTarget]);
 
   return {
     currentSegIdx,

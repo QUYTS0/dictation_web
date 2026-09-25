@@ -1,8 +1,6 @@
 import { AudioLines, Headphones, Keyboard, type LucideIcon } from "lucide-react";
 import type { InputMode, ShortcutEntry, VideoSizeMode } from "./types";
 
-// Let the embedded player seek after the segment playback command settles.
-export const RESUME_SEEK_DELAY_MS = 150;
 export const SCRIPT_POPOVER_MAX_SIDE_MARGIN_PX = 160;
 export const SCRIPT_POPOVER_MIN_SIDE_MARGIN_PX = 24;
 export const SCRIPT_POPOVER_VIEWPORT_MARGIN_FACTOR = 0.2;
