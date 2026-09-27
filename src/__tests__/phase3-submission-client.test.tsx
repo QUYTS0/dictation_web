@@ -264,3 +264,67 @@ describe("restart and autosave", () => {
     await waitFor(() => expect(useSessionStore.getState().sessionId).toBeNull());
   });
 });
+
+describe("Phase 4: Shadowing saves share the round", () => {
+  const progress = {
+    requiredSentenceCount: 3,
+    coveredSentences: { dictation: 1, shadowing: 2, overall: 3 },
+    coverage: { dictation: 0.33, shadowing: 0.67, overall: 1 },
+    attemptCount: 1,
+    sentenceAccuracy: { correct: 1, practiced: 1, percent: 100 },
+  };
+
+  it("a confirmed save updates the SAME round's progress and the completion flag comes only from the server", async () => {
+    const { result } = await renderResumed();
+    const ctx = result.current.getRoundContext();
+    expect(ctx.roundId).toBe("round-1");
+    let applied = false;
+    act(() => {
+      applied = result.current.applyShadowingRoundUpdate(ctx, {
+        roundId: "round-1",
+        roundStatus: "completed",
+        progress,
+        roundCompletedByThisRequest: true,
+      });
+    });
+    expect(applied).toBe(true);
+    expect(result.current.roundState).toEqual({ status: "completed", progress, completedByThisPage: true });
+    // A retry of that save reports completedByThisRequest:false and never un-sets or re-fires anything.
+    act(() => {
+      result.current.applyShadowingRoundUpdate(ctx, { roundId: "round-1", roundStatus: "completed", progress, roundCompletedByThisRequest: false });
+    });
+    expect(result.current.roundState.completedByThisPage).toBe(true);
+  });
+
+  it("15. a save that returns after a Restart is NOT applied to the new round", async () => {
+    const { result } = await renderResumed();
+    const ctx = result.current.getRoundContext();
+    apiMock.restartSession.mockResolvedValueOnce({ sessionId: "round-2", transcriptId: "rev-A" });
+    act(() => result.current.handleRestart());
+    await waitFor(() => expect(useSessionStore.getState().sessionId).toBe("round-2"));
+    let applied = true;
+    act(() => {
+      applied = result.current.applyShadowingRoundUpdate(ctx, { roundId: "round-1", roundStatus: "completed", progress, roundCompletedByThisRequest: true });
+    });
+    expect(applied).toBe(false);
+    expect(result.current.roundState).toMatchObject({ status: "active", completedByThisPage: false });
+  });
+
+  it("a first Shadowing save made before the page knows its round adopts the round the server resolved", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue({ session: null });
+    // The entry checkpoint save (Phase 3) is still in flight.
+    apiMock.saveProgress.mockReturnValue(new Promise(() => {}));
+    apiMock.fetchTranscript.mockImplementation(async () => ready("rev-A"));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(() => useDictationSession({ videoId: "vid1", user, autoEnterPaused: true }), { wrapper: wrapper(qc) });
+    await waitFor(() => expect(result.current.segments).toHaveLength(3));
+    expect(apiMock.restartSession).not.toHaveBeenCalled();
+    const ctx = result.current.getRoundContext();
+    expect(ctx.roundId).toBeNull();
+    act(() => {
+      result.current.applyShadowingRoundUpdate(ctx, { roundId: "round-9", roundStatus: "active", progress, roundCompletedByThisRequest: false });
+    });
+    expect(useSessionStore.getState().sessionId).toBe("round-9");
+    expect(result.current.currentRoundId).toBe("round-9");
+  });
+});

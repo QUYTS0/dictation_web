@@ -95,7 +95,17 @@ export interface WordMatchResult {
   completeness?: number;
   problemWords?: EvaluationProblemWord[];
   error?: string;
+  /** Phase 4: the saved recording this result belongs to (absent for a
+   *  signed-out visitor, whose results are never saved). */
+  attemptId?: string;
+  /** The take (clip object URL) this result was computed from. */
+  clipId?: string;
+  /** true once the server stored this result; false = shown but not saved. */
+  persisted?: boolean;
 }
+
+/** Phase 4 persistence state of one Shadowing result. */
+export type ResultPersistence = "saved" | "saving" | "unsaved" | "superseded";
 
 export type TrueEvaluationStatus = "idle" | "processing" | "completed" | "failed" | "unavailable";
 
@@ -176,6 +186,16 @@ export interface TrueEvaluationResult {
    *  Detailed Report. Absent on evaluations recorded before this field was
    *  added — the report simply omits sections/the raw JSON in that case. */
   rawAzureResult?: AzureRawPronunciationResult;
+  /** Phase 4: the saved recording (attempt) this evaluation scored. */
+  attemptId?: string;
+  /** Phase 4: the server's request sequence for this evaluation. */
+  seq?: number;
+  /** Phase 4: whether the score is stored. "unsaved" results are real
+   *  evaluations of the recording that could not be written yet;
+   *  "superseded" ones were replaced by a newer evaluation request. */
+  persistence?: ResultPersistence;
+  /** Restored from the server rather than evaluated on this page. */
+  restored?: boolean;
 }
 
 /** A single word's score within one historical attempt — deliberately much
@@ -197,6 +217,8 @@ export interface AttemptWordScore {
 export interface SentenceEvaluationAttempt {
   evaluatedAt: string;
   clipId?: string;
+  /** Phase 4: the saved recording this history point scored. */
+  attemptId?: string;
   pronunciationScore?: number;
   accuracyScore?: number;
   fluencyScore?: number;
@@ -229,4 +251,35 @@ export interface SentenceEvaluation {
    *  should treat that the same as a single-point history containing just
    *  lastSuccessfulTrueEvaluation (see toAttempt() in useShadowingEvaluations.ts). */
   attempts?: SentenceEvaluationAttempt[];
+  /** Phase 4: the most recent SAVED recording of this sentence in the round
+   *  (from the server) — lets the UI say "your latest recording hasn't been
+   *  evaluated" instead of presenting an older take's score as current. */
+  latestRecording?: {
+    attemptId: string;
+    createdAt: string;
+    azureStatus: "not_evaluated" | "pending" | "completed" | "failed";
+    isPracticeValid: boolean;
+  };
+}
+
+/** Phase 4: what the Evaluation tab shows about saving the current take
+ *  and its results (see useShadowingRecordings.ts). */
+export interface ShadowingPersistenceView {
+  signedIn: boolean;
+  /** Save state of the take currently on screen (null: no take / visitor). */
+  recordingSave: {
+    status: "saving" | "saved" | "failed";
+    error?: string;
+    retryable?: boolean;
+    isPracticeValid?: boolean;
+  } | null;
+  onRetrySave: () => void;
+  /** An unsaved score of the current take can still be saved (token held). */
+  canRetryScoreSave: boolean;
+  scoreSaveError?: string;
+  onRetryScoreSave: () => void;
+  /** A Shadowing save from this page completed the round. */
+  roundCompleted: boolean;
+  /** Saved results could not be loaded from the server. */
+  loadError: string | null;
 }

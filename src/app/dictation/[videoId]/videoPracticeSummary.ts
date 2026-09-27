@@ -173,6 +173,7 @@ export function toAttempt(result: TrueEvaluationResult): SentenceEvaluationAttem
   return {
     evaluatedAt: result.evaluatedAt ?? new Date(0).toISOString(),
     clipId: result.clipId,
+    attemptId: result.attemptId,
     pronunciationScore: result.pronunciationScore,
     accuracyScore: result.accuracyScore,
     fluencyScore: result.fluencyScore,

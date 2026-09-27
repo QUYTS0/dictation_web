@@ -11,6 +11,7 @@ import type { User } from "@supabase/supabase-js";
 import { useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import AuthModal from "@/components/AuthModal";
+import { clearShadowingCache } from "@/app/dictation/[videoId]/shadowingEvaluationPersistence";
 
 // ---- Context shape ----
 
@@ -56,7 +57,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // (like dashboard data fetches) don't spuriously re-run on tab switches.
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setUser((prev) => (prev?.id === session?.user?.id ? prev : session?.user ?? null));
+        setUser((prev) => {
+          if (prev?.id === session?.user?.id) return prev;
+          // Signed out, or a different account signed in on this tab: the
+          // previous account's Shadowing cache must not survive (keys are
+          // already user-scoped; this also frees the storage).
+          if (prev) clearShadowingCache();
+          return session?.user ?? null;
+        });
         // Close the modal on successful sign-in
         if (session?.user) setModalOpen(false);
       }
@@ -75,6 +83,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // lingers in memory once signed out, and a late-resolving in-flight
     // request has nowhere stale to land.
     queryClient.clear();
+    // Only this app's Shadowing cache prefix — other sessionStorage data stays.
+    clearShadowingCache();
   }, [queryClient]);
 
   const openAuthModal = useCallback(() => setModalOpen(true), []);

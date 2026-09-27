@@ -14,7 +14,7 @@ import { WordMatchInfoPopover } from "./WordMatchInfoPopover";
 import { buildComparedTokens, formatErrorTypeLabel, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
-import type { SentenceEvaluation, TrueEvaluationResult, TrueEvaluationWord } from "../types";
+import type { SentenceEvaluation, ShadowingPersistenceView, TrueEvaluationResult, TrueEvaluationWord } from "../types";
 import {
   deriveEvaluationUiState,
   focusFor,
@@ -235,6 +235,7 @@ export function EvaluationTab({
   quota,
   evaluationSummary,
   onJumpToSegment,
+  persistence,
 }: {
   entry: SentenceEvaluation | undefined;
   recorderStatus: AudioRecorderStatus;
@@ -244,6 +245,8 @@ export function EvaluationTab({
   quota: PracticeQuotaState;
   evaluationSummary: ShadowingEvaluationSummary;
   onJumpToSegment: (segmentIndex: number) => void;
+  /** Phase 4: saving state of the current take and its results. */
+  persistence?: ShadowingPersistenceView;
 }) {
   const isRecording = recorderStatus === "recording" || recorderStatus === "requesting-permission";
   const hasClip = !!recordingClip;
@@ -293,9 +296,50 @@ export function EvaluationTab({
     lastSuccessful,
   });
 
+  const recordingSave = persistence?.recordingSave ?? null;
+  const savedWordMatch = wordMatch?.status === "completed" && wordMatch.persisted !== false ? wordMatch : undefined;
+  const latestNotEvaluated =
+    !!entry?.latestRecording &&
+    !!lastSuccessful &&
+    entry.latestRecording.attemptId !== lastSuccessful.attemptId &&
+    entry.latestRecording.azureStatus !== "completed";
+
   return (
     <div className="flex flex-1 flex-col gap-3">
-      {!hasClip ? (
+      {persistence?.roundCompleted && (
+        <div
+          role="status"
+          className="rounded-xl border border-[var(--green)]/30 bg-[var(--green)]/15 p-2.5 text-xs font-semibold text-[var(--green)]"
+        >
+          🎉 Round complete — every sentence of this lesson has been practiced.
+        </div>
+      )}
+      {persistence?.loadError && <p className="text-xs text-amber-600">{persistence.loadError}</p>}
+      {!hasClip && (lastSuccessful || savedWordMatch) ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-[var(--text-muted)]">
+            Saved results for this sentence. Record a new take to practice it again.
+          </p>
+          {savedWordMatch && (
+            <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs">
+              <span className="font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</span>
+              <span className="text-[var(--text-muted)]">
+                {savedWordMatch.accuracy !== undefined ? `${Math.round(savedWordMatch.accuracy)}% of words matched` : "—"}
+              </span>
+            </div>
+          )}
+          {lastSuccessful && quota.engineConfigured !== false && (
+            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+              <PronunciationScoreCard result={lastSuccessful} stale />
+              {latestNotEvaluated && (
+                <p className="text-xs text-[var(--text-faint)]">
+                  Score from an earlier take — your latest saved recording of this sentence hasn&apos;t been evaluated.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      ) : !hasClip ? (
         <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-center">
           <Mic size={26} className="text-[var(--text-faint)]" />
           <p className="text-sm font-semibold text-[var(--text)]">No recording yet</p>
@@ -306,6 +350,38 @@ export function EvaluationTab({
         </div>
       ) : (
         <>
+          {/* ---- Saving the take (Phase 4) ---- */}
+          {persistence && !persistence.signedIn ? (
+            <p className="text-xs text-[var(--text-muted)]">
+              Sign in to save your recordings as practice and get pronunciation scores.
+            </p>
+          ) : recordingSave?.status === "saving" ? (
+            <p className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+              <Loader2 size={12} className="shrink-0 animate-spin" /> Saving recording…
+            </p>
+          ) : recordingSave?.status === "failed" ? (
+            <div role="alert" className="flex flex-col gap-2 rounded-xl border border-[var(--red)]/25 bg-[var(--red)]/[0.08] p-2.5 text-xs">
+              <p className="flex items-center gap-1.5 text-[var(--red)]">
+                <AlertCircle size={12} className="shrink-0" />
+                Not saved — {recordingSave.error ?? "couldn't save this recording."}
+              </p>
+              <button
+                type="button"
+                onClick={persistence?.onRetrySave}
+                className="flex min-h-[36px] w-fit items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs font-semibold text-[var(--text)] transition-colors hover:bg-white/10"
+              >
+                <RotateCcw size={12} /> Retry saving
+              </button>
+            </div>
+          ) : recordingSave?.status === "saved" ? (
+            <p className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+              <Check size={12} className="shrink-0 text-[var(--green)]" />
+              {recordingSave.isPracticeValid === false
+                ? "Recording saved — too short to count as practice."
+                : "Recording saved as practice."}
+            </p>
+          ) : null}
+
           {/* ---- Word Match ---- */}
           {!autoWordMatchEnabled ? (
             <div className="flex items-start gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs text-[var(--text-muted)]">
@@ -355,6 +431,14 @@ export function EvaluationTab({
                 )}
               </div>
 
+              {wordMatch.persisted === false && (
+                <p className="text-xs text-amber-700">
+                  This Word Match isn&apos;t saved yet.{" "}
+                  <button type="button" onClick={persistence?.onRetrySave} className="font-semibold underline">
+                    Retry
+                  </button>
+                </p>
+              )}
               {noSpeechDetected ? (
                 <p className="text-xs text-[var(--text-muted)]">No speech was recognized. Try recording again.</p>
               ) : exactMatch ? null : !wordMatchExpandedOverride ? (
@@ -482,7 +566,29 @@ export function EvaluationTab({
                   )}
 
                   {evaluationUiState === "success" && trueEvaluation && (
-                    <PronunciationScoreCard result={trueEvaluation} stale={false} />
+                    <>
+                      <PronunciationScoreCard result={trueEvaluation} stale={false} />
+                      {trueEvaluation.persistence === "unsaved" && (
+                        <div className="flex flex-col gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-700">
+                          <p>This score isn&apos;t saved yet — it will disappear if you leave the page.</p>
+                          {persistence?.scoreSaveError && <p>{persistence.scoreSaveError}</p>}
+                          {persistence?.canRetryScoreSave && (
+                            <button
+                              type="button"
+                              onClick={persistence.onRetryScoreSave}
+                              className="flex min-h-[36px] w-fit items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-semibold text-[var(--text)] hover:bg-white/10"
+                            >
+                              <RotateCcw size={12} /> Save score
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {trueEvaluation.persistence === "superseded" && (
+                        <p className="text-xs text-[var(--text-faint)]">
+                          A newer evaluation of this recording replaced this score, so it wasn&apos;t saved.
+                        </p>
+                      )}
+                    </>
                   )}
                 </>
               )}

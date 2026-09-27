@@ -107,6 +107,11 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
+  // Read by getRoundContext() from async callbacks without re-creating it.
+  const resumeStateRef = useRef<ResumeState | null>(null);
+  useEffect(() => {
+    resumeStateRef.current = resumeState;
+  }, [resumeState]);
   // Drives the transcript query's revision choice (Phase 0) — deliberately
   // SEPARATE from resumeState (which also gets cleared once a local
   // sessionStorage snapshot is restored, purely a resume-banner/handleResume
@@ -1365,6 +1370,56 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       });
   }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId, clearAllPendingTimeouts, clearResumeTarget]);
 
+  // ---- Shared round for other practice modes (Phase 4 Shadowing) ----
+  // The round the page is showing: the one this page practices in, or —
+  // before the user pressed Resume — the saved round it offers to resume.
+  const currentRoundId = sessionStore.sessionId ?? resumeState?.sessionId ?? null;
+
+  /** Captured when a Shadowing request starts, checked when it returns. */
+  const getRoundContext = useCallback(
+    () => ({
+      epoch: contextEpochRef.current,
+      roundId: useSessionStore.getState().sessionId ?? resumeStateRef.current?.sessionId ?? null,
+    }),
+    []
+  );
+
+  /**
+   * Applies a confirmed Shadowing save to the round shown on this page — only
+   * if it still is the same context (no video/user change or restart since
+   * `ctx` was captured, and the same round). A save that had no round yet
+   * (the server created/resolved the active round) adopts it. Returns
+   * whether it was applied. The attempt itself is already stored either way.
+   */
+  const applyShadowingRoundUpdate = useCallback(
+    (
+      ctx: { epoch: number; roundId: string | null },
+      r: {
+        roundId: string;
+        roundStatus: "active" | "completed" | "abandoned";
+        progress: RoundProgress | null;
+        roundCompletedByThisRequest: boolean;
+      }
+    ): boolean => {
+      if (contextEpochRef.current !== ctx.epoch) return false;
+      const current = useSessionStore.getState().sessionId ?? null;
+      if (current === null && (ctx.roundId === null || ctx.roundId === r.roundId)) {
+        sessionStore.setSessionId(r.roundId);
+      } else if (current !== r.roundId) {
+        return false;
+      }
+      setRoundState((prev) => ({
+        status: r.roundStatus,
+        progress: r.progress ?? prev.progress,
+        completedByThisPage: prev.completedByThisPage || r.roundCompletedByThisRequest,
+      }));
+      // Partial progress changes what Dashboard/History show, not only completion.
+      if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+      return true;
+    },
+    [queryClient, sessionStore, user]
+  );
+
   const sentenceAccuracy = useMemo(() => {
     const values = Object.values(latestResults);
     const correct = values.filter(Boolean).length;
@@ -1402,6 +1457,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     restartError,
     sentenceAccuracy,
     roundState,
+    currentRoundId,
+    getRoundContext,
+    applyShadowingRoundUpdate,
     segments,
     transcriptStatus,
     transcriptTitle: transcriptQuery.data?.title,

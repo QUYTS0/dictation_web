@@ -48,6 +48,7 @@ import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
 import { useShadowingEvaluations } from "./useShadowingEvaluations";
+import { useShadowingRecordings } from "./useShadowingRecordings";
 import { usePracticeEvaluation } from "./usePracticeEvaluation";
 import { useAutoWordMatchPreference } from "./useAutoWordMatchPreference";
 import { useScriptTranslation } from "./useScriptTranslation";
@@ -76,7 +77,8 @@ import {
 } from "./constants";
 import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
-import type { RightPanelTab } from "./types";
+import type { RightPanelTab, ShadowingPersistenceView } from "./types";
+import { computeWordMatch } from "@/lib/practice/wordMatch";
 
 // ---- Page component ----
 
@@ -159,6 +161,9 @@ export default function DictationPage({ params }: PageProps) {
     restartError,
     sentenceAccuracy,
     roundState,
+    currentRoundId,
+    getRoundContext,
+    applyShadowingRoundUpdate,
     segments,
     transcriptTitle,
     transcriptVersion,
@@ -214,17 +219,47 @@ export default function DictationPage({ params }: PageProps) {
   // EvaluationTab) so the sessionStorage-backed map survives switching
   // right-panel tabs, switching sentences, and a same-tab refresh.
   const transcriptId = segments[0]?.transcript_id ?? null;
+  const referenceTextFor = useCallback((segmentIndex: number) => segments[segmentIndex]?.text ?? "", [segments]);
   const {
+    scopeKey: evaluationScopeKey,
     evaluations,
     summary: evaluationSummary,
+    serverLoadError: shadowingLoadError,
     startWordMatch,
     completeWordMatch,
+    setWordMatchPersisted,
     failWordMatch,
     markWordMatchUnsupported,
     startTrueEvaluation,
     completeTrueEvaluation,
+    setTrueEvaluationPersistence,
     failTrueEvaluation,
-  } = useShadowingEvaluations(videoId, transcriptId, segments.length);
+  } = useShadowingEvaluations({
+    videoId,
+    transcriptId,
+    userId: user?.id ?? null,
+    roundId: currentRoundId,
+    totalCount: segments.length,
+    referenceTextFor,
+  });
+
+  // Phase 4: every finished take is saved as practice right away, then its
+  // Word Match; Pronunciation needs the saved attempt's id.
+  const [shadowingRoundCompleted, setShadowingRoundCompleted] = useState(false);
+  const recordings = useShadowingRecordings({
+    getRoundContext,
+    applyRoundUpdate: applyShadowingRoundUpdate,
+    onWordMatchPersisted: setWordMatchPersisted,
+    onScorePersistence: setTrueEvaluationPersistence,
+    onRoundCompleted: () => setShadowingRoundCompleted(true),
+  });
+  // A different account (or signing out) must not see this one's takes,
+  // tokens or notices.
+  const resetRecordings = recordings.reset;
+  useEffect(() => {
+    resetRecordings();
+    setShadowingRoundCompleted(false);
+  }, [user?.id, videoId, resetRecordings]);
 
   // Tracks whether the user has manually picked a right-panel tab since the
   // current recording started — auto-opening the Evaluation tab after a
@@ -325,6 +360,30 @@ export default function DictationPage({ params }: PageProps) {
     if (!userNavigatedTabRef.current) setRightPanelTab("evaluation");
   }, [isShadowingMode, recorder.clip]);
 
+  // Phase 4: a take that finished (never a cancelled/discarded one — those
+  // produce no clip) is saved as a practice attempt immediately, with its
+  // identity captured now: user, video, revision, sentence, duration, round.
+  // Each take is saved once (keyed by its own object URL); the in-memory clip
+  // stays available for a retry while the page is open. The scope its
+  // results belong to on this page is captured here too.
+  const clipOriginRef = useRef(new Map<string, { origin: string; segmentIndex: number }>());
+  useEffect(() => {
+    if (!isShadowingMode || !recorder.clip || !currentSegment) return;
+    const clipUrl = recorder.clip.url;
+    if (clipOriginRef.current.has(clipUrl)) return;
+    clipOriginRef.current.set(clipUrl, { origin: evaluationScopeKey, segmentIndex: currentSegIdx });
+    if (!user || !transcriptId) return;
+    recordings.saveRecording({
+      clipUrl,
+      userId: user.id,
+      videoId,
+      transcriptId,
+      segmentIndex: currentSegIdx,
+      durationSec: recorder.clip.durationSec,
+      origin: evaluationScopeKey,
+    });
+  }, [isShadowingMode, recorder.clip, currentSegment, currentSegIdx, evaluationScopeKey, user, transcriptId, videoId, recordings]);
+
   // Runs Word Match automatically once a recording finishes — see "Shadowing
   // and Pronunciation Practice Plan.md" §3. Sets "processing" the moment a
   // clip appears (recorder.stop() resolves before speech recognition's own
@@ -337,6 +396,7 @@ export default function DictationPage({ params }: PageProps) {
   useEffect(() => {
     if (!isShadowingMode || !autoWordMatch || !recorder.clip || !currentSegment) return;
     const clipUrl = recorder.clip.url;
+    const origin = clipOriginRef.current.get(clipUrl)?.origin ?? evaluationScopeKey;
     const meta = {
       referenceText: currentSegment.text,
       wordCount: splitSentenceIntoWords(currentSegment.text).length,
@@ -346,34 +406,30 @@ export default function DictationPage({ params }: PageProps) {
     if (speech.status === "unsupported") {
       if (wordMatchStartedClipRef.current !== clipUrl) {
         wordMatchStartedClipRef.current = clipUrl;
-        markWordMatchUnsupported(currentSegIdx, meta);
+        markWordMatchUnsupported(origin, currentSegIdx, meta);
+        recordings.setWordMatchOutcome(clipUrl, { status: "unsupported" });
       }
       return;
     }
 
     if (wordMatchStartedClipRef.current !== clipUrl) {
       wordMatchStartedClipRef.current = clipUrl;
-      startWordMatch(currentSegIdx, meta);
+      startWordMatch(origin, currentSegIdx, meta);
     }
 
     if (speech.status === "done" && wordMatchFinalizedClipRef.current !== clipUrl) {
       wordMatchFinalizedClipRef.current = clipUrl;
-      const checkResult = evaluateAutoAdvanceAnswer(currentSegment.text, speech.transcript ?? "", "relaxed");
-      const expectedCount = checkResult.diff.filter((t) => t.status !== "extra").length;
-      const correctCount = checkResult.diff.filter((t) => t.status === "correct").length;
-      const missingCount = checkResult.diff.filter((t) => t.status === "missing").length;
-      const problemWords = checkResult.diff
-        .filter((t) => t.status === "missing" || t.status === "wrong")
-        .map((t) => ({ word: t.word, errorType: t.status }));
-      completeWordMatch(currentSegIdx, {
-        recognizedText: speech.transcript ?? "",
-        accuracy: expectedCount > 0 ? (correctCount / expectedCount) * 100 : 0,
-        completeness: expectedCount > 0 ? ((expectedCount - missingCount) / expectedCount) * 100 : 0,
-        problemWords,
-      });
+      const recognizedText = speech.transcript ?? "";
+      // Same algorithm the server recomputes from the pinned sentence
+      // (src/lib/practice/wordMatch.ts) — shown instantly, saved via the
+      // take's attempt once it has one.
+      const scores = computeWordMatch(currentSegment.text, recognizedText);
+      completeWordMatch(origin, currentSegIdx, { recognizedText, ...scores, clipId: clipUrl });
+      recordings.setWordMatchOutcome(clipUrl, { status: "completed", recognizedText });
     } else if (speech.status === "error" && wordMatchFinalizedClipRef.current !== clipUrl) {
       wordMatchFinalizedClipRef.current = clipUrl;
-      failWordMatch(currentSegIdx, "Couldn't access speech recognition for this take.");
+      failWordMatch(origin, currentSegIdx, "Couldn't access speech recognition for this take.");
+      recordings.setWordMatchOutcome(clipUrl, { status: "failed" });
     }
   }, [
     isShadowingMode,
@@ -383,6 +439,8 @@ export default function DictationPage({ params }: PageProps) {
     speech.status,
     speech.transcript,
     currentSegIdx,
+    evaluationScopeKey,
+    recordings,
     startWordMatch,
     completeWordMatch,
     failWordMatch,
@@ -394,6 +452,39 @@ export default function DictationPage({ params }: PageProps) {
   // and the Evaluation tab's own state, so the two surfaces can never
   // disagree (see "Shadowing Evaluation Improvement Plan" Part B §B6).
   const currentEvaluationEntry = evaluations[currentSegIdx];
+  const currentClipUrl = recorder.clip?.url ?? null;
+  const currentScoreAttemptId =
+    currentEvaluationEntry?.trueEvaluation?.persistence === "unsaved" ? currentEvaluationEntry.trueEvaluation.attemptId : undefined;
+  const { view: recordingView, retrySave, canRetryScoreSave, retryScoreSave, recoveryErrors } = recordings;
+  const shadowingPersistence = useMemo<ShadowingPersistenceView>(
+    () => ({
+      signedIn: !!user,
+      recordingSave: recordingView(currentClipUrl),
+      onRetrySave: () => {
+        if (currentClipUrl) retrySave(currentClipUrl);
+      },
+      canRetryScoreSave: canRetryScoreSave(currentScoreAttemptId),
+      scoreSaveError: currentScoreAttemptId ? recoveryErrors[currentScoreAttemptId] || undefined : undefined,
+      onRetryScoreSave: () => {
+        if (currentScoreAttemptId) void retryScoreSave(currentScoreAttemptId);
+      },
+      roundCompleted: shadowingRoundCompleted && roundState.status === "completed",
+      loadError: shadowingLoadError,
+    }),
+    [
+      user,
+      recordingView,
+      currentClipUrl,
+      retrySave,
+      canRetryScoreSave,
+      currentScoreAttemptId,
+      recoveryErrors,
+      retryScoreSave,
+      shadowingRoundCompleted,
+      roundState.status,
+      shadowingLoadError,
+    ]
+  );
   const evaluationUiState = useMemo(
     () =>
       deriveEvaluationUiState({
@@ -419,40 +510,84 @@ export default function DictationPage({ params }: PageProps) {
     const referenceText = currentSegment.text;
     const { blob: audioBlob, durationSec } = recorder.clip;
     const clipId = recorder.clip.url;
-    startTrueEvaluation(segmentIndex, {
+    // The take's own scope — a result lands only where the take was made.
+    const origin = clipOriginRef.current.get(clipId)?.origin ?? evaluationScopeKey;
+    if (!user) {
+      failTrueEvaluation(origin, segmentIndex, "Sign in to get a pronunciation score.", "unavailable");
+      return;
+    }
+    startTrueEvaluation(origin, segmentIndex, {
       referenceText,
       wordCount: splitSentenceIntoWords(referenceText).length,
       audioDuration: durationSec,
     });
     const isDesktopViewport = typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches;
     if (isDesktopViewport) setRightPanelTab("evaluation");
-    void practiceEval.evaluate(segmentIndex, { audioBlob, referenceText, durationSec }).then((outcome) => {
+    void (async () => {
+      // Phase 4: evaluation is attempt-scoped — wait for the take's save.
+      const attemptId = await recordings.ensureSaved(clipId);
+      if (!attemptId) {
+        failTrueEvaluation(origin, segmentIndex, "Save this recording first — use “Retry saving” above, then evaluate.");
+        return;
+      }
+      const outcome = await practiceEval.evaluate(segmentIndex, { audioBlob, attemptId });
       const wasViewingEvaluationTab = rightPanelTabRef.current === "evaluation";
       if (outcome.ok) {
-        completeTrueEvaluation(segmentIndex, { ...outcome.data, clipId });
+        const d = outcome.data;
+        const persistence = d.persisted ? "saved" : d.superseded ? "superseded" : "unsaved";
+        // Explicit fields only: the recovery token never enters the map or
+        // sessionStorage.
+        completeTrueEvaluation(origin, segmentIndex, {
+          pronunciationScore: d.pronunciationScore,
+          accuracyScore: d.accuracyScore,
+          fluencyScore: d.fluencyScore,
+          completenessScore: d.completenessScore,
+          prosodyScore: d.prosodyScore,
+          words: d.words,
+          recognizedText: d.recognizedText,
+          rawAzureResult: d.rawAzureResult,
+          clipId,
+          attemptId: d.attemptId,
+          seq: d.seq,
+          persistence,
+        });
+        if (persistence === "unsaved" && d.recoveryToken) {
+          recordings.rememberRecovery(d.attemptId, d.recoveryToken, origin, segmentIndex);
+        }
         if (!wasViewingEvaluationTab) {
           const isMobileViewport = typeof window !== "undefined" && !window.matchMedia("(min-width: 768px)").matches;
           if (isMobileViewport) {
             const scores = {
-              accuracy: outcome.data.accuracyScore ?? null,
-              fluency: outcome.data.fluencyScore ?? null,
-              completeness: outcome.data.completenessScore ?? null,
-              prosody: outcome.data.prosodyScore ?? null,
+              accuracy: d.accuracyScore ?? null,
+              fluency: d.fluencyScore ?? null,
+              completeness: d.completenessScore ?? null,
+              prosody: d.prosodyScore ?? null,
             };
             const feedback = feedbackFor(scores, weakestMetric(scores));
             setMobileEvalNotice({
-              score: outcome.data.pronunciationScore ?? null,
+              score: d.pronunciationScore ?? null,
               feedbackTitle: feedback?.title ?? null,
             });
           }
           setHasUnreadEvaluation(true);
         }
       } else {
-        failTrueEvaluation(segmentIndex, outcome.error, outcome.status);
+        failTrueEvaluation(origin, segmentIndex, outcome.error, outcome.status);
         if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);
       }
-    });
-  }, [currentSegment, recorder.clip, practiceEval, currentSegIdx, startTrueEvaluation, completeTrueEvaluation, failTrueEvaluation]);
+    })();
+  }, [
+    currentSegment,
+    recorder.clip,
+    practiceEval,
+    currentSegIdx,
+    evaluationScopeKey,
+    user,
+    recordings,
+    startTrueEvaluation,
+    completeTrueEvaluation,
+    failTrueEvaluation,
+  ]);
 
   // Score badge / mobile "View details" — opens the Evaluation tab without
   // starting a new network request. On mobile, also scrolls the right
@@ -1429,6 +1564,7 @@ export default function DictationPage({ params }: PageProps) {
                   trueEvalQuota={practiceEval.quota}
                   evaluationSummary={evaluationSummary}
                   hasUnreadEvaluation={hasUnreadEvaluation}
+                  shadowingPersistence={shadowingPersistence}
                 />
                 </div>
               </motion.div>

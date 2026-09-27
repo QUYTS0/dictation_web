@@ -1467,7 +1467,7 @@ with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above)
 
 **Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
 hidden button is not sufficient if a directly callable RPC can still delete):**
-`fn_delete_transcript_revision` **is created by migration `038` fully specified, but with no
+`fn_delete_transcript_revision` **is created by migration `039` (renumbered from `038`, which Phase 4 used) fully specified, but with no
 `EXECUTE` grant issued to any application role at all** — `revoke execute on function
 fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
 statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
@@ -1585,7 +1585,7 @@ satisfying acceptance scenario #10 (§13).
 ## 8. Database changes
 
 **Schema is additive throughout — no existing column is dropped, renamed, or retyped anywhere in
-`020`–`038` — but this is not the same claim as "every migration is behaviorally additive," and
+`020`–`039` — but this is not the same claim as "every migration is behaviorally additive," and
 this document does not make the broader claim.** Several migrations change *existing* behavior on
 purpose: `024` and `037` remove or replace RLS policies that currently grant direct owner-write
 access (§9.9 — a real permission *removal*, not an addition, verified against actual policy text
@@ -1625,7 +1625,8 @@ was originally scheduled before that table existed).
 | 035 | `035_fn_session_activity_and_evaluation_functions.sql` | 2 | `fn_create_or_get_active_round`, `fn_update_resume_position`, `fn_restart_round`, `fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_persist_azure_result`, `fn_persist_word_match_result` — the first three plus the two attempt-recording functions (`032`/`033`) ship with `EXECUTE` revoked from `public`/`anon`/`authenticated`/`service_role` and **no grant issued**, deferred to the Phase 3 runbook (§8.14) — plus the temporary `fn_legacy_save_progress`/`fn_legacy_restart_round`/`fn_legacy_record_dictation_attempt` gate-aware bridges (§8.13, all three dropped in migration 036) |
 | 036 | `036_phase2_user_rpc_privilege_corrections.sql` | 2 (post-Phase-2 repair) | Revokes the `service_role` EXECUTE that `035` left on the four user-actor functions (`fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_legacy_save_progress`, `fn_legacy_restart_round`) — `035` revoked them from `public, anon, authenticated` only, so Supabase's default per-role function grant to `service_role` survived. Exact signatures only, re-grants `authenticated`, and asserts the effective matrix with `has_function_privilege` in the same transaction (PHASE2_RUNBOOK.md §8). |
 | 037 | `037_phase3_prepare_authoritative_cutover.sql` | 3 | **Implemented (Phase 3 pass).** Preparation only under `db push`: corrected authoritative functions (dormant + refuse writes until activated), TS↔SQL grading parity (`fn_normalize_dictation_text`, `fn_classify_dictation_error`), `fn_persist_session_assessment` (explain-all, service_role), `fn_practice_write_status`, cutover state/audit tables, and owner-only stage functions `fn_phase3_restrict_direct_writes` / `fn_phase3_close_gate` / `fn_phase3_backfill` / `fn_phase3_activate` / `fn_phase3_reopen_legacy`. The RLS tightening, fence, backfill and activation run from `supabase/phase3/*.sql` per `supabase/PHASE3_RUNBOOK.md` — never as a side effect of the migration. (Previously planned file name: `037_provenance_backfill_and_completion_cutover.sql`.) |
-| 038 | `038_fn_delete_transcript_revision.sql` | 9 | `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
+| 038 | `038_phase4_shadowing_persistence.sql` | 4 | **Implemented (Phase 4 pass) — not the originally planned file.** Additive only (4 nullable `shadowing_attempts` columns: `azure_evaluated_at`, `azure_detail`, `word_match_evaluated_at`, `word_match_detail`) plus the evaluation lifecycle 035 lacked: `fn_begin_azure_evaluation` (admission: seq+1, pending, server-resolved reference text), `fn_finish_azure_evaluation` (writes only for the current seq from pending), `fn_expire_azure_evaluation` (seq-exact timeout), `fn_record_word_match` (service_role), and owner reads `fn_get_shadowing_attempt` / `fn_shadowing_round_results` (SECURITY INVOKER). No Phase 3 grant/row changed. See `supabase/PHASE4_RUNBOOK.md`. |
+| 039 | `039_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038 (Phase 4 took 038); not created.** `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -2615,7 +2616,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `038_fn_delete_transcript_revision.sql`
+### 8.16 `039_fn_delete_transcript_revision.sql` (renumbered from 038)
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -2664,7 +2665,7 @@ after an `is_admin` check inside the function body (§9.9), not expressed as a n
 
 ### 8.18 Rollback
 
-Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`038`. That is
+Schema-wise, no existing column is dropped, renamed, or retyped anywhere in `020`–`039`. That is
 **not** the same as every migration being behaviorally reversible-by-default, and this section does
 not claim it is: `030` (formerly `034`'s, in the pre-R21 numbering) `UPDATE` is reversible via its
 own audit-log table (§8.15) — not a bare comment; `037`'s (formerly `033`'s, then `034`'s, then `036`'s)
@@ -2757,6 +2758,8 @@ pause window (§8.14/§12 Phase 3), this is already true, not merely "eventually
 | `PATCH /api/practice/attempt/[attemptId]/word-match` | **New** — persists Word Match result, service-role write | `shadowing_attempts` |
 | `POST /api/practice/evaluate` | **Breaking request-contract change**, not additive (§14.3) — requires `attemptId`; a request without it (an old, pre-Phase-4 cached bundle) gets `409 stale_client_version`, never guessed/adapted; increments `azure_eval_request_seq`; PATCHes by id + seq | `shadowing_attempts` |
 | `GET /api/practice/attempt/[attemptId]` | **New** — lets a client discover an evaluation's final result after navigating away, without any push mechanism | `shadowing_attempts` |
+| `GET /api/practice/attempts?roundId=` | **New (Phase 4 pass)** — a round's saved Shadowing results (three independent chronological pointers per sentence + ≤ 5 compact Azure results), for restoring after reload without local attempt ids | `shadowing_attempts` (read) |
+| `POST /api/practice/evaluate/persist-recovery` | **New (§9.4)** — writes a paid Azure result whose first write failed, from a server-signed token only; never calls Azure | `shadowing_attempts` |
 | `GET /api/practice/quota` | Unchanged | Redis |
 | `POST /api/listening/sync` | **New**, replaces dead `/api/listening-session/save-progress`; carries `flushBatchId` | `listening_progress`, `study_sessions`, `activity_flush_log` |
 | `POST /api/study-session/activity` | **New** — generic cross-mode activity-pulse flush (§6.3b) | `study_sessions`, `activity_flush_log` |
@@ -4213,8 +4216,8 @@ the `session/[sessionId]/explain-all` `learning_sessions` writer before tighteni
 | Real database verified | Yes, locally | 51 tests on a disposable PostgreSQL 17.9 with the Supabase shim (parity, permissions under real roles, concurrency, idempotency incl. grading mode, whitespace-only validity, study-session attribution, 036→037 upgrade with historical data) |
 | Cutover rehearsal verified | Yes, locally | full drain → backfill → activate with a queued legacy call; recovery boundaries; the operator scripts themselves |
 | Browser verified | No | manual checklist in the runbook §8 |
-| Applied to the user's project | No (`001`–`036` only) | — |
-| Deployed | No | — |
+| Applied to the user's project | **Yes** — `001`–`037` applied; cutover run to `activated` | User-confirmed postflight: stage `activated`, gate reopened, `legacy_writes_retired = true`, `authoritative_writes_active = true`, 25/25 permission checks, 3 bridges absent, SELECT-only table grants |
+| Deployed | **Yes** — Vercel `PRACTICE_WRITE_PATH=authoritative` | User confirmed the application smoke tests passed |
 
 Deviations from the task list below, with reasons: completion is decided only
 by the database (eligible-sentence coverage); `learning_sessions.total_attempts`
@@ -4321,6 +4324,45 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
   `src/__tests__/practice-evaluate-attempt-scoped.test.ts` (mocks Azure — no quota consumed,
   including a simulated stale/superseded evaluation response).
 
+**Implementation status (Phase 4 pass) — operational procedure in `supabase/PHASE4_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes | `038_phase4_shadowing_persistence.sql`; routes `POST /api/practice/attempt`, `POST /api/practice/evaluate` (attempt-scoped), `POST /api/practice/evaluate/persist-recovery`, `PATCH /api/practice/attempt/[id]/word-match`, `GET /api/practice/attempt/[id]`, `GET /api/practice/attempts?roundId=`; `useShadowingRecordings`, scoped `useShadowingEvaluations` + `shadowingServerMerge`, EvaluationTab save states, sign-out/account-switch cache cleanup |
+| Unit/mock verified | Yes | route, token, client-hook and auth suites (Azure always mocked); tsc, lint, build |
+| Real database verified | Yes, locally | 19 Phase 4 tests on disposable PostgreSQL 17.9 from the production state (001–037 + activated cutover): lifecycle, concurrency, permissions, 037→038 upgrade with data, operator SQL as written; the 51 Phase 3 tests still pass with 038 present |
+| Supabase HTTP verified | No | — |
+| Browser / iPhone verified | No | manual checklist in the runbook §7 |
+| Applied to the user's project | No | — |
+| Deployed | No | — |
+
+Deviations from the task list above, with reasons:
+- **Migration 038 was needed** (the plan expected the Phase 2 functions to suffice): 035's
+  `fn_persist_azure_result` has no admission step (nothing allocated the seq or wrote
+  `pending`), no pending-only guard (a failure could overwrite a stored success; a replayed
+  recovery would rewrite the row) and nowhere to keep per-word detail for restoring the
+  display after a reload. 038 adds narrow new functions and leaves 035's untouched
+  (still part of the verified Phase 3 matrix, now unused). The planned `038` deletion
+  migration is renumbered `039` (not created).
+- **One successful Azure evaluation per recording** (`azure_already_evaluated`): re-scoring the
+  same audio only spends quota, and it keeps a later failure from ever replacing a stored score.
+  A failed/expired evaluation can be retried on the same take.
+- **Recordings too short to count as practice are not evaluated** (`attempt_not_evaluable`).
+- **Pronunciation evaluation requires sign-in** (it is always attached to a saved attempt);
+  previously the route had no auth. Visitors keep local Word Match.
+- **Word Match**: the plan's `PATCH` accepts `{status, recognizedText}`, not scores — the
+  server recomputes accuracy/completeness from the pinned sentence (same algorithm, moved to
+  `src/lib/practice/wordMatch.ts`). The recognized text itself stays client-derived (browser
+  speech recognition), a documented trust boundary; no transcription service was added.
+- **Round restore endpoint** `GET /api/practice/attempts?roundId=` added next to the planned
+  single-attempt `GET`, so a reload restores a round without local attempt ids or per-sentence
+  requests; bounded by the round (three pointers + ≤ 5 compact Azure results per sentence).
+- **Recovery configuration is checked before any spend**: without
+  `AZURE_RECOVERY_SIGNING_SECRET` (≥ 32 chars) evaluate answers `503 evaluation_not_configured`.
+- A first take made before the page knows its round resolves the active round server-side
+  (`fn_create_or_get_active_round`) — the same round Dictation uses; a mode switch alone
+  creates nothing.
+
 ### Phase 5 — Listening coverage
 
 - **New:** `src/app/api/listening/sync/route.ts`, `src/app/api/listening/progress/route.ts`,
@@ -4407,7 +4449,7 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `038_fn_delete_transcript_revision.sql` — creates the function, fully specified, with
+- **Migrate:** `039_fn_delete_transcript_revision.sql` (renumbered from 038) — creates the function, fully specified, with
   **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
   merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
@@ -4546,7 +4588,7 @@ none of the jsdom tests below are described as real-device verification.
   practice page mid-flush) confirmed to unmount the practice page before the flush's response
   lands, and to still invalidate Dashboard/Library/History correctly once it commits (scenario
   #65) — manual, since this repo has no browser-automation test runner (§13's note above).
-- Real Supabase project: confirm all 19 original + 19 new migrations (`020`–`038`) apply cleanly
+- Real Supabase project: confirm all migrations through `039` apply cleanly
   against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
   `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
   the §8.15 duplicate-active-round cleanup (migration `030`, run early in Phase 1) affects the

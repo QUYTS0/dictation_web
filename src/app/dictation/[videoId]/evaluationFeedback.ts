@@ -412,6 +412,9 @@ export function deriveEvaluationUiState(params: {
   if (!hasClip) return "no-recording";
   if (trueEvaluation?.status === "processing") return "evaluating";
   if (trueEvaluation?.status === "failed" || trueEvaluation?.status === "unavailable") return "error";
+  // Phase 4: a real score for THIS take that is not (or not yet) saved is
+  // still this take's result — shown with its "not saved" notice.
+  if (trueEvaluation?.status === "completed" && trueEvaluation.clipId === recordingClipId) return "success";
   if (lastSuccessful && lastSuccessful.clipId !== recordingClipId) return "new-recording-not-evaluated";
   if (lastSuccessful) return "success";
   return "recording-ready";

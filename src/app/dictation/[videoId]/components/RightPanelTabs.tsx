@@ -8,7 +8,13 @@ import { WordsTab } from "./WordsTab";
 import type { VocabularyTypeFilter } from "../helpers";
 import { SentencesTab } from "./SentencesTab";
 import { EvaluationTab } from "./EvaluationTab";
-import type { InputMode, LessonSavedItem, RightPanelTab as RightPanelTabValue, SentenceEvaluation } from "../types";
+import type {
+  InputMode,
+  LessonSavedItem,
+  RightPanelTab as RightPanelTabValue,
+  SentenceEvaluation,
+  ShadowingPersistenceView,
+} from "../types";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 
@@ -174,6 +180,7 @@ export function RightPanelTabs({
   trueEvalQuota,
   evaluationSummary,
   hasUnreadEvaluation,
+  shadowingPersistence,
 }: {
   rightPanelTab: RightPanelTabValue;
   setRightPanelTab: (tab: RightPanelTabValue) => void;
@@ -229,6 +236,8 @@ export function RightPanelTabs({
   /** A completed/failed evaluation not yet viewed via this tab — see
    *  TabButton's own doc comment. */
   hasUnreadEvaluation?: boolean;
+  /** Phase 4 save state of the current take and its results. */
+  shadowingPersistence?: ShadowingPersistenceView;
 }) {
   const tabRefs = useRef<Partial<Record<RightPanelTabValue, HTMLButtonElement | null>>>({});
   const visibleTabs = TAB_CONFIG.filter((tab) => tab.id !== "evaluation" || inputMode === "shadowing");
@@ -389,6 +398,7 @@ export function RightPanelTabs({
             quota={trueEvalQuota}
             evaluationSummary={evaluationSummary}
             onJumpToSegment={onSeekToSegment}
+            persistence={shadowingPersistence}
           />
         )}
       </div>

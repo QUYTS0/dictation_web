@@ -34,14 +34,36 @@ export interface TrueEvaluationSuccess {
   words: TrueEvaluationWord[];
   recognizedText: string;
   rawAzureResult: AzureRawPronunciationResult | undefined;
+  /** Phase 4: the attempt and request sequence this result belongs to. */
+  attemptId: string;
+  seq: number;
+  /** Stored on the server. When false the score is still a real evaluation
+   *  of this recording — shown as "not saved". */
+  persisted: boolean;
+  /** A newer evaluation request for the same recording replaced this one. */
+  superseded: boolean;
+  /** Opaque server-signed token to retry saving (memory only, never stored). */
+  recoveryToken?: string;
 }
 
 export type TrueEvaluationOutcome =
   | { ok: true; data: TrueEvaluationSuccess }
-  | { ok: false; status: "failed" | "unavailable"; error: string };
+  | { ok: false; status: "failed" | "unavailable"; error: string; code?: string };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapErrorResponse(res: Response, data: any): TrueEvaluationOutcome {
+  if (data?.code === "stale_client_version") {
+    return { ok: false, status: "failed", code: data.code, error: "This page is out of date. Reload it to keep evaluating." };
+  }
+  if (data?.code === "azure_already_evaluated") {
+    return { ok: false, status: "failed", code: data.code, error: "This recording was already evaluated. Record again for a new score." };
+  }
+  if (res.status === 401) {
+    return { ok: false, status: "failed", code: "authentication_required", error: "Sign in to get a pronunciation score." };
+  }
+  if (res.status === 409 && typeof data?.error === "string") {
+    return { ok: false, status: "failed", code: data.code, error: data.error };
+  }
   if (data?.error === "quota-exceeded" || res.status === 429) {
     return {
       ok: false,
@@ -117,16 +139,17 @@ export function usePracticeEvaluation() {
   const evaluate = useCallback(
     async (
       segmentIndex: number,
-      params: { audioBlob: Blob; referenceText: string; durationSec: number }
+      params: { audioBlob: Blob; attemptId: string }
     ): Promise<TrueEvaluationOutcome> => {
       setBusySegmentIndex(segmentIndex);
       try {
         const wav = await blobToWav16kMono(params.audioBlob);
 
+        // Phase 4: only the saved attempt's id and the audio — the server
+        // resolves the sentence text itself.
         const formData = new FormData();
+        formData.set("attemptId", params.attemptId);
         formData.set("audio", wav, "recording.wav");
-        formData.set("referenceText", params.referenceText);
-        formData.set("durationSec", String(params.durationSec));
 
         const res = await fetch("/api/practice/evaluate", { method: "POST", body: formData });
         const data = await res.json();
@@ -151,6 +174,11 @@ export function usePracticeEvaluation() {
             words: data.words ?? [],
             recognizedText: data.recognizedText ?? "",
             rawAzureResult: data.rawResult ?? undefined,
+            attemptId: data.attemptId ?? params.attemptId,
+            seq: data.seq,
+            persisted: data.persisted === true,
+            superseded: data.superseded === true,
+            recoveryToken: typeof data.recoveryToken === "string" ? data.recoveryToken : undefined,
           },
         };
       } catch {

@@ -16,7 +16,7 @@ automated rehearsal executed.
 | Number | File | What `db push` does |
 |---|---|---|
 | `037` | `037_phase3_prepare_authoritative_cutover.sql` | **Preparation only.** Installs the corrected authoritative functions (dormant: no app-role EXECUTE, and they refuse to write until activated), grading-parity SQL, `fn_persist_session_assessment` (backend-only, granted to `service_role` now), `fn_practice_write_status`, cutover state/audit tables, and the owner-only stage functions. It pauses nothing, backfills nothing, retires nothing, and leaves `learning_sessions` RLS untouched. |
-| `038` | `038_fn_delete_transcript_revision.sql` | Unchanged future plan (Script Versions) — **not created**. |
+| `038` | `038_phase4_shadowing_persistence.sql` | Phase 4 (see PHASE4_RUNBOOK.md). The Script Versions deletion migration is renumbered to `039` — **not created**. |
 
 The plan's earlier "`037` = provenance backfill and completion cutover" is now
 `037` = preparation + the backfill/cutover *functions*; the backfill and
