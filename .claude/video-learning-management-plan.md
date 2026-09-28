@@ -4384,6 +4384,17 @@ Deviations from the task list above, with reasons:
   detail; a round pinned to another revision is not attached to the displayed sentences.
   Practice metadata and the text report are saved; audio and the raw Azure payload are
   intentionally not (runbook §2a).
+- **Session summary "N/M evaluated" corrected** (uncommitted; client-only): it counted a
+  sentence with a completed Word Match as evaluated, and Word Match accuracy/completeness
+  also stood in for missing Azure scores in the aggregates and the weakest-sentence ranking
+  (contrary to §6.7). Now: numerator = distinct sentences of the displayed round/pinned
+  revision whose latest successful Azure evaluation (chronological) is saved — recording,
+  practice credit and Word Match never count; pending/failed/unsaved/superseded/conflicting
+  results neither add nor remove a sentence; denominator = the round's
+  `requiredSentenceCount` (eligible sentences of the pinned revision — the same number as
+  "N of M sentences practiced"), the displayed sentence count until the round is known; no
+  percentage when it is 0. Aggregates use only saved Azure scores (missing metrics excluded,
+  one latest result per sentence, existing weights unchanged).
 - **Quota is an approximate personal-app limit, not a strict budget** (unchanged
   mechanism): the check only reads the Upstash counter (nothing is reserved), so
   concurrent evaluations of different recordings can pass together; usage is written

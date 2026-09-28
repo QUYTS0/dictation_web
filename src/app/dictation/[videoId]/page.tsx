@@ -241,7 +241,10 @@ export default function DictationPage({ params }: PageProps) {
     transcriptId,
     userId: user?.id ?? null,
     roundId: currentRoundId,
-    totalCount: segments.length,
+    // The round's eligible sentences of its pinned revision (server, Phase 3
+    // rule: non-empty normalized text) — the same number as "N of M sentences
+    // practiced"; the displayed sentence count until the round is known.
+    totalCount: roundState.progress?.requiredSentenceCount ?? segments.length,
     referenceTextFor,
   });
 

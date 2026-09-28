@@ -119,7 +119,8 @@ export function VideoPracticeSummaryModal({
   return (
     <ReportDialogShell open={open} onClose={onClose} titleId="video-summary-title" title="Video summary">
       <p className="text-xs font-medium text-[var(--text-muted)]">
-        {evaluatedCount}/{totalCount} sentences evaluated — {isComplete ? "Complete summary" : "Partial summary"}
+        {totalCount > 0 ? `${evaluatedCount}/${totalCount}` : evaluatedCount} sentences evaluated —{" "}
+        {isComplete ? "Complete summary" : "Partial summary"}
       </p>
 
       <section className="flex flex-col gap-2">

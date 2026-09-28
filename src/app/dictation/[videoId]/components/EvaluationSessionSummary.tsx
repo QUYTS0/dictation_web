@@ -74,7 +74,8 @@ export function EvaluationSessionSummary({
     improvements,
   } = summary;
 
-  const coveragePct = totalCount > 0 ? Math.round((evaluatedCount / totalCount) * 100) : 0;
+  // No eligible sentences / unknown denominator → no percentage at all.
+  const coveragePct = totalCount > 0 ? Math.min(100, Math.round((evaluatedCount / totalCount) * 100)) : null;
   const visibleWordsToPractice = showAllWordsToPractice
     ? wordsToPractice
     : wordsToPractice.slice(0, WORDS_TO_PRACTICE_INITIAL_LIMIT);
@@ -101,7 +102,7 @@ export function EvaluationSessionSummary({
           <Sparkles size={12} /> Session
         </span>
         <span className="text-xs font-medium text-[var(--text-muted)] tabular-nums" aria-live="polite">
-          {evaluatedCount}/{totalCount} evaluated · {coveragePct}%
+          {coveragePct === null ? `${evaluatedCount} evaluated` : `${evaluatedCount}/${totalCount} evaluated · ${coveragePct}%`}
         </span>
       </button>
 
@@ -220,7 +221,7 @@ export function EvaluationSessionSummary({
             )}
             {usedFallbackScore && weakestSentences.length > 0 && (
               <p className="text-xs text-[var(--text-faint)]">
-                * Word Match accuracy shown where an Azure pronunciation score isn&apos;t available.
+                * Azure accuracy shown where the overall pronunciation score isn&apos;t available.
               </p>
             )}
           </div>

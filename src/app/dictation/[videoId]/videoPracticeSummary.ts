@@ -131,31 +131,42 @@ function weightedAverage(entries: Array<{ value: number; weight: number }>): num
   return weightedSum / totalWeight;
 }
 
-/** Prefers the last *successful* True Evaluation's real scores — never the
- *  in-flight/failed `trueEvaluation` attempt — falling back to Word Match's
- *  diff-derived accuracy/completeness stand-in only when no True Evaluation
- *  has ever succeeded for this sentence. Fluency/Prosody only ever come
- *  from True Evaluation — Word Match has no equivalent. */
-function scoresFor(entry: SentenceEvaluation) {
+/**
+ * The pronunciation result a sentence contributes to the summary: its latest
+ * successful Azure evaluation (chronological — never the best score), and
+ * only when it is saved. A new, unevaluated / pending / failed take never
+ * removes it (it lives in `trueEvaluation`, not here); a result shown but not
+ * stored ("unsaved", "superseded", "conflict") never counts. Word Match is a
+ * separate browser-recognition result and never counts as an evaluation.
+ */
+export function savedAzureEvaluationFor(entry: SentenceEvaluation): TrueEvaluationResult | undefined {
   const te = entry.lastSuccessfulTrueEvaluation;
-  const wm = entry.wordMatch?.status === "completed" ? entry.wordMatch : undefined;
+  if (!te || te.status !== "completed") return undefined;
+  if (te.persistence === "unsaved" || te.persistence === "superseded" || te.persistence === "conflict") return undefined;
+  return te;
+}
+
+/** The sentence's saved Azure scores — a metric Azure didn't return stays
+ *  undefined (excluded from its average), never 0 and never replaced by a
+ *  Word Match number. */
+function scoresFor(entry: SentenceEvaluation) {
+  const te = savedAzureEvaluationFor(entry);
   return {
     pronunciation: te?.pronunciationScore,
-    accuracy: te?.accuracyScore ?? wm?.accuracy,
-    completeness: te?.completenessScore ?? wm?.completeness,
+    accuracy: te?.accuracyScore,
+    completeness: te?.completenessScore,
     fluency: te?.fluencyScore,
     prosody: te?.prosodyScore,
   };
 }
 
 /** The score used to rank/display a sentence in "lowest-scoring sentences" —
- *  Azure's own PronScore when available, falling back to the accuracy
- *  sub-metric (True Eval or Word Match) when PronScore wasn't returned. */
+ *  Azure's own PronScore when available, falling back to Azure's accuracy
+ *  sub-metric when PronScore wasn't returned. */
 function rankingScoreFor(entry: SentenceEvaluation): { score: number; usedFallback: boolean } | null {
-  const pronScore = entry.lastSuccessfulTrueEvaluation?.pronunciationScore;
-  if (pronScore !== undefined) return { score: pronScore, usedFallback: false };
-  const accuracy = scoresFor(entry).accuracy;
-  if (accuracy !== undefined) return { score: accuracy, usedFallback: true };
+  const scores = scoresFor(entry);
+  if (scores.pronunciation !== undefined) return { score: scores.pronunciation, usedFallback: false };
+  if (scores.accuracy !== undefined) return { score: scores.accuracy, usedFallback: true };
   return null;
 }
 
@@ -189,7 +200,8 @@ export function toAttempt(result: TrueEvaluationResult): SentenceEvaluationAttem
  *  undefined on old data. */
 function attemptsFor(entry: SentenceEvaluation): SentenceEvaluationAttempt[] {
   if (entry.attempts && entry.attempts.length > 0) return entry.attempts;
-  return entry.lastSuccessfulTrueEvaluation ? [toAttempt(entry.lastSuccessfulTrueEvaluation)] : [];
+  const saved = savedAzureEvaluationFor(entry);
+  return saved ? [toAttempt(saved)] : [];
 }
 
 /** Every word in one attempt with a real score, deduped by normalized word
@@ -215,7 +227,7 @@ function dedupedAttemptWords(words: AttemptWordScore[]): Array<{ word: string; s
 function currentWordOccurrences(
   entry: SentenceEvaluation
 ): Array<{ word: string; score: number; errorType: string; phonemes: TrueEvaluationWord["phonemes"] }> {
-  const words = entry.lastSuccessfulTrueEvaluation?.words ?? [];
+  const words = savedAzureEvaluationFor(entry)?.words ?? [];
   const seen = new Set<string>();
   const result: Array<{ word: string; score: number; errorType: string; phonemes: TrueEvaluationWord["phonemes"] }> = [];
   for (const w of words) {
@@ -278,12 +290,12 @@ export function buildShadowingEvaluationSummary(
   evaluations: ShadowingEvaluationMap,
   totalCount: number
 ): ShadowingEvaluationSummary {
-  // A sentence counts as "evaluated" once it has a completed Word Match OR a
-  // True Evaluation that has ever succeeded — a currently-failed/processing
-  // attempt does not un-count a sentence that previously succeeded.
-  const entries = Object.values(evaluations).filter(
-    (e) => e.wordMatch?.status === "completed" || !!e.lastSuccessfulTrueEvaluation
-  );
+  // "Evaluated" = distinct sentences of this round/revision (the map is
+  // keyed by sentence and scoped to them) with a SAVED successful Azure
+  // evaluation. Recording, practice credit and Word Match don't count; a
+  // currently pending/failed/unsaved take does not un-count a sentence that
+  // was evaluated earlier; re-evaluating a sentence doesn't count it twice.
+  const entries = Object.values(evaluations).filter((e) => !!savedAzureEvaluationFor(e));
   const evaluatedCount = entries.length;
 
   const pronunciationEntries: Array<{ value: number; weight: number }> = [];
@@ -505,6 +517,7 @@ export function buildShadowingEvaluationSummary(
     evaluatedCount,
     totalCount,
     notEvaluatedCount: Math.max(0, totalCount - evaluatedCount),
+    // totalCount 0 = no eligible sentences / denominator unknown: never "complete".
     isComplete: totalCount > 0 && evaluatedCount >= totalCount,
     weightedPronunciation,
     weightedAccuracy,
