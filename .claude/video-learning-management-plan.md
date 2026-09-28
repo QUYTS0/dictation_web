@@ -4421,6 +4421,17 @@ Deviations from the task list above, with reasons:
   (`fn_create_or_get_active_round`) — the same round Dictation uses; a mode switch alone
   creates nothing.
 
+### Deferred track — Shadowing lesson summaries and report retention ("SS")
+
+**Planned, not implemented.** Full plan: `.claude/shadowing-summary-retention-plan.md`.
+Deterministic lesson summary (scope/confidence, practice priorities with evidence counts
+and pinned-sentence links, comparable-only improvement), immutable versioned finalized
+summaries (`shadowing_round_summaries`, one row per source watermark), and an optional,
+disabled-by-default, summary-gated compaction of non-representative `azure_detail`
+(sub-word detail only; scores/attempts/coverage/completion never touched). Stages SS1–SS5;
+SS1–SS2 need no migration; SS3+ take the next free migration number (`039` stays reserved
+for Script Versions). Independent of Phase 5 and Phase 6; no change to round completion.
+
 ### Phase 5 — Listening coverage
 
 - **New:** `src/app/api/listening/sync/route.ts`, `src/app/api/listening/progress/route.ts`,
