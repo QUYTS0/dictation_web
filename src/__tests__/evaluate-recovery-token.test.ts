@@ -8,7 +8,13 @@ const assessPronunciation = jest.fn(() => {
   throw new Error("recovery must not call Azure");
 });
 
+const reservePracticeQuota = jest.fn();
+const recordPracticeUsage = jest.fn();
 jest.mock("@/lib/azureSpeech", () => ({ assessPronunciation: () => assessPronunciation() }));
+jest.mock("@/lib/practiceQuota", () => ({
+  reservePracticeQuota: (...a: unknown[]) => reservePracticeQuota(...a),
+  recordPracticeUsage: (...a: unknown[]) => recordPracticeUsage(...a),
+}));
 jest.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser } }),
   createServiceClient: () => ({ rpc: serviceRpc }),
@@ -135,5 +141,18 @@ describe("persist-recovery route", () => {
   it("a transient database error is reported retryable (500), token kept by the client", async () => {
     serviceRpc.mockResolvedValueOnce({ data: null, error: { code: "08006", message: "connection failure" } });
     expect((await POST(req({ recoveryToken: token() }))).status).toBe(500);
+  });
+
+  it("15. recovery (first write, replay, or refusal) never calls Azure and never checks or counts quota", async () => {
+    await POST(req({ recoveryToken: token() }));
+    serviceRpc.mockResolvedValueOnce({ data: { applied: false, outcome: "already_applied", currentSeq: 3, status: "completed" }, error: null });
+    await POST(req({ recoveryToken: token() }));
+    serviceRpc.mockResolvedValueOnce({ data: { applied: false, outcome: "conflict", currentSeq: 3, status: "completed" }, error: null });
+    const conflict = await POST(req({ recoveryToken: token() }));
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).code).toBe("recovery_conflict");
+    expect(assessPronunciation).not.toHaveBeenCalled();
+    expect(reservePracticeQuota).not.toHaveBeenCalled();
+    expect(recordPracticeUsage).not.toHaveBeenCalled();
   });
 });

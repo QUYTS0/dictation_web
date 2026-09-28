@@ -583,6 +583,11 @@ export function EvaluationTab({
                           )}
                         </div>
                       )}
+                      {trueEvaluation.persistence === "conflict" && (
+                        <p className="text-xs text-[var(--text-faint)]">
+                          A different score is already saved for this recording, so this one wasn&apos;t saved.
+                        </p>
+                      )}
                       {trueEvaluation.persistence === "superseded" && (
                         <p className="text-xs text-[var(--text-faint)]">
                           A newer evaluation of this recording replaced this score, so it wasn&apos;t saved.

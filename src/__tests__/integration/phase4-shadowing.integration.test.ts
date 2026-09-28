@@ -39,7 +39,7 @@ type Finish = { applied: boolean; outcome: string; currentSeq: number; status: s
 const CREATE = "select fn_create_or_get_active_round($1, $2)";
 const SHADOW = "select fn_record_shadowing_attempt($1, $2, $3, $4, $5, $6, $7)";
 const DICTATE = "select fn_record_dictation_attempt($1, $2, $3, $4, $5, 'relaxed', $6, null, null)";
-const BEGIN = "select fn_begin_azure_evaluation($1, $2)";
+const BEGIN = "select fn_begin_azure_evaluation($1, $2, $3)";
 const FINISH =
   "select fn_finish_azure_evaluation($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)";
 const EXPIRE = "select fn_expire_azure_evaluation($1, $2, $3)";
@@ -86,7 +86,11 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
       roundId, o.video ?? video, seg, o.id ?? randomUUID(), dur, o.transcript === undefined ? transcriptId : o.transcript, o.session ?? null,
     ]);
   const svc = <T = Record<string, unknown>>(sql: string, params: unknown[]) => rpcAs<T>(owner, userA, sql, params, "service_role");
-  const begin = (attemptId: string, user = userA) => svc<{ seq: number; referenceText: string; recordingDurationSec: string }>(BEGIN, [attemptId, user]);
+  type Begin = { admitted: boolean; outcome: string; seq: number; referenceText: string; recordingDurationSec: string };
+  const begin = (attemptId: string, user = userA, audioSec = 2) => svc<Begin>(BEGIN, [attemptId, user, audioSec]);
+  /** Makes the live pending request of `attemptId` overdue, so a replacement is admitted. */
+  const expireLive = (attemptId: string) =>
+    owner.query("update shadowing_attempts set eval_requested_at = clock_timestamp() - interval '10 minutes' where id = $1", [attemptId]);
   const finish = (attemptId: string, seq: number, status: "completed" | "failed", o: { user?: string; pron?: number; reason?: string; detail?: unknown } = {}) =>
     svc<Finish>(FINISH, [
       attemptId, o.user ?? userA, seq, status,
@@ -199,6 +203,7 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     const b1 = await begin(a.attemptId);
     const wm = await svc<{ seq: number; applied: boolean }>(WORD_MATCH, [a.attemptId, userA, "completed", 50, 100, JSON.stringify({ recognizedText: "hello" })]);
     expect(wm).toMatchObject({ applied: true, seq: 1 });
+    await expireLive(a.attemptId);
     const b2 = await begin(a.attemptId);
     expect([b1.seq, b2.seq]).toEqual([1, 2]);
     const stored = await row(a.attemptId);
@@ -212,7 +217,8 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     const roundId = await round();
     const a = await shadow(roundId, 0, 2);
     await begin(a.attemptId); // seq 1
-    await begin(a.attemptId); // seq 2 supersedes
+    await expireLive(a.attemptId); // seq 1 never finished in time
+    await begin(a.attemptId); // seq 2 replaces it
     expect(await finish(a.attemptId, 1, "completed", { pron: 10 })).toMatchObject({ applied: false, outcome: "superseded", currentSeq: 2 });
     expect(await finish(a.attemptId, 1, "failed")).toMatchObject({ applied: false, outcome: "superseded" });
     expect(await row(a.attemptId)).toMatchObject({ azure_eval_status: "pending", azure_pronunciation_score: null });
@@ -222,8 +228,9 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     const stored = await row(a.attemptId);
     expect(stored).toMatchObject({ azure_eval_status: "completed", azure_pronunciation_score: "81", azure_prosody_score: null });
     expect(stored.azure_evaluated_at).not.toBeNull();
-    // One successful evaluation per recording: no paid re-score.
-    expect((await errorOf(begin(a.attemptId)))?.message).toBe("azure_already_evaluated");
+    // One successful evaluation per recording: no paid re-score, nothing changes.
+    expect(await begin(a.attemptId)).toMatchObject({ admitted: false, outcome: "already_evaluated", seq: 2 });
+    expect((await row(a.attemptId)).azure_eval_request_seq).toBe(2);
   });
 
   it("10. timeout recovery only expires its own overdue seq, never a newer request", async () => {
@@ -231,7 +238,7 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     const a = await shadow(roundId, 0, 2);
     await begin(a.attemptId); // seq 1
     await age(a.attemptId, 600);
-    await begin(a.attemptId); // seq 2, fresh
+    await begin(a.attemptId); // seq 2, fresh (seq 1 was overdue)
     expect(await svc(EXPIRE, [a.attemptId, userA, 1])).toEqual({ expired: false }); // superseded seq
     expect(await svc(EXPIRE, [a.attemptId, userA, 2])).toEqual({ expired: false }); // not overdue
     expect((await row(a.attemptId)).azure_eval_status).toBe("pending");
@@ -278,6 +285,7 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     // Supersession: a token for seq 1 after the user re-evaluated (seq 2).
     const b = await shadow(roundId, 1, 2);
     await begin(b.attemptId);
+    await expireLive(b.attemptId);
     await begin(b.attemptId);
     expect(await finish(b.attemptId, 1, "completed")).toMatchObject({ applied: false, outcome: "superseded" });
     // Account mismatch: the token's attempt is not the other user's.
@@ -363,7 +371,7 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     const roundId = await round();
     const a = await shadow(roundId, 0, 2);
     for (const [sql, params] of [
-      [BEGIN, [a.attemptId, userA]],
+      [BEGIN, [a.attemptId, userA, 2]],
       [FINISH, [a.attemptId, userA, 1, "failed", null, null, null, null, null, null, "x", null]],
       [EXPIRE, [a.attemptId, userA, 1]],
       [WORD_MATCH, [a.attemptId, userA, "failed", null, null, null]],

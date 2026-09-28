@@ -124,6 +124,9 @@ export interface EvaluateAttemptResponse {
   /** A newer evaluation request for this attempt exists; this result was
    *  not stored and is not the attempt's result. */
   superseded?: boolean;
+  /** A different result is already stored for this request; it was kept and
+   *  this one was not saved. */
+  conflict?: boolean;
   /** Present only when persisted is false and not superseded. Opaque. */
   recoveryToken?: string;
   recoveryExpiresAt?: string;

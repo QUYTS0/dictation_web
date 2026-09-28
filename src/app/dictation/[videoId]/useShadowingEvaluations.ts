@@ -232,7 +232,7 @@ export function useShadowingEvaluations(options: ShadowingEvaluationsOptions) {
         // Only a SAVED result (or a visitor's local-only one) becomes the
         // sentence's last successful score and feeds the summary; an unsaved
         // or superseded one is shown for this take but never promoted.
-        if (completed.persistence === "unsaved" || completed.persistence === "superseded") {
+        if (completed.persistence === "unsaved" || completed.persistence === "superseded" || completed.persistence === "conflict") {
           return { ...(prev ?? emptyEntry(segmentIndex)), trueEvaluation: completed };
         }
         return withSavedEvaluation(prev, segmentIndex, completed);

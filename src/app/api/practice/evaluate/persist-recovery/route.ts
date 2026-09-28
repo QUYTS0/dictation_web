@@ -61,6 +61,13 @@ export async function POST(request: NextRequest) {
   if (data.outcome === "applied" || data.outcome === "already_applied") {
     return NextResponse.json({ persisted: true, attemptId: payload.attemptId, seq: payload.seq, alreadySaved: data.outcome === "already_applied" });
   }
+  if (data.outcome === "conflict") {
+    // A different result is already stored for this request; it is kept.
+    return NextResponse.json(
+      { error: "A different result is already saved for this recording.", code: "recovery_conflict", attemptId: payload.attemptId },
+      { status: 409 }
+    );
+  }
   return NextResponse.json(
     {
       error: "A newer evaluation of this recording replaced this result.",

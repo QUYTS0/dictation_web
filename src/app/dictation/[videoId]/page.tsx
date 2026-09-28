@@ -79,6 +79,8 @@ import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { RightPanelTab, ShadowingPersistenceView } from "./types";
 import { computeWordMatch } from "@/lib/practice/wordMatch";
+import { waitForStoredEvaluation } from "./shadowingApi";
+import { azureResultFrom } from "./shadowingServerMerge";
 
 // ---- Page component ----
 
@@ -534,7 +536,7 @@ export default function DictationPage({ params }: PageProps) {
       const wasViewingEvaluationTab = rightPanelTabRef.current === "evaluation";
       if (outcome.ok) {
         const d = outcome.data;
-        const persistence = d.persisted ? "saved" : d.superseded ? "superseded" : "unsaved";
+        const persistence = d.persisted ? "saved" : d.superseded ? "superseded" : d.conflict ? "conflict" : "unsaved";
         // Explicit fields only: the recovery token never enters the map or
         // sessionStorage.
         completeTrueEvaluation(origin, segmentIndex, {
@@ -571,6 +573,28 @@ export default function DictationPage({ params }: PageProps) {
           }
           setHasUnreadEvaluation(true);
         }
+      } else if (outcome.status === "server_result") {
+        // Nothing new was started: this recording's evaluation is running
+        // elsewhere (another tab, a previous click) or already saved. Read
+        // the stored outcome with bounded polling — never re-post Evaluate.
+        const dto = await waitForStoredEvaluation(outcome.attemptId, {
+          // Stops when this take is forgotten (sign-out / account switch / other video).
+          isCancelled: () => recordings.view(clipId) === null,
+        });
+        if (dto?.azure.status === "completed") {
+          completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" });
+        } else if (dto?.azure.status === "failed") {
+          failTrueEvaluation(
+            origin,
+            segmentIndex,
+            dto.azure.errorReason === "expired"
+              ? "The earlier evaluation of this recording didn't finish. Press Retry to evaluate it again."
+              : (dto.azure.errorReason ?? "The evaluation failed. Press Retry to try again.")
+          );
+        } else {
+          failTrueEvaluation(origin, segmentIndex, "This recording is still being evaluated. Check back in a moment.");
+        }
+        if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);
       } else {
         failTrueEvaluation(origin, segmentIndex, outcome.error, outcome.status);
         if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);

@@ -67,6 +67,37 @@ export function fetchShadowingAttempt(attemptId: string): Promise<ShadowingAttem
   return send(`/api/practice/attempt/${attemptId}`, { method: "GET" }, "Failed to load the recording");
 }
 
+/**
+ * Bounded wait for a recording's stored Azure outcome — used when Evaluate
+ * reported the recording is already being evaluated (or was already
+ * evaluated). Reads only; never posts Evaluate again. Resolves with the
+ * attempt once its evaluation is no longer pending, or null when the bound
+ * is reached, the request fails repeatedly, or `isCancelled()` turns true.
+ */
+export async function waitForStoredEvaluation(
+  attemptId: string,
+  opts: { intervalMs?: number; maxWaitMs?: number; isCancelled?: () => boolean; sleep?: (ms: number) => Promise<void> } = {}
+): Promise<ShadowingAttemptDto | null> {
+  const interval = opts.intervalMs ?? 4000;
+  const maxWait = opts.maxWaitMs ?? 130_000; // server timeout (120 s) + margin
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let waited = 0;
+  let failures = 0;
+  for (;;) {
+    if (opts.isCancelled?.()) return null;
+    try {
+      const dto = await fetchShadowingAttempt(attemptId);
+      failures = 0;
+      if (dto.azure.status !== "pending") return dto;
+    } catch {
+      if (++failures >= 3) return null;
+    }
+    if (waited >= maxWait) return null;
+    await sleep(interval);
+    waited += interval;
+  }
+}
+
 export function fetchRoundShadowingResults(roundId: string): Promise<ShadowingRoundResults> {
   return send(`/api/practice/attempts?roundId=${encodeURIComponent(roundId)}`, { method: "GET" }, "Failed to load saved recordings");
 }

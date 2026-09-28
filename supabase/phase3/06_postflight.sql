@@ -7,6 +7,9 @@ select fn_phase3_status() as status;
 -- legacyBridgesPresent all false; policies = [learning_sessions_owner_select].
 
 -- Function permission matrix (effective, incl. PUBLIC and role inheritance). Every row ok = true.
+-- This is the Phase 3 baseline (001–037). After migration 038 the two
+-- fn_persist_*_result rows intentionally read service_role = false (revoked
+-- as superseded); use supabase/phase4/01_postflight.sql from then on.
 with expected(sig, anon, authed, service) as (values
   ('public.fn_create_or_get_active_round(text,uuid,integer,numeric)', false, true, false),
   ('public.fn_update_resume_position(uuid,text,integer,numeric,uuid)', false, true, false),

@@ -105,7 +105,7 @@ export interface WordMatchResult {
 }
 
 /** Phase 4 persistence state of one Shadowing result. */
-export type ResultPersistence = "saved" | "saving" | "unsaved" | "superseded";
+export type ResultPersistence = "saved" | "saving" | "unsaved" | "superseded" | "conflict";
 
 export type TrueEvaluationStatus = "idle" | "processing" | "completed" | "failed" | "unavailable";
 

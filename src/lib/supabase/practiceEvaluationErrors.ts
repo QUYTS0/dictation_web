@@ -6,6 +6,7 @@ import type { PracticeRpcError } from "./practiceWriteErrors";
  * HTTP responses. Every RAISE there uses a plain, stable message.
  */
 const CONFLICTS: Record<string, string> = {
+  audio_duration_mismatch: "This audio doesn't match the saved recording. Record the sentence again.",
   attempt_relationship_invalid: "This recording no longer matches its lesson. Please reload the page.",
   reference_unavailable: "This sentence can't be evaluated. Please reload the page.",
   attempt_not_evaluable: "This recording is too short to evaluate. Record the sentence again.",
@@ -23,6 +24,9 @@ export function mapPracticeEvaluationError(error: PracticeRpcError | null | unde
   }
   if (message === "round_not_found") {
     return NextResponse.json({ error: "Practice round not found.", code: "round_not_found" }, { status: 404 });
+  }
+  if (message === "audio_invalid") {
+    return NextResponse.json({ error: "That recording couldn't be read. Record the sentence again.", code: "audio_invalid" }, { status: 400 });
   }
   if (message === "invalid_payload") {
     return NextResponse.json({ error: "Invalid request.", code: "invalid_payload" }, { status: 400 });

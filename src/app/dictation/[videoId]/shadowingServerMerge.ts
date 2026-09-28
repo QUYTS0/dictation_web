@@ -18,7 +18,7 @@ import type { SentenceEvaluation, TrueEvaluationResult, TrueEvaluationWord, Word
 const num = (v: number | string | null | undefined): number | undefined =>
   v === null || v === undefined ? undefined : Number(v);
 
-function azureResultFrom(dto: ShadowingAttemptDto): TrueEvaluationResult {
+export function azureResultFrom(dto: ShadowingAttemptDto): TrueEvaluationResult {
   const a = dto.azure;
   return {
     status: "completed",
@@ -108,7 +108,7 @@ export function mergeServerResults(
     const keepTrue =
       te?.status === "completed" &&
       !!te.attemptId &&
-      (te.persistence === "unsaved" || te.persistence === "superseded") &&
+      (te.persistence === "unsaved" || te.persistence === "superseded" || te.persistence === "conflict") &&
       srv?.lastSuccessfulTrueEvaluation?.attemptId !== te.attemptId;
     const wm = loc.wordMatch;
     const keepWordMatch =

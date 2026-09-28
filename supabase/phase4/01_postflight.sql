@@ -12,7 +12,7 @@ order by column_name;
 
 -- 2. Function permission matrix for 038 (effective, incl. PUBLIC).
 with expected(sig, anon, authed, service) as (values
-  ('public.fn_begin_azure_evaluation(uuid,uuid)', false, false, true),
+  ('public.fn_begin_azure_evaluation(uuid,uuid,numeric)', false, false, true),
   ('public.fn_finish_azure_evaluation(uuid,uuid,integer,text,numeric,numeric,numeric,numeric,numeric,jsonb,text,text)', false, false, true),
   ('public.fn_expire_azure_evaluation(uuid,uuid,integer)', false, false, true),
   ('public.fn_record_word_match(uuid,uuid,text,numeric,numeric,jsonb)', false, false, true),
@@ -20,11 +20,13 @@ with expected(sig, anon, authed, service) as (values
   ('public.fn_shadowing_round_results(uuid)', false, true, false),
   ('public.fn_shadowing_attempt_dto(shadowing_attempts,boolean)', false, true, false),
   ('public.fn_shadowing_eval_timeout_sec()', false, true, false),
+  ('public.fn_shadowing_max_audio_sec()', false, false, false),
   -- unchanged Phase 3 rows Phase 4 depends on
   ('public.fn_record_shadowing_attempt(uuid,text,integer,uuid,numeric,uuid,uuid)', false, true, false),
   ('public.fn_create_or_get_active_round(text,uuid,integer,numeric)', false, true, false),
-  ('public.fn_persist_azure_result(uuid,integer,text,numeric,numeric,numeric,numeric,numeric,text,text)', false, false, true),
-  ('public.fn_persist_word_match_result(uuid,integer,text,numeric,numeric)', false, false, true)
+  -- superseded 035 writers: intentionally revoked by 038 (were service_role in the Phase 3 matrix)
+  ('public.fn_persist_azure_result(uuid,integer,text,numeric,numeric,numeric,numeric,numeric,text,text)', false, false, false),
+  ('public.fn_persist_word_match_result(uuid,integer,text,numeric,numeric)', false, false, false)
 )
 select e.sig,
        has_function_privilege('anon', e.sig, 'EXECUTE') as anon_exec,
@@ -45,7 +47,7 @@ from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public'
   and p.proname in ('fn_begin_azure_evaluation', 'fn_finish_azure_evaluation', 'fn_expire_azure_evaluation',
                     'fn_record_word_match', 'fn_get_shadowing_attempt', 'fn_shadowing_round_results',
-                    'fn_shadowing_attempt_dto', 'fn_shadowing_eval_timeout_sec')
+                    'fn_shadowing_attempt_dto', 'fn_shadowing_eval_timeout_sec', 'fn_shadowing_max_audio_sec')
 order by p.proname;
 
 -- 4. Phase 3 table privileges are untouched: app roles only SELECT

@@ -32,9 +32,13 @@
 --     (SECURITY INVOKER, owner RLS applies) return stored results so a
 --     reloaded page restores them without any local attempt id.
 --
--- 035's fn_persist_azure_result / fn_persist_word_match_result are left
--- exactly as they are (still service_role-only, part of the verified
--- Phase 3 permission matrix) but are no longer called by the application.
+-- 035's fn_persist_azure_result / fn_persist_word_match_result are
+-- superseded: no application code, SQL function or supported rollback build
+-- calls them (the Phase 3 build's evaluate route never wrote results), and
+-- they lack the admission/pending guards above. Their service_role EXECUTE
+-- is REVOKED here (definitions kept, nothing depends on dropping them). The
+-- Phase 3 postflight's 25-row matrix is the Phase 3 baseline; after 038 its
+-- two rows for these functions intentionally read service_role = false.
 --
 -- The previously planned 038_fn_delete_transcript_revision (Script
 -- Versions) is renumbered to 039 and remains NOT created.
@@ -56,7 +60,11 @@ comment on column shadowing_attempts.word_match_detail is
   'PHASE4_RUNBOOK.md trust boundary); the scores are computed server-side.';
 
 -- Pending evaluations older than this are reported (and lazily written) as
--- failed/'expired'. One definition for every reader and writer.
+-- failed/'expired', and a new request for the same attempt is admitted
+-- again. One definition for every reader and writer. It bounds a request
+-- that was admitted but never finished (e.g. the function instance died
+-- between Azure and the result write). Azure's own request timeout (15 s)
+-- is far below it.
 create or replace function fn_shadowing_eval_timeout_sec()
 returns integer
 language sql
@@ -67,13 +75,41 @@ as $$
   select 120;
 $$;
 
+-- Longest audio accepted for evaluation: the recorder caps takes at 20 s;
+-- 1 s of slack covers decoder padding in the browser's WAV conversion.
+create or replace function fn_shadowing_max_audio_sec()
+returns numeric
+language sql
+immutable
+parallel safe
+set search_path = public, pg_temp
+as $$
+  select 21::numeric;
+$$;
+
 -- -------------------------------------------------------------------------
 -- Azure evaluation lifecycle (backend-only: service_role, called by
 -- /api/practice/evaluate after it verified the caller with GoTrue; every
 -- function re-checks (attempt, user) itself).
 -- -------------------------------------------------------------------------
 
-create or replace function fn_begin_azure_evaluation(p_attempt_id uuid, p_user_id uuid)
+-- Admission for ONE attempt. The row lock serializes concurrent requests for
+-- the same recording only — other recordings and other users never wait on
+-- it, and it is released when this call's transaction ends, before the
+-- route calls Azure. Outcomes (jsonb, `admitted`):
+--   * admitted            — seq + 1, pending, eval_requested_at = now;
+--   * in_progress         — a live (non-expired) pending request exists:
+--                           NOTHING changes (seq, timestamps), no provider
+--                           call may follow; the caller reads the result later;
+--   * already_evaluated   — one successful result per recording: nothing changes.
+-- Errors (nothing changes): attempt_not_found, attempt_relationship_invalid,
+-- reference_unavailable, attempt_not_evaluable, audio_invalid,
+-- audio_duration_mismatch.
+-- p_audio_duration_sec is the duration the ROUTE derived from the validated
+-- WAV data. recording_duration_sec stays client-reported practice metadata:
+-- it is only used to reject audio materially longer than the recording it
+-- claims to be (tolerance 25% + 1 s for recorder/decoder differences).
+create or replace function fn_begin_azure_evaluation(p_attempt_id uuid, p_user_id uuid, p_audio_duration_sec numeric)
 returns jsonb
 language plpgsql
 security definer
@@ -85,8 +121,13 @@ declare
   v_round record;
   v_seg record;
   v_seq integer;
+  v_requested timestamptz;
 begin
   if p_attempt_id is null or p_user_id is null then raise exception 'invalid_payload'; end if;
+  if p_audio_duration_sec is null or p_audio_duration_sec <= 0 or p_audio_duration_sec = 'NaN'::numeric
+     or p_audio_duration_sec > fn_shadowing_max_audio_sec() then
+    raise exception 'audio_invalid';
+  end if;
 
   select * into v from shadowing_attempts where id = p_attempt_id and user_id = p_user_id for update;
   if not found then raise exception 'attempt_not_found'; end if;
@@ -107,11 +148,27 @@ begin
 
   -- A recording too short to count as practice is not worth a paid call.
   if not v.is_practice_valid then raise exception 'attempt_not_evaluable'; end if;
+
   -- One successful evaluation per recording: re-scoring the same audio
   -- would only spend quota. A new take is a new attempt.
-  if v.azure_eval_status = 'completed' then raise exception 'azure_already_evaluated'; end if;
+  if v.azure_eval_status = 'completed' then
+    return jsonb_build_object('admitted', false, 'outcome', 'already_evaluated',
+      'attemptId', v.id, 'seq', v.azure_eval_request_seq);
+  end if;
 
-  -- Admission: the next seq supersedes any earlier request for this attempt.
+  -- One live request per recording. An expired one (admitted but never
+  -- finished) may be replaced; its late result is then rejected by seq.
+  if v.azure_eval_status = 'pending'
+     and v.eval_requested_at >= clock_timestamp() - make_interval(secs => fn_shadowing_eval_timeout_sec()) then
+    return jsonb_build_object('admitted', false, 'outcome', 'in_progress',
+      'attemptId', v.id, 'seq', v.azure_eval_request_seq, 'requestedAt', v.eval_requested_at,
+      'expiresAt', v.eval_requested_at + make_interval(secs => fn_shadowing_eval_timeout_sec()));
+  end if;
+
+  if p_audio_duration_sec > v.recording_duration_sec * 1.25 + 1.0 then
+    raise exception 'audio_duration_mismatch';
+  end if;
+
   update shadowing_attempts
      set azure_eval_request_seq = azure_eval_request_seq + 1,
          azure_eval_status = 'pending',
@@ -119,12 +176,15 @@ begin
          azure_error_reason = null,
          updated_at = now()
    where id = v.id
-   returning azure_eval_request_seq into v_seq;
+   returning azure_eval_request_seq, eval_requested_at into v_seq, v_requested;
 
   return jsonb_build_object(
+    'admitted', true, 'outcome', 'admitted',
     'attemptId', v.id, 'seq', v_seq, 'referenceText', v_seg.text_raw,
-    'recordingDurationSec', v.recording_duration_sec, 'roundId', v.round_id,
-    'segmentIndex', v.segment_index, 'transcriptId', v.transcript_id, 'youtubeVideoId', v.youtube_video_id
+    'recordingDurationSec', v.recording_duration_sec, 'audioDurationSec', p_audio_duration_sec,
+    'requestedAt', v_requested,
+    'roundId', v.round_id, 'segmentIndex', v.segment_index, 'transcriptId', v.transcript_id,
+    'youtubeVideoId', v.youtube_video_id
   );
 end;
 $$;
@@ -188,8 +248,14 @@ begin
         and v.azure_accuracy_score is not distinct from p_accuracy_score
         and v.azure_fluency_score is not distinct from p_fluency_score
         and v.azure_completeness_score is not distinct from p_completeness_score
-        and v.azure_prosody_score is not distinct from p_prosody_score then
-    -- A repeated write of the same result (e.g. a replayed recovery token).
+        and v.azure_prosody_score is not distinct from p_prosody_score
+        and v.azure_detail is not distinct from p_detail
+        and v.engine_version is not distinct from p_engine_version then
+    -- A repeated write of the SAME result (every stored score, the per-word
+    -- detail — jsonb equality, key order irrelevant — and the engine
+    -- version; never the persistence timestamps), e.g. a replayed recovery
+    -- token: nothing is written. The same seq with any other result is a
+    -- conflict below and the stored result is kept.
     return jsonb_build_object('applied', false, 'outcome', 'already_applied', 'currentSeq', p_seq, 'status', 'completed');
   elsif v.azure_eval_status = 'failed' and p_status = 'failed' then
     return jsonb_build_object('applied', false, 'outcome', 'already_applied', 'currentSeq', p_seq, 'status', 'failed');
@@ -211,7 +277,9 @@ begin
          azure_detail = case when p_status = 'completed' then p_detail end,
          azure_evaluated_at = case when p_status = 'completed' then clock_timestamp() end,
          azure_error_reason = case when p_status = 'failed' then left(coalesce(p_error_reason, 'evaluation_failed'), 500) end,
-         engine_version = coalesce(p_engine_version, engine_version),
+         -- A stored result carries exactly the engine version it came with,
+         -- so an identical replay compares equal.
+         engine_version = case when p_status = 'completed' then p_engine_version else engine_version end,
          updated_at = now()
    where id = v.id;
 
@@ -449,7 +517,8 @@ $$;
 -- -------------------------------------------------------------------------
 
 revoke execute on function fn_shadowing_eval_timeout_sec() from public, anon, authenticated, service_role;
-revoke execute on function fn_begin_azure_evaluation(uuid, uuid) from public, anon, authenticated, service_role;
+revoke execute on function fn_shadowing_max_audio_sec() from public, anon, authenticated, service_role;
+revoke execute on function fn_begin_azure_evaluation(uuid, uuid, numeric) from public, anon, authenticated, service_role;
 revoke execute on function fn_finish_azure_evaluation(uuid, uuid, integer, text, numeric, numeric, numeric, numeric, numeric, jsonb, text, text) from public, anon, authenticated, service_role;
 revoke execute on function fn_expire_azure_evaluation(uuid, uuid, integer) from public, anon, authenticated, service_role;
 revoke execute on function fn_record_word_match(uuid, uuid, text, numeric, numeric, jsonb) from public, anon, authenticated, service_role;
@@ -458,7 +527,7 @@ revoke execute on function fn_get_shadowing_attempt(uuid) from public, anon, aut
 revoke execute on function fn_shadowing_round_results(uuid) from public, anon, authenticated, service_role;
 
 -- Backend-only writers.
-grant execute on function fn_begin_azure_evaluation(uuid, uuid) to service_role;
+grant execute on function fn_begin_azure_evaluation(uuid, uuid, numeric) to service_role;
 grant execute on function fn_finish_azure_evaluation(uuid, uuid, integer, text, numeric, numeric, numeric, numeric, numeric, jsonb, text, text) to service_role;
 grant execute on function fn_expire_azure_evaluation(uuid, uuid, integer) to service_role;
 grant execute on function fn_record_word_match(uuid, uuid, text, numeric, numeric, jsonb) to service_role;
@@ -470,3 +539,7 @@ grant execute on function fn_shadowing_eval_timeout_sec() to authenticated;
 grant execute on function fn_shadowing_attempt_dto(shadowing_attempts, boolean) to authenticated;
 grant execute on function fn_get_shadowing_attempt(uuid) to authenticated;
 grant execute on function fn_shadowing_round_results(uuid) to authenticated;
+
+-- Superseded 035 writers (see header): no application role may execute them.
+revoke execute on function fn_persist_azure_result(uuid, integer, text, numeric, numeric, numeric, numeric, numeric, text, text) from public, anon, authenticated, service_role;
+revoke execute on function fn_persist_word_match_result(uuid, integer, text, numeric, numeric) from public, anon, authenticated, service_role;

@@ -42,21 +42,37 @@ export interface TrueEvaluationSuccess {
   persisted: boolean;
   /** A newer evaluation request for the same recording replaced this one. */
   superseded: boolean;
+  /** A different result is already stored for this request (kept); this one was not saved. */
+  conflict: boolean;
   /** Opaque server-signed token to retry saving (memory only, never stored). */
   recoveryToken?: string;
 }
 
 export type TrueEvaluationOutcome =
   | { ok: true; data: TrueEvaluationSuccess }
-  | { ok: false; status: "failed" | "unavailable"; error: string; code?: string };
+  | { ok: false; status: "failed" | "unavailable"; error: string; code?: string }
+  /** Phase 4: nothing new was started — the recording's evaluation is either
+   *  still running (another tab/request) or already saved. The caller reads
+   *  the stored result (GET /api/practice/attempt/[id]); it must NOT post
+   *  Evaluate again. */
+  | { ok: false; status: "server_result"; code: "evaluation_in_progress" | "azure_already_evaluated"; attemptId: string; error: string };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapErrorResponse(res: Response, data: any): TrueEvaluationOutcome {
   if (data?.code === "stale_client_version") {
     return { ok: false, status: "failed", code: data.code, error: "This page is out of date. Reload it to keep evaluating." };
   }
-  if (data?.code === "azure_already_evaluated") {
-    return { ok: false, status: "failed", code: data.code, error: "This recording was already evaluated. Record again for a new score." };
+  if (data?.code === "evaluation_in_progress" || data?.code === "azure_already_evaluated") {
+    return {
+      ok: false,
+      status: "server_result",
+      code: data.code,
+      attemptId: data.attemptId,
+      error: data.code === "evaluation_in_progress" ? "This recording is already being evaluated." : "This recording was already evaluated.",
+    };
+  }
+  if (data?.code === "quota_unavailable") {
+    return { ok: false, status: "failed", code: data.code, error: "Pronunciation scoring is temporarily unavailable. Please try again shortly." };
   }
   if (res.status === 401) {
     return { ok: false, status: "failed", code: "authentication_required", error: "Sign in to get a pronunciation score." };
@@ -178,6 +194,7 @@ export function usePracticeEvaluation() {
             seq: data.seq,
             persisted: data.persisted === true,
             superseded: data.superseded === true,
+            conflict: data.conflict === true,
             recoveryToken: typeof data.recoveryToken === "string" ? data.recoveryToken : undefined,
           },
         };

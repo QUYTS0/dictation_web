@@ -14,7 +14,7 @@ select
 -- expect both true.
 
 -- 3. 038 not applied yet (all NULL before `db push`; all non-NULL after).
-select to_regprocedure('public.fn_begin_azure_evaluation(uuid,uuid)') as begin_fn,
+select to_regprocedure('public.fn_begin_azure_evaluation(uuid,uuid,numeric)') as begin_fn,
        to_regprocedure('public.fn_shadowing_round_results(uuid)') as round_results_fn,
        (select count(*) from information_schema.columns
          where table_schema = 'public' and table_name = 'shadowing_attempts'

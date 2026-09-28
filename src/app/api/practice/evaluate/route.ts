@@ -7,18 +7,24 @@ import { mapPracticeEvaluationError } from "@/lib/supabase/practiceEvaluationErr
 import { isUuid } from "@/lib/practice/validation";
 import { getRecoverySecret, issueRecoveryToken, RECOVERY_TOKEN_TTL_SEC } from "@/lib/practice/recoveryToken";
 import { finishAzureFailed, persistWithRetry, toStoredAzureResult } from "@/lib/practice/azureEvaluation";
+import { MAX_AUDIO_BYTES, validatePcmWav } from "@/lib/practice/wavValidation";
 import type { EvaluateAttemptResponse } from "@/lib/practice/shadowingTypes";
 
-// 16kHz mono 16-bit PCM WAV runs ~32KB/sec; the recorder caps takes at 20s
-// (see useAudioRecorder's maxDurationSec), so a genuine take never exceeds
-// ~640KB. This just guards against a malformed/oversized upload.
-const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
+type BeginResult =
+  | {
+      admitted: true;
+      outcome: "admitted";
+      attemptId: string;
+      seq: number;
+      referenceText: string;
+      recordingDurationSec: number;
+    }
+  | { admitted: false; outcome: "in_progress"; attemptId: string; seq: number; requestedAt: string; expiresAt: string }
+  | { admitted: false; outcome: "already_evaluated"; attemptId: string; seq: number };
 
-interface BeginResult {
-  attemptId: string;
-  seq: number;
-  referenceText: string;
-  recordingDurationSec: number;
+function log(event: string, fields: Record<string, unknown>) {
+  // Identifiers and outcomes only — never audio, tokens, secrets or provider payloads.
+  console.log(`[practice/evaluate] ${event}`, JSON.stringify(fields));
 }
 
 /**
@@ -27,14 +33,21 @@ interface BeginResult {
  *   request: multipart { attemptId, audio } — no reference text, no scores;
  *   1. configuration (Azure + recovery signing secret) is checked before
  *      anything is spent;
- *   2. the caller is authenticated (GoTrue) and fn_begin_azure_evaluation
- *      re-checks ownership + relationships, resolves the reference text from
- *      the attempt's pinned sentence and admits the request (seq + pending);
- *   3. Azure is called with the audio (never stored anywhere);
- *   4. the result is written for (attempt, user, seq) only — a newer
- *      request for the same attempt supersedes this one; a database failure
- *      after a paid result yields persisted:false plus a server-signed
- *      recovery token instead of losing the result.
+ *   2. the audio is validated as the app's PCM WAV (16 kHz mono 16-bit, ≤ 21 s)
+ *      and its duration derived from the sample data — before anything else;
+ *   3. the caller is authenticated (GoTrue); fn_begin_azure_evaluation locks
+ *      THIS attempt only, re-checks ownership + relationships, resolves the
+ *      reference text from the pinned sentence and admits at most one live
+ *      request per recording (a duplicate gets evaluation_in_progress with
+ *      nothing changed; a completed recording gets azure_already_evaluated);
+ *   4. quota is checked with the server-derived duration (a check failure
+ *      refuses the call and records a retryable failure);
+ *   5. Azure is called (the row lock is long released);
+ *   6. usage is recorded best effort — an accounting error never discards
+ *      the paid result;
+ *   7. the result is written for (attempt, user, seq) only; a database
+ *      failure after a paid result yields persisted:false plus a server-signed
+ *      recovery token.
  * A request without attemptId comes from a pre-Phase-4 page: 409
  * stale_client_version / reload_required, never guessed.
  */
@@ -82,8 +95,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "audio is required.", code: "invalid_payload" }, { status: 400 });
   }
   if (audio.size > MAX_AUDIO_BYTES) {
-    return NextResponse.json({ error: "Recording is too large to evaluate." }, { status: 413 });
+    return NextResponse.json({ error: "Recording is too large to evaluate.", code: "audio_too_large" }, { status: 413 });
   }
+  const wavBuffer = Buffer.from(await audio.arrayBuffer());
+  const wav = validatePcmWav(wavBuffer);
+  if (!wav.ok) {
+    log("audio_rejected", { attemptId, reason: wav.reason, bytes: wavBuffer.byteLength });
+    return NextResponse.json(
+      { error: "That recording couldn't be read. Record the sentence again.", code: "audio_invalid", reason: wav.reason },
+      { status: wav.reason === "too_large" || wav.reason === "too_long" ? 413 : 400 }
+    );
+  }
+  const audioDurationSec = Math.round(wav.durationSec * 1000) / 1000;
 
   const supabase = await createClient();
   const {
@@ -94,17 +117,58 @@ export async function POST(request: NextRequest) {
   }
 
   const service = createServiceClient();
-  const { data: begun, error: beginError } = await service.rpc("fn_begin_azure_evaluation", {
+  const { data: begunRaw, error: beginError } = await service.rpc("fn_begin_azure_evaluation", {
     p_attempt_id: attemptId,
     p_user_id: user.id,
+    p_audio_duration_sec: audioDurationSec,
   });
-  if (beginError || !begun) return mapPracticeEvaluationError(beginError, "Failed to start the evaluation.");
-  const { seq, referenceText, recordingDurationSec } = begun as BeginResult;
+  if (beginError || !begunRaw) return mapPracticeEvaluationError(beginError, "Failed to start the evaluation.");
+  const begun = begunRaw as BeginResult;
+  if (!begun.admitted) {
+    log("not_admitted", { attemptId, outcome: begun.outcome, seq: begun.seq });
+    if (begun.outcome === "in_progress") {
+      // Nothing was spent or changed. The page reads the running request's
+      // result via GET /api/practice/attempt/[attemptId].
+      const retryAfterSec = Math.max(1, Math.ceil((Date.parse(begun.expiresAt) - Date.now()) / 1000));
+      const res = NextResponse.json(
+        {
+          error: "This recording is already being evaluated.",
+          code: "evaluation_in_progress",
+          attemptId,
+          seq: begun.seq,
+          expiresAt: begun.expiresAt,
+        },
+        { status: 409 }
+      );
+      res.headers.set("Retry-After", String(retryAfterSec));
+      return res;
+    }
+    return NextResponse.json(
+      { error: "This recording has already been evaluated.", code: "azure_already_evaluated", attemptId, seq: begun.seq },
+      { status: 409 }
+    );
+  }
+  const { seq, referenceText } = begun;
   const claims = { attemptId, userId: user.id, seq };
 
-  // Quota is charged by the stored recording duration, not a client number.
-  const reservation = await reservePracticeQuota(Number(recordingDurationSec));
-  if (!reservation.allowed) {
+  // Quota by the duration derived from the validated audio (the stored
+  // recording_duration_sec is client-reported practice metadata and was only
+  // used by fn_begin_azure_evaluation to reject a mismatching upload).
+  // reservePracticeQuota is a CHECK (nothing is held); usage is recorded
+  // after a successful call. A failing check refuses the call — it never
+  // falls through to unlimited evaluation.
+  let allowed: boolean;
+  try {
+    allowed = (await reservePracticeQuota(audioDurationSec)).allowed;
+  } catch (err) {
+    console.error("[practice/evaluate] quota check failed:", (err as Error)?.message);
+    await finishAzureFailed(service, claims, "quota_unavailable");
+    return NextResponse.json(
+      { error: "Pronunciation scoring is temporarily unavailable. Please try again shortly.", code: "quota_unavailable", retryable: true },
+      { status: 503 }
+    );
+  }
+  if (!allowed) {
     await finishAzureFailed(service, claims, "quota_exceeded");
     return NextResponse.json(
       { error: "quota-exceeded", message: "Monthly free evaluation limit reached." },
@@ -114,16 +178,27 @@ export async function POST(request: NextRequest) {
 
   let azure;
   try {
-    const wavBuffer = Buffer.from(await audio.arrayBuffer());
     azure = await assessPronunciation({ wavBuffer, referenceText });
   } catch (err) {
-    console.error("[practice/evaluate] Azure Speech error:", err instanceof Error ? err.message : err);
     const message = err instanceof AzureSpeechError ? err.message : "Evaluation failed. Please try again.";
+    log("provider_failed", { attemptId, seq, message });
     // Practice credit is untouched: only this attempt's evaluation fails.
+    // No usage is recorded for a failed call (existing policy) — including
+    // a timeout, where Azure may or may not have processed the audio.
     await finishAzureFailed(service, claims, message);
     return NextResponse.json({ error: message }, { status: 502 });
   }
-  await recordPracticeUsage(Number(recordingDurationSec));
+
+  // Exactly once per admitted (attempt, seq): admission never lets a second
+  // request for this seq reach here, and recovery never records usage. An
+  // accounting failure is logged and does NOT stop the paid result from
+  // being stored or recoverable; it can under-count this one call, and while
+  // the quota store is failing the check above refuses further calls.
+  try {
+    await recordPracticeUsage(audioDurationSec);
+  } catch (err) {
+    console.error("[practice/evaluate] usage_accounting_failed", JSON.stringify({ attemptId, seq, audioDurationSec }), (err as Error)?.message);
+  }
 
   const stored = toStoredAzureResult(azure);
   if (!stored) {
@@ -150,16 +225,21 @@ export async function POST(request: NextRequest) {
   const persisted = await persistWithRetry(service, claims, stored);
   if (persisted.kind === "result") {
     const { outcome } = persisted.result;
+    log("persist", { attemptId, seq, outcome });
     if (outcome === "applied" || outcome === "already_applied") {
       return NextResponse.json<EvaluateAttemptResponse>({ ...body, persisted: true });
     }
-    // superseded / conflict: a newer request owns this attempt's result.
-    console.log(`[practice/evaluate] attempt=${attemptId} seq=${seq} not stored (${outcome})`);
-    return NextResponse.json<EvaluateAttemptResponse>({ ...body, superseded: true });
+    if (outcome === "superseded") {
+      return NextResponse.json<EvaluateAttemptResponse>({ ...body, superseded: true });
+    }
+    // conflict: a different result is already stored for this seq; it is kept.
+    return NextResponse.json<EvaluateAttemptResponse>({ ...body, conflict: true });
   }
   if (persisted.kind === "rejected") {
+    log("persist", { attemptId, seq, outcome: "rejected", reason: persisted.reason });
     return NextResponse.json<EvaluateAttemptResponse>(body);
   }
+  log("persist", { attemptId, seq, outcome: "unavailable_token_issued" });
   const recoveryToken = issueRecoveryToken(recoverySecret, { ...claims, result: stored });
   return NextResponse.json<EvaluateAttemptResponse>({
     ...body,

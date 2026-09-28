@@ -30,7 +30,11 @@ export function toStoredAzureResult(result: AzurePronunciationResult): RecoveryR
     words = words.map((w) => ({ word: w.word, accuracyScore: w.accuracyScore, errorType: w.errorType }));
     detail = { recognizedText: result.recognizedText ?? "", words };
   }
-  return {
+  // Canonical form: exactly what JSON (the database call and the recovery
+  // token alike) carries — undefined keys dropped, missing metrics null — so
+  // a direct write and a recovery replay of the same result compare equal in
+  // fn_finish_azure_evaluation.
+  return canonicalStoredResult({
     pronunciationScore: result.pronScore,
     accuracyScore: result.accuracy ?? null,
     fluencyScore: result.fluency ?? null,
@@ -38,7 +42,11 @@ export function toStoredAzureResult(result: AzurePronunciationResult): RecoveryR
     prosodyScore: result.prosody ?? null,
     detail: detailSize(detail) > MAX_DETAIL_BYTES ? null : detail,
     engineVersion: AZURE_ENGINE_VERSION,
-  };
+  });
+}
+
+export function canonicalStoredResult(result: RecoveryResult): RecoveryResult {
+  return JSON.parse(JSON.stringify(result)) as RecoveryResult;
 }
 
 export type FinishOutcome = "applied" | "already_applied" | "superseded" | "conflict";

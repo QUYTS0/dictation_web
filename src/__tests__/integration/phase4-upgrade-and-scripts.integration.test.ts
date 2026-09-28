@@ -96,8 +96,8 @@ d("Phase 4 upgrade 037 → 038 (real PostgreSQL, production state)", () => {
     expect(results).toHaveLength(4);
     for (const r of results) expect(r.rows.filter((row: { ok: boolean }) => !row.ok)).toEqual([]);
     expect(results[0].rows).toHaveLength(4); // new columns
-    expect(results[1].rows).toHaveLength(12); // function matrix
-    expect(results[2].rows).toHaveLength(8); // security definer / invoker + search_path
+    expect(results[1].rows).toHaveLength(13); // function matrix (incl. the two revoked 035 writers)
+    expect(results[2].rows).toHaveLength(9); // security definer / invoker + search_path
     expect(byField(post, "azure_overdue_pending")?.rows[0]).toMatchObject({ shadowing_attempts: "2", azure_overdue_pending: "0" });
   });
 });

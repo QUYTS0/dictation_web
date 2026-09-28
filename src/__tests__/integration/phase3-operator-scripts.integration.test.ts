@@ -21,7 +21,9 @@ d("supabase/phase3 operator scripts (real PostgreSQL)", () => {
   let c: PgClient;
   let user: string;
   beforeAll(async () => {
-    db = await createTestDb("scripts");
+    // The Phase 3 scripts and their 25-row matrix describe the Phase 3
+    // baseline (001–037); 038 later revokes two superseded writers on purpose.
+    db = await createTestDb("scripts", 37);
     c = await db.connect();
     user = await createUser(c);
     await publishTranscript(c, "vidS", ["Alpha.", "Beta."]);
