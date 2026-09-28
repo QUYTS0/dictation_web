@@ -154,9 +154,11 @@ export async function POST(request: NextRequest) {
   // Quota by the duration derived from the validated audio (the stored
   // recording_duration_sec is client-reported practice metadata and was only
   // used by fn_begin_azure_evaluation to reject a mismatching upload).
-  // reservePracticeQuota is a CHECK (nothing is held); usage is recorded
-  // after a successful call. A failing check refuses the call — it never
-  // falls through to unlimited evaluation.
+  // The quota is an APPROXIMATE monthly limit, not a strict budget:
+  // reservePracticeQuota only READS the counter (nothing is reserved), so
+  // concurrent evaluations of different recordings can pass the check
+  // together; usage is added after a successful call. If this read fails,
+  // this request does not call Azure.
   let allowed: boolean;
   try {
     allowed = (await reservePracticeQuota(audioDurationSec)).allowed;
@@ -189,11 +191,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
-  // Exactly once per admitted (attempt, seq): admission never lets a second
-  // request for this seq reach here, and recovery never records usage. An
-  // accounting failure is logged and does NOT stop the paid result from
-  // being stored or recoverable; it can under-count this one call, and while
-  // the quota store is failing the check above refuses further calls.
+  // Attempted once per admitted (attempt, seq): admission never lets a second
+  // request for this seq reach here, and persistence recovery neither calls
+  // Azure nor records usage. The write can fail even when the read above
+  // succeeded, and its two counter increments can partially succeed; each
+  // failure under-counts, and failures accumulate. It is deliberately not
+  // retried (INCRBY is not idempotent: a retry after a lost reply would
+  // double-count). The log line records the failure — it does not mean the
+  // usage was accounted. The paid result is still stored or recoverable.
   try {
     await recordPracticeUsage(audioDurationSec);
   } catch (err) {

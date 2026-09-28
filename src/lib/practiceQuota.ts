@@ -55,9 +55,11 @@ export async function peekPracticeQuota(): Promise<PracticeQuotaStatus> {
 /**
  * Check-before-spend for one evaluation call — call this before the Azure
  * request, then recordPracticeUsage only after it actually succeeds, so a
- * failed Azure call never burns budget. Not perfectly atomic against
- * concurrent requests (same tolerance as checkGeminiQuota in rateLimit.ts) —
- * acceptable at personal-app traffic.
+ * failed Azure call never burns budget. Despite the name nothing is
+ * reserved: it only reads the counter, so concurrent requests can all pass
+ * the same remaining budget (same tolerance as checkGeminiQuota in
+ * rateLimit.ts). The limit is approximate — acceptable at personal-app
+ * traffic, not a strict spending guarantee.
  */
 export async function reservePracticeQuota(durationSec: number): Promise<{ allowed: boolean; status: PracticeQuotaStatus }> {
   const status = await peekPracticeQuota();
@@ -68,7 +70,8 @@ export async function reservePracticeQuota(durationSec: number): Promise<{ allow
   return { allowed: true, status };
 }
 
-/** Call only after a successful Azure evaluation. */
+/** Call only after a successful Azure evaluation. Not idempotent (INCRBY /
+ *  INCR, not atomic together) — never retry blindly after an error. */
 export async function recordPracticeUsage(durationSec: number): Promise<void> {
   const redis = getRedis();
   if (!redis) return;

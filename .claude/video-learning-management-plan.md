@@ -294,7 +294,7 @@ only in an in-memory `Blob`, discarded on retry/unmount/tab close.
 **Can failed evaluation overwrite a previous successful result? (a) No — already handled well.**
 `useShadowingEvaluations.ts`'s `startTrueEvaluation`/`failTrueEvaluation` deliberately do **not**
 touch `lastSuccessfulTrueEvaluation`/`attempts` (explicit bug-fix comments in the code: *"retry
-destroys previous result"*). Azure quota is reserved *before* the call and only recorded *after*
+destroys previous result"*). Azure quota is checked (a read, nothing reserved) *before* the call and only recorded *after*
 success (`practiceQuota.ts`), so a failed/quota-blocked call never burns budget and never erases
 prior valid data. This is exactly the discipline the redesign needs — it just needs to survive a
 tab close, which it currently doesn't.
@@ -4329,21 +4329,55 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
 | State | Status | Evidence |
 |---|---|---|
 | Implemented | Yes | `038_phase4_shadowing_persistence.sql`; routes `POST /api/practice/attempt`, `POST /api/practice/evaluate` (attempt-scoped), `POST /api/practice/evaluate/persist-recovery`, `PATCH /api/practice/attempt/[id]/word-match`, `GET /api/practice/attempt/[id]`, `GET /api/practice/attempts?roundId=`; `useShadowingRecordings`, scoped `useShadowingEvaluations` + `shadowingServerMerge`, EvaluationTab save states, sign-out/account-switch cache cleanup |
-| Unit/mock verified | Yes | route, token, client-hook and auth suites (Azure always mocked); tsc, lint, build |
-| Real database verified | Yes, locally | 19 Phase 4 tests on disposable PostgreSQL 17.9 from the production state (001–037 + activated cutover): lifecycle, concurrency, permissions, 037→038 upgrade with data, operator SQL as written; the 51 Phase 3 tests still pass with 038 present |
-| Supabase HTTP verified | No | — |
+| Committed | `3d38124` (review fixes) | Later local changes — evaluation-wait cancellation (`useEvaluationWaits`, abortable `waitForStoredEvaluation`) and comment/doc corrections — are uncommitted |
+| Unit/mock verified | Yes | route, token, WAV-validation, client-hook (incl. polling cancellation) and auth suites (Azure always mocked); on the working tree: tsc pass, lint 0 errors / 3 pre-existing warnings, build pass |
+| Real database verified | Yes, locally | 26 Phase 4 tests on disposable PostgreSQL 17.9 from the production state (001–037 + activated cutover): lifecycle, per-attempt admission under real concurrency (another attempt / user admitted while one attempt's lock is held), audio-duration admission, full-result idempotency, revoked 035 writers, 037→038 upgrade with data, operator SQL as written; the 51 Phase 3 tests pass. Full suite with the local DB: 1271 passed, 113 skipped (Supabase-HTTP suites), 0 failed |
+| Supabase HTTP verified | No | the 4 HTTP-stack suites were skipped (no local Supabase stack) |
 | Browser / iPhone verified | No | manual checklist in the runbook §7 |
-| Applied to the user's project | No | — |
-| Deployed | No | — |
+| Applied to the user's project | **No** | user-confirmed: `038` not applied |
+| Deployed | **Yes, ahead of its schema** | user-confirmed: `3d38124` serves Vercel Production while `038` is unapplied — Evaluate/restore/Word Match storing answer `503` cleanly, saving takes works (runbook §5 "Compatibility"); the earlier `0e159a6` must not be live after `038` (it calls the two-argument begin function the corrected `038` never creates) |
+
+Phase 3 is unaffected: `001`–`037` applied and the cutover activated and verified by the user.
 
 Deviations from the task list above, with reasons:
 - **Migration 038 was needed** (the plan expected the Phase 2 functions to suffice): 035's
   `fn_persist_azure_result` has no admission step (nothing allocated the seq or wrote
   `pending`), no pending-only guard (a failure could overwrite a stored success; a replayed
   recovery would rewrite the row) and nowhere to keep per-word detail for restoring the
-  display after a reload. 038 adds narrow new functions and leaves 035's untouched
-  (still part of the verified Phase 3 matrix, now unused). The planned `038` deletion
-  migration is renumbered `039` (not created).
+  display after a reload. 038 adds narrow new functions and **revokes EXECUTE on 035's
+  two writers from every application role** (no caller exists; they stay defined). The
+  Phase 3 postflight's 25-row matrix is therefore the Phase 3 baseline only — after 038
+  its two rows for these functions read `service_role = false`; the Phase 4 postflight
+  (13 function rows, 9 definer/invoker rows) is authoritative from then on. The planned
+  `038` deletion migration is renumbered `039` (not created).
+- **Review corrections, made in the not-yet-applied 038 and the route** (regression tests in
+  `phase4-review-fixes` and the route/client suites):
+  (a) *per-attempt admission* — `fn_begin_azure_evaluation(uuid, uuid, numeric)` locks only
+  that attempt and returns `admitted` / `in_progress` (live pending request: nothing changes,
+  no quota check, no provider call) / `already_evaluated`; other attempts and users are
+  never blocked, and there is no global lock or queue; the client reads the stored result
+  with bounded GET polling and never re-posts Evaluate;
+  (b) *server-side audio validation* — PCM WAV 16 kHz mono 16-bit, ≤ 1 MiB, 0.1–21 s,
+  duration derived from the data chunk and used for quota/usage; audio longer than the
+  recording × 1.25 + 1 s is refused (`audio_duration_mismatch`);
+  (c) *accounting cannot discard a paid result* — a quota-read error refuses that request
+  before Azure (`503 quota_unavailable`), a usage-write error is logged and the score is
+  still stored or recoverable;
+  (d) *full-result idempotency* — `already_applied` only when scores, per-word detail and
+  engine version are identical, otherwise `conflict` with the stored result kept;
+  (e) *obsolete writers revoked* (above).
+- **Evaluation-wait cancellation** (after `3d38124`, uncommitted): each wait owns an
+  `AbortController`; unmount, sign-out/account or video change, a round/revision change and
+  a newer wait for the same recording abort the in-flight read and the delay; a cancelled
+  wait changes nothing on the page. Strict Mode cleanup cancels permanently without
+  blocking later waits.
+- **Quota is an approximate personal-app limit, not a strict budget** (unchanged
+  mechanism): the check only reads the Upstash counter (nothing is reserved), so
+  concurrent evaluations of different recordings can pass together; usage is written
+  after success with two non-idempotent increments that can fail or partially succeed
+  even when the read worked, so under-counting can accumulate. Those writes are
+  deliberately not retried; `usage_accounting_failed` in the logs records a failure, not
+  a successful count. Persistence recovery never calls Azure or records usage.
 - **One successful Azure evaluation per recording** (`azure_already_evaluated`): re-scoring the
   same audio only spends quota, and it keeps a later failure from ever replacing a stored score.
   A failed/expired evaluation can be retried on the same take.
@@ -4745,7 +4779,9 @@ steps (§12 Phase 3), not a migration-level reversal after the fact.
   media-timeline traversal, not comprehension or attention, and says so in its own UI copy. This
   is a stated product tolerance, not a measurement-precision artifact.
 - **Azure quota remains global, not per-user** (unchanged from today, out of scope for this
-  redesign — a product/infra decision independent of the data model).
+  redesign — a product/infra decision independent of the data model). It is also
+  **approximate**: a read-then-increment counter, so concurrent calls can overshoot and
+  failed usage writes under-count (Phase 4 status notes).
 - **`videos.title`/`duration_sec` remain frequently null** unless a future, separate change
   populates them more reliably during transcript generation — this plan's Listening-denominator
   logic (§6.3) already accounts for that by falling back to the transcript's own valid-segment

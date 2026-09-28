@@ -79,7 +79,7 @@ import { checkAnswer as evaluateAutoAdvanceAnswer } from "@/lib/utils/text";
 import { canonicalFormDiffersFromSurface } from "@/lib/utils/vocabulary";
 import type { RightPanelTab, ShadowingPersistenceView } from "./types";
 import { computeWordMatch } from "@/lib/practice/wordMatch";
-import { waitForStoredEvaluation } from "./shadowingApi";
+import { applyStoredEvaluationWait, useEvaluationWaits } from "./useEvaluationWaits";
 import { azureResultFrom } from "./shadowingServerMerge";
 
 // ---- Page component ----
@@ -258,10 +258,21 @@ export default function DictationPage({ params }: PageProps) {
   // A different account (or signing out) must not see this one's takes,
   // tokens or notices.
   const resetRecordings = recordings.reset;
+  // Waits for an evaluation already running elsewhere (bounded GET polling);
+  // each is cancelled on unmount, on reset, or when its scope is left.
+  const evaluationWaits = useEvaluationWaits();
+  const { cancelAll: cancelAllEvaluationWaits, cancelOutsideScope: cancelEvaluationWaitsOutside } = evaluationWaits;
   useEffect(() => {
     resetRecordings();
+    cancelAllEvaluationWaits();
     setShadowingRoundCompleted(false);
-  }, [user?.id, videoId, resetRecordings]);
+  }, [user?.id, videoId, resetRecordings, cancelAllEvaluationWaits]);
+  // A round or revision change (or any other scope change) cancels waits
+  // whose results could no longer be shown; a sentence/mode switch does not
+  // (the result still lands on its own sentence).
+  useEffect(() => {
+    cancelEvaluationWaitsOutside(evaluationScopeKey);
+  }, [evaluationScopeKey, cancelEvaluationWaitsOutside]);
 
   // Tracks whether the user has manually picked a right-panel tab since the
   // current recording started — auto-opening the Evaluation tab after a
@@ -577,24 +588,17 @@ export default function DictationPage({ params }: PageProps) {
         // Nothing new was started: this recording's evaluation is running
         // elsewhere (another tab, a previous click) or already saved. Read
         // the stored outcome with bounded polling — never re-post Evaluate.
-        const dto = await waitForStoredEvaluation(outcome.attemptId, {
-          // Stops when this take is forgotten (sign-out / account switch / other video).
-          isCancelled: () => recordings.view(clipId) === null,
+        const waited = await evaluationWaits.wait({ attemptId: outcome.attemptId, clipId, origin });
+        // The take was forgotten meanwhile (reset) — nothing to update.
+        if (waited.kind !== "cancelled" && recordings.view(clipId) === null) return;
+        applyStoredEvaluationWait(waited, outcome.attemptId, {
+          complete: (dto) =>
+            completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" }),
+          fail: (message) => failTrueEvaluation(origin, segmentIndex, message),
+          updated: () => {
+            if (rightPanelTabRef.current !== "evaluation") setHasUnreadEvaluation(true);
+          },
         });
-        if (dto?.azure.status === "completed") {
-          completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" });
-        } else if (dto?.azure.status === "failed") {
-          failTrueEvaluation(
-            origin,
-            segmentIndex,
-            dto.azure.errorReason === "expired"
-              ? "The earlier evaluation of this recording didn't finish. Press Retry to evaluate it again."
-              : (dto.azure.errorReason ?? "The evaluation failed. Press Retry to try again.")
-          );
-        } else {
-          failTrueEvaluation(origin, segmentIndex, "This recording is still being evaluated. Check back in a moment.");
-        }
-        if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);
       } else {
         failTrueEvaluation(origin, segmentIndex, outcome.error, outcome.status);
         if (!wasViewingEvaluationTab) setHasUnreadEvaluation(true);
@@ -608,6 +612,7 @@ export default function DictationPage({ params }: PageProps) {
     evaluationScopeKey,
     user,
     recordings,
+    evaluationWaits,
     startTrueEvaluation,
     completeTrueEvaluation,
     failTrueEvaluation,

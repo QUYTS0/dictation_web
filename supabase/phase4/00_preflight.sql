@@ -13,7 +13,12 @@ select
   has_function_privilege('authenticated', 'public.fn_create_or_get_active_round(text,uuid,integer,numeric)', 'EXECUTE') as create_round_granted;
 -- expect both true.
 
--- 3. 038 not applied yet (all NULL before `db push`; all non-NULL after).
+-- 3. 038 not applied yet. Before `db push`: begin_fn and round_results_fn
+--    are NULL and new_columns = 0. After 038 all three are non-NULL / 4 —
+--    but presence and permissions are then checked by 01_postflight.sql, not
+--    here. The lookup uses 038's exact signature (uuid, uuid, numeric); an
+--    early draft had a two-argument fn_begin_azure_evaluation(uuid, uuid)
+--    that the final 038 never creates, so its absence proves nothing.
 select to_regprocedure('public.fn_begin_azure_evaluation(uuid,uuid,numeric)') as begin_fn,
        to_regprocedure('public.fn_shadowing_round_results(uuid)') as round_results_fn,
        (select count(*) from information_schema.columns

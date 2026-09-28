@@ -1,12 +1,19 @@
 -- =====================================================
 -- 038 — Phase 4: Shadowing server-side persistence (evaluation lifecycle)
 --
--- Purely additive and compatible with the deployed Phase 3 application:
---   * no existing function, grant, policy or row is changed;
+-- Additive and compatible with the deployed Phase 3 application:
+--   * no existing row, policy or table grant is changed, and no existing
+--     function is redefined;
 --   * shadowing_attempts gains four NULLABLE columns with no default
 --     (catalog-only change; every existing row keeps NULL = "not recorded");
---   * new functions only — nothing the Phase 3 app calls is touched, so the
---     migration can (and must) be applied BEFORE the Phase 4 code deploys.
+--   * the ONLY privilege change to existing objects: EXECUTE on 035's
+--     superseded writers fn_persist_azure_result / fn_persist_word_match_result
+--     is revoked from every application role (they stay defined; no caller
+--     exists — the Phase 3 app never calls them). The Phase 3 postflight's
+--     25-row matrix is the Phase 3 baseline; after 038 its two rows for these
+--     functions intentionally read service_role = false;
+--   * nothing the Phase 3 app calls is touched, so the migration can (and
+--     must) be applied BEFORE the Phase 4 code deploys.
 --
 -- Practice credit itself is unchanged: fn_record_shadowing_attempt (037,
 -- granted to authenticated at Phase 3 activation) still inserts the
