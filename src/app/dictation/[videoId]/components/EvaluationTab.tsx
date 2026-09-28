@@ -14,7 +14,14 @@ import { WordMatchInfoPopover } from "./WordMatchInfoPopover";
 import { buildComparedTokens, formatErrorTypeLabel, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
 import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
-import type { SentenceEvaluation, ShadowingPersistenceView, TrueEvaluationResult, TrueEvaluationWord } from "../types";
+import { computeWordMatch } from "@/lib/practice/wordMatch";
+import type {
+  SentenceEvaluation,
+  ShadowingPersistenceView,
+  TrueEvaluationResult,
+  TrueEvaluationWord,
+  WordMatchResult,
+} from "../types";
 import {
   deriveEvaluationUiState,
   focusFor,
@@ -133,6 +140,7 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
         </p>
         {!stale && <MetricInfoPopover />}
       </div>
+      {result.restored && <p className="text-xs text-[var(--text-faint)]">{savedResultLabel(result.evaluatedAt)}</p>}
 
       {result.pronunciationScore !== undefined && tier && (
         <div className="flex items-baseline gap-2">
@@ -202,6 +210,10 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
         </details>
       )}
 
+      {!stale && result.restored && (result.words?.length ?? 0) === 0 && (
+        <p className="text-xs text-[var(--text-faint)]">Word-level feedback wasn&apos;t saved for this recording.</p>
+      )}
+
       {!stale && (
         <>
           <button
@@ -213,6 +225,154 @@ function PronunciationScoreCard({ result, stale }: { result: TrueEvaluationResul
           </button>
           <PronunciationReportModal open={showReport} onClose={() => setShowReport(false)} result={result} />
         </>
+      )}
+    </div>
+  );
+}
+
+/** "Saved result · 5 Jan 2026, 10:30" — the date only when known. */
+export function savedResultLabel(isoDate: string | undefined): string {
+  if (!isoDate) return "Saved result";
+  const d = new Date(isoDate);
+  if (Number.isNaN(d.getTime())) return "Saved result";
+  return `Saved result · ${d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
+/**
+ * One completed Word Match — the same card for a live take and for a result
+ * restored from the server. The word-by-word comparison is recomputed
+ * deterministically from the recognized text and `referenceText` (the
+ * sentence of the attempt's pinned revision) with the same relaxed matcher
+ * the live view and the server use; nothing else is stored or needed. A
+ * restored result whose recognized text wasn't saved shows only its saved
+ * percentage, never an invented comparison.
+ */
+export function WordMatchCard({
+  wordMatch,
+  referenceText,
+  onRetrySave,
+  earlierRecording = false,
+}: {
+  wordMatch: WordMatchResult;
+  referenceText: string;
+  onRetrySave?: () => void;
+  /** The result belongs to an earlier recording than the latest saved one. */
+  earlierRecording?: boolean;
+}) {
+  const recognizedText = wordMatch.recognizedText;
+  const check = useMemo(
+    () => (recognizedText === undefined ? null : checkAnswer(referenceText, recognizedText, "relaxed")),
+    [referenceText, recognizedText]
+  );
+  // Word Match diff detail always starts collapsed (a compact "crop → grub"
+  // line + Details toggle instead), regardless of exact/mismatched — a
+  // manual toggle always wins until a genuinely new recognized result
+  // arrives (a new recording), which resets it. Reset happens during
+  // render (React's documented pattern for "adjusting state when a prop
+  // changes") rather than in an effect.
+  const [expanded, setExpanded] = useState(false);
+  const [lastSeenRecognizedText, setLastSeenRecognizedText] = useState(recognizedText);
+  if (recognizedText !== lastSeenRecognizedText) {
+    setLastSeenRecognizedText(recognizedText);
+    setExpanded(false);
+  }
+
+  const exactMatch = check ? isExactMatch(check) : false;
+  const changes = check ? summarizeWordMatchDiff(check.diff) : [];
+  const noSpeechDetected = !!check && check.normalizedUser.length === 0;
+  const { expectedTokens, userTokens } = check
+    ? buildComparedTokens({ diff: check.diff, expectedText: check.normalizedExpected, userText: check.normalizedUser })
+    : { expectedTokens: [], userTokens: [] };
+  // A saved percentage that the current matcher no longer reproduces (the
+  // matcher changed after the result was saved) — say so rather than hide it.
+  const recomputedDiffers =
+    wordMatch.restored &&
+    recognizedText !== undefined &&
+    wordMatch.accuracy !== undefined &&
+    Math.abs(computeWordMatch(referenceText, recognizedText).accuracy - wordMatch.accuracy) >= 1;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
+          <WordMatchInfoPopover />
+        </span>
+        {!check ? (
+          <span className="text-xs font-semibold text-[var(--text-muted)]">
+            {wordMatch.accuracy !== undefined ? `${Math.round(wordMatch.accuracy)}% of words matched` : "—"}
+          </span>
+        ) : exactMatch ? (
+          <span className="flex items-center gap-1 rounded-full border border-[var(--green)]/30 bg-[var(--green)]/15 px-2 py-0.5 text-xs font-bold text-[var(--green)]">
+            <Check size={11} /> Exact match
+          </span>
+        ) : (
+          <span className="text-xs font-semibold text-[var(--text-muted)]">
+            {changes.length} difference{changes.length !== 1 ? "s" : ""}
+          </span>
+        )}
+      </div>
+
+      {wordMatch.restored && (
+        <p className="text-xs text-[var(--text-faint)]">
+          {savedResultLabel(wordMatch.evaluatedAt)}
+          {check && wordMatch.accuracy !== undefined ? ` · ${Math.round(wordMatch.accuracy)}% of words matched` : ""}
+          {earlierRecording ? " · from an earlier recording" : ""}
+        </p>
+      )}
+      {wordMatch.persisted === false && (
+        <p className="text-xs text-amber-700">
+          This Word Match isn&apos;t saved yet.{" "}
+          <button type="button" onClick={onRetrySave} className="font-semibold underline">
+            Retry
+          </button>
+        </p>
+      )}
+      {!check ? (
+        <p className="text-xs text-[var(--text-muted)]">The word-by-word comparison wasn&apos;t saved for this recording.</p>
+      ) : noSpeechDetected ? (
+        <p className="text-xs text-[var(--text-muted)]">No speech was recognized. Try recording again.</p>
+      ) : exactMatch ? null : !expanded ? (
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
+            {changes.slice(0, COMPACT_DIFF_LIMIT).map(formatChange).join(", ")}
+            {changes.length > COMPACT_DIFF_LIMIT ? `, +${changes.length - COMPACT_DIFF_LIMIT} more` : ""}
+          </p>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="flex min-h-[36px] shrink-0 items-center rounded-lg px-2 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          >
+            Details ›
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] p-2 text-xs">
+            <p className="text-xs font-semibold text-[var(--green)]">Script</p>
+            <ComparedSentenceText tokens={expectedTokens} tone="expected" />
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
+            <p className="text-xs font-semibold text-[var(--text-faint)]">What we heard</p>
+            <ComparedSentenceText tokens={userTokens} tone="user" emptyFallback="(nothing recognized)" />
+          </div>
+          <p className="text-xs text-[var(--text-faint)]">
+            Word Match — your browser&apos;s speech recognition, compared against the script. Not a pronunciation
+            score.
+          </p>
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            className="flex min-h-[36px] w-fit items-center rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          >
+            Hide
+          </button>
+        </div>
+      )}
+      {recomputedDiffers && (
+        <p className="text-xs text-[var(--text-faint)]">
+          The comparison is recomputed with the current matcher and may differ slightly from the saved percentage.
+        </p>
       )}
     </div>
   );
@@ -255,39 +415,10 @@ export function EvaluationTab({
   const trueEvaluation = entry?.trueEvaluation;
   const lastSuccessful = entry?.lastSuccessfulTrueEvaluation;
 
-  // The persisted WordMatchResult intentionally only keeps recognizedText +
-  // derived numbers (not the full diff) — the word-by-word comparison view
-  // is cheap to recompute deterministically from referenceText +
-  // recognizedText rather than persisting a redundant, larger structure.
-  const wordMatchCheck = useMemo(() => {
-    if (!entry || !wordMatch || wordMatch.status !== "completed") return null;
-    return checkAnswer(entry.referenceText, wordMatch.recognizedText ?? "", "relaxed");
-  }, [entry, wordMatch]);
-
-  const exactMatch = wordMatchCheck ? isExactMatch(wordMatchCheck) : false;
-  const wordMatchChanges = wordMatchCheck ? summarizeWordMatchDiff(wordMatchCheck.diff) : [];
-  const noSpeechDetected = wordMatchCheck && wordMatchCheck.normalizedUser.length === 0;
-
-  // Word Match diff detail always starts collapsed (a compact "crop → grub"
-  // line + Details toggle instead), regardless of exact/mismatched — a
-  // manual toggle always wins until a genuinely new recognized result
-  // arrives (a new recording), which resets it. Reset happens during
-  // render (React's documented pattern for "adjusting state when a prop
-  // changes") rather than in an effect.
-  const [wordMatchExpandedOverride, setWordMatchExpandedOverride] = useState(false);
-  const [lastSeenRecognizedText, setLastSeenRecognizedText] = useState(wordMatch?.recognizedText);
-  if (wordMatch?.recognizedText !== lastSeenRecognizedText) {
-    setLastSeenRecognizedText(wordMatch?.recognizedText);
-    setWordMatchExpandedOverride(false);
-  }
-
-  const { expectedTokens, userTokens } = wordMatchCheck
-    ? buildComparedTokens({
-        diff: wordMatchCheck.diff,
-        expectedText: wordMatchCheck.normalizedExpected,
-        userText: wordMatchCheck.normalizedUser,
-      })
-    : { expectedTokens: [], userTokens: [] };
+  // The persisted Word Match keeps recognizedText + derived numbers (not the
+  // full diff) — WordMatchCard recomputes the comparison deterministically
+  // from referenceText + recognizedText, live and restored alike.
+  const wordMatchCardKey = `${entry?.segmentIndex ?? ""}:${wordMatch?.attemptId ?? wordMatch?.clipId ?? ""}`;
 
   const evaluationUiState = deriveEvaluationUiState({
     hasClip,
@@ -303,6 +434,10 @@ export function EvaluationTab({
     !!lastSuccessful &&
     entry.latestRecording.attemptId !== lastSuccessful.attemptId &&
     entry.latestRecording.azureStatus !== "completed";
+  const wordMatchFromEarlierRecording =
+    !!savedWordMatch?.attemptId &&
+    !!entry?.latestRecording &&
+    entry.latestRecording.attemptId !== savedWordMatch.attemptId;
 
   return (
     <div className="flex flex-1 flex-col gap-3">
@@ -318,22 +453,23 @@ export function EvaluationTab({
       {!hasClip && (lastSuccessful || savedWordMatch) ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-[var(--text-muted)]">
-            Saved results for this sentence. Record a new take to practice it again.
+            Saved results for this sentence. The recording&apos;s audio isn&apos;t kept — record a new take to
+            practice it again.
           </p>
-          {savedWordMatch && (
-            <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs">
-              <span className="font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</span>
-              <span className="text-[var(--text-muted)]">
-                {savedWordMatch.accuracy !== undefined ? `${Math.round(savedWordMatch.accuracy)}% of words matched` : "—"}
-              </span>
-            </div>
+          {savedWordMatch && entry && (
+            <WordMatchCard
+              key={wordMatchCardKey}
+              wordMatch={savedWordMatch}
+              referenceText={entry.referenceText}
+              earlierRecording={wordMatchFromEarlierRecording}
+            />
           )}
           {lastSuccessful && quota.engineConfigured !== false && (
             <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
-              <PronunciationScoreCard result={lastSuccessful} stale />
+              <PronunciationScoreCard result={lastSuccessful} stale={false} />
               {latestNotEvaluated && (
                 <p className="text-xs text-[var(--text-faint)]">
-                  Score from an earlier take — your latest saved recording of this sentence hasn&apos;t been evaluated.
+                  From an earlier recording — your latest saved recording of this sentence hasn&apos;t been evaluated.
                 </p>
               )}
             </div>
@@ -413,77 +549,13 @@ export function EvaluationTab({
                 <RotateCcw size={12} /> Retry Word Match
               </button>
             </div>
-          ) : wordMatch?.status === "completed" && wordMatchCheck ? (
-            <div className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-faint)]">Word Match</p>
-                  <WordMatchInfoPopover />
-                </span>
-                {exactMatch ? (
-                  <span className="flex items-center gap-1 rounded-full border border-[var(--green)]/30 bg-[var(--green)]/15 px-2 py-0.5 text-xs font-bold text-[var(--green)]">
-                    <Check size={11} /> Exact match
-                  </span>
-                ) : (
-                  <span className="text-xs font-semibold text-[var(--text-muted)]">
-                    {wordMatchChanges.length} difference{wordMatchChanges.length !== 1 ? "s" : ""}
-                  </span>
-                )}
-              </div>
-
-              {wordMatch.persisted === false && (
-                <p className="text-xs text-amber-700">
-                  This Word Match isn&apos;t saved yet.{" "}
-                  <button type="button" onClick={persistence?.onRetrySave} className="font-semibold underline">
-                    Retry
-                  </button>
-                </p>
-              )}
-              {noSpeechDetected ? (
-                <p className="text-xs text-[var(--text-muted)]">No speech was recognized. Try recording again.</p>
-              ) : exactMatch ? null : !wordMatchExpandedOverride ? (
-                <div className="flex items-center justify-between gap-2">
-                  <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
-                    {wordMatchChanges
-                      .slice(0, COMPACT_DIFF_LIMIT)
-                      .map(formatChange)
-                      .join(", ")}
-                    {wordMatchChanges.length > COMPACT_DIFF_LIMIT
-                      ? `, +${wordMatchChanges.length - COMPACT_DIFF_LIMIT} more`
-                      : ""}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setWordMatchExpandedOverride(true)}
-                    className="flex min-h-[36px] shrink-0 items-center rounded-lg px-2 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                  >
-                    Details ›
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <div className="rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] p-2 text-xs">
-                    <p className="text-xs font-semibold text-[var(--green)]">Script</p>
-                    <ComparedSentenceText tokens={expectedTokens} tone="expected" />
-                  </div>
-                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-xs">
-                    <p className="text-xs font-semibold text-[var(--text-faint)]">What we heard</p>
-                    <ComparedSentenceText tokens={userTokens} tone="user" emptyFallback="(nothing recognized)" />
-                  </div>
-                  <p className="text-xs text-[var(--text-faint)]">
-                    Word Match — your browser&apos;s speech recognition, compared against the script. Not a
-                    pronunciation score.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setWordMatchExpandedOverride(false)}
-                    className="flex min-h-[36px] w-fit items-center rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                  >
-                    Hide
-                  </button>
-                </div>
-              )}
-            </div>
+          ) : wordMatch?.status === "completed" && entry ? (
+            <WordMatchCard
+              key={wordMatchCardKey}
+              wordMatch={wordMatch}
+              referenceText={entry.referenceText}
+              onRetrySave={persistence?.onRetrySave}
+            />
           ) : (
             <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs text-[var(--text-muted)]">
               <Loader2 size={14} className="shrink-0 animate-spin text-[var(--text-faint)]" />

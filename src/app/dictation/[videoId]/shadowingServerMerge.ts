@@ -37,16 +37,21 @@ export function azureResultFrom(dto: ShadowingAttemptDto): TrueEvaluationResult 
   };
 }
 
-function wordMatchFrom(dto: ShadowingAttemptDto): WordMatchResult {
+export function wordMatchFrom(dto: ShadowingAttemptDto): WordMatchResult {
   const w = dto.wordMatch;
   return {
     status: "completed",
-    recognizedText: w.detail?.recognizedText ?? "",
+    // Undefined (not "") when the detail wasn't saved: an empty string means
+    // "nothing was recognized", which is a different, real result. The
+    // word-by-word view is recomputed from this text and the pinned sentence.
+    recognizedText: typeof w.detail?.recognizedText === "string" ? w.detail.recognizedText : undefined,
     accuracy: num(w.accuracy),
     completeness: num(w.completeness),
     problemWords: w.detail?.problemWords ?? [],
     attemptId: dto.attemptId,
     persisted: true,
+    restored: true,
+    evaluatedAt: w.evaluatedAt ?? undefined,
   };
 }
 

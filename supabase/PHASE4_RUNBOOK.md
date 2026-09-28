@@ -7,12 +7,14 @@ removed), Vercel `PRACTICE_WRITE_PATH=authoritative`. Phase 4 never touches the
 Phase 3 cutover: nothing here pauses writes, reopens a legacy path or rolls the
 cutover back.
 
-**Current state (user-confirmed):** commit `3d38124` (Phase 4 including the
-review fixes) is on `main` and is serving Vercel Production; migration `038`
-is **not** applied. Until it is, Production runs the Phase 4 app without its
-schema — see §5 "Compatibility" for exactly what works meanwhile. Changes made
-after `3d38124` (evaluation-wait cancellation, documentation/comments) are
-local and uncommitted.
+**Current state:** migration `038` is **applied** to the user's project and
+its postflight passed (4 columns, 13 function-permission rows, 9
+definer/invoker rows, table privileges) — user-confirmed. `3d38124` (Phase 4
+with the review fixes) served Production before that; `44a7741`
+(evaluation-wait cancellation + documentation corrections) is now on
+`origin/main` — which build Production serves now is not confirmed here. The
+saved-report restoration fix (§2a) is local and uncommitted; it needs no
+migration.
 
 ## 1. What ships
 
@@ -87,8 +89,38 @@ previously called `038_fn_delete_transcript_revision.sql` is renumbered to
    to `(user, video, revision, round)`; server results win; only unsaved local
    results for known attempt ids are kept; pre-Phase-4 cache keys are never
    read and are deleted on sign-out/account switch. The original audio is not
-   available after a reload — the saved scores are shown, "record again" to
-   practice.
+   available after a reload; the saved **text report** is shown in full (§2a)
+   — no new recording is needed to review it.
+
+### 2a. What is saved, and what a reopened sentence shows
+
+| | Saved | Where | Shown after reopening |
+|---|---|---|---|
+| Practice metadata | yes | `shadowing_attempts` row (037): attempt id, round, video, pinned revision + segment, duration, validity, time | "Saved results for this sentence", attempt dates |
+| Word Match report | yes | `word_match_accuracy/completeness` + `word_match_detail` = `{recognizedText, problemWords}` (038) | the same Word Match card as live: differences summary, **Details** (Script vs What we heard, each word at its own position), "Saved result · date · N% of words matched" |
+| Pronunciation report | yes | `azure_*_score` columns (NULL = not returned) + `azure_detail` = `{recognizedText, words[]}` — every word in order with accuracy, error type, offset/duration, syllables, phonemes (+ alternatives) and prosody feedback, thinned only if > 96 KB (038) | the same score card as live: score, available metrics, Focus, Word details (each occurrence separately), Detailed report — labelled "Saved result · date" |
+| Raw Azure response | **no** (by design) | — | the Detailed report omits its "Raw Azure response" section for saved results |
+| Recording audio | **no** (by design) | page memory only | "The recording's audio isn't kept" — playback needs a new take |
+
+How it is rebuilt: `GET /api/practice/attempts?roundId=` already returns the
+full detail for the latest Word Match and the latest successful Azure
+attempt of each sentence (the five-item history is compact scores only and is
+not a report). The Word Match comparison is recomputed from the saved
+recognized text and the sentence of the round's **pinned** revision with the
+same relaxed matcher the live view and the server use; if the matcher has
+changed since, the card says the comparison may differ slightly from the
+saved percentage. Results of a round pinned to another revision than the one
+displayed are never attached to the displayed sentences ("belong to a
+different version of this script"). No Azure call, speech recognition or
+quota is involved in showing a saved report.
+
+Older or partial records are shown honestly: a Word Match saved without its
+recognized text shows its percentage and "the word-by-word comparison wasn't
+saved for this recording"; an empty recognition stays "No speech was
+recognized"; an Azure result without detail shows its scores and "Word-level
+feedback wasn't saved for this recording" — nothing is reconstructed or
+invented. A result from an earlier take than the newest saved recording is
+labelled "from an earlier recording".
 
 ## 3. Contracts and permissions (migration 038)
 
@@ -307,9 +339,13 @@ degraded but safe. Run the preflight and postflight as written.
    count as practice".
 2. DevTools offline → record → "Not saved — …" with **Retry saving**; back
    online → Retry → saved (only one row in `shadowing_attempts` for that take).
-3. Evaluate → score shown; reload → the sentence's Evaluation tab shows the
-   saved score and Word Match ("Saved results for this sentence") without a new
-   evaluation (Network: no `/api/practice/evaluate`).
+3. Evaluate → score shown; open Word Match **Details** and the Pronunciation
+   **Word details** and note them. Leave for Dashboard and reopen through
+   Continue Learning (or reload) → the sentence's Evaluation tab shows
+   "Saved results for this sentence" with the same Word Match differences and
+   **Details** view, the same score, metrics, Focus, Word details and Detailed
+   report, each labelled "Saved result · date" — without a new evaluation
+   (Network: no `/api/practice/evaluate`, no speech recognition prompt).
    Evaluate the same take from two tabs at once → one tab gets the score, the
    other shows "Evaluating…" and then the same score, via `GET` reads only
    (one Azure call; `409 evaluation_in_progress` in its Network tab).
@@ -377,7 +413,22 @@ delay, answer after abort, settled completed/failed, deadline and read-failure
 bounds, GET-only; per-wait cancellation on unmount, scope change, recording
 removal, replacement, Strict Mode; cancelled results change nothing).
 
-**Whole-repository runs:**
+**Saved-report restoration (§2a):** `shadowing-report-restore` — node 6
+(real Word Match route → stored detail → restored comparison identical,
+occurrence by occurrence; empty vs not-saved recognition; real
+`toStoredAzureResult` → restored words/scores identical incl. repeated words
+and sub-word detail, missing metric stays unavailable; recovery token restores
+exactly what the direct write does; summary-only record; newer unevaluated
+recording never takes over an earlier evaluation) and dom 12 (restored
+Details markup identical to live; saved Pronunciation card with Focus, Word
+details per occurrence and Detailed report; honest summary-only and
+earlier-recording labels; no network/speech-recognition call when opening
+saved detail; sentence switch shows that sentence's report; pinned-revision
+guard). After this fix, with `LOCALDB_ADMIN_URL`: 117 suites passed,
+4 skipped; 1289 tests passed, 113 skipped, 0 failed; tsc, lint (0 errors,
+3 pre-existing warnings) and build pass.
+
+**Whole-repository runs (before the restoration fix):**
 
 | Command | Result |
 |---|---|
@@ -395,5 +446,5 @@ runs; no test failed, and the source was not identified.
 
 **Not verified:** real Supabase HTTP (PostgREST error shapes for the new
 functions, GoTrue), real Azure responses through the new route, the Vercel
-environment, 038 on the user's project (not applied), and real browsers/iPhone
-(§7 is manual).
+environment, and real browsers/iPhone (§7 is manual). 038 on the user's
+project: applied and postflight passed (user-confirmed), not re-checked here.

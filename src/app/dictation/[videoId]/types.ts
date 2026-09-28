@@ -102,6 +102,12 @@ export interface WordMatchResult {
   clipId?: string;
   /** true once the server stored this result; false = shown but not saved. */
   persisted?: boolean;
+  /** Restored from the server rather than computed on this page. A restored
+   *  result without `recognizedText` has only its saved percentages — the
+   *  word-by-word comparison was not saved for that recording. */
+  restored?: boolean;
+  /** When the server stored it (restored results only). */
+  evaluatedAt?: string;
 }
 
 /** Phase 4 persistence state of one Shadowing result. */

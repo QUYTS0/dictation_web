@@ -4329,13 +4329,13 @@ write to create a fresh `provenance='current'` row at all** (the specific gap th
 | State | Status | Evidence |
 |---|---|---|
 | Implemented | Yes | `038_phase4_shadowing_persistence.sql`; routes `POST /api/practice/attempt`, `POST /api/practice/evaluate` (attempt-scoped), `POST /api/practice/evaluate/persist-recovery`, `PATCH /api/practice/attempt/[id]/word-match`, `GET /api/practice/attempt/[id]`, `GET /api/practice/attempts?roundId=`; `useShadowingRecordings`, scoped `useShadowingEvaluations` + `shadowingServerMerge`, EvaluationTab save states, sign-out/account-switch cache cleanup |
-| Committed | `3d38124` (review fixes) | Later local changes — evaluation-wait cancellation (`useEvaluationWaits`, abortable `waitForStoredEvaluation`) and comment/doc corrections — are uncommitted |
+| Committed | `3d38124` (review fixes), `44a7741` (evaluation-wait cancellation, doc corrections) | The saved-report restoration fix (below) is local and uncommitted |
 | Unit/mock verified | Yes | route, token, WAV-validation, client-hook (incl. polling cancellation) and auth suites (Azure always mocked); on the working tree: tsc pass, lint 0 errors / 3 pre-existing warnings, build pass |
 | Real database verified | Yes, locally | 26 Phase 4 tests on disposable PostgreSQL 17.9 from the production state (001–037 + activated cutover): lifecycle, per-attempt admission under real concurrency (another attempt / user admitted while one attempt's lock is held), audio-duration admission, full-result idempotency, revoked 035 writers, 037→038 upgrade with data, operator SQL as written; the 51 Phase 3 tests pass. Full suite with the local DB: 1271 passed, 113 skipped (Supabase-HTTP suites), 0 failed |
 | Supabase HTTP verified | No | the 4 HTTP-stack suites were skipped (no local Supabase stack) |
 | Browser / iPhone verified | No | manual checklist in the runbook §7 |
-| Applied to the user's project | **No** | user-confirmed: `038` not applied |
-| Deployed | **Yes, ahead of its schema** | user-confirmed: `3d38124` serves Vercel Production while `038` is unapplied — Evaluate/restore/Word Match storing answer `503` cleanly, saving takes works (runbook §5 "Compatibility"); the earlier `0e159a6` must not be live after `038` (it calls the two-argument begin function the corrected `038` never creates) |
+| Applied to the user's project | **Yes** | user-confirmed: `038` applied; postflight passed (4 columns, 13 function rows, 9 definer/invoker rows, table privileges) |
+| Deployed | Partly confirmed | `3d38124` served Production (user-confirmed) before `038` was applied; `44a7741` is on `origin/main`, its Production status not confirmed here; `0e159a6` must never be live with `038` (it calls the two-argument begin function the corrected `038` never creates) |
 
 Phase 3 is unaffected: `001`–`037` applied and the cutover activated and verified by the user.
 
@@ -4371,6 +4371,19 @@ Deviations from the task list above, with reasons:
   a newer wait for the same recording abort the in-flight read and the delay; a cancelled
   wait changes nothing on the page. Strict Mode cleanup cancels permanently without
   blocking later waits.
+- **Saved-report restoration** (after `44a7741`, uncommitted; no migration): the database
+  and the round read already carried the full text report (`word_match_detail`
+  `{recognizedText, problemWords}`, `azure_detail` `{recognizedText, words[]}` with per-word
+  scores, error types and sub-word detail); detail was lost only in the Evaluation tab's
+  "saved results" view, which reduced Word Match to "N% of words matched" and rendered the
+  Azure card as a compact "previous score" (no Focus, Word details or Detailed report).
+  Saved results now render through the same cards as live ones (`WordMatchCard`, the full
+  `PronunciationScoreCard`), labelled "Saved result · date" / "from an earlier recording";
+  the Word Match comparison is recomputed from the saved recognized text and the round's
+  pinned sentence. Legacy/partial records say what wasn't saved instead of inventing
+  detail; a round pinned to another revision is not attached to the displayed sentences.
+  Practice metadata and the text report are saved; audio and the raw Azure payload are
+  intentionally not (runbook §2a).
 - **Quota is an approximate personal-app limit, not a strict budget** (unchanged
   mechanism): the check only reads the Upstash counter (nothing is reserved), so
   concurrent evaluations of different recordings can pass together; usage is written

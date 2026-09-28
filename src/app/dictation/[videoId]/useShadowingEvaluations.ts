@@ -119,8 +119,14 @@ export function useShadowingEvaluations(options: ShadowingEvaluationsOptions) {
       .then((server) => {
         if (cancelled || keyRef.current !== key) return;
         // A round pinned to another revision than the one displayed would
-        // attach results to the wrong sentences — never merge it.
-        if (server.transcriptId !== transcriptId) return;
+        // attach results to the wrong sentences — never merge it, and say
+        // why the saved results aren't shown.
+        if (server.transcriptId !== transcriptId) {
+          if (server.segments.length > 0) {
+            setServerLoadError("Your saved results belong to a different version of this script, so they aren't shown here.");
+          }
+          return;
+        }
         setState((prev) => {
           if (prev.key !== key) return prev;
           const merged = mergeServerResults(prev.evaluations, server, (i) => referenceTextRef.current(i));
