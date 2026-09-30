@@ -1467,7 +1467,7 @@ with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above)
 
 **Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
 hidden button is not sufficient if a directly callable RPC can still delete):**
-`fn_delete_transcript_revision` **is created by migration `039` (renumbered from `038`, which Phase 4 used) fully specified, but with no
+`fn_delete_transcript_revision` **is created by the Script Versions migration (renumbered twice — from `038`, which Phase 4 used, then from `039`, which Phase 5 used; it takes the next free number when Phase 9 is implemented) fully specified, but with no
 `EXECUTE` grant issued to any application role at all** — `revoke execute on function
 fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
 statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
@@ -1626,7 +1626,8 @@ was originally scheduled before that table existed).
 | 036 | `036_phase2_user_rpc_privilege_corrections.sql` | 2 (post-Phase-2 repair) | Revokes the `service_role` EXECUTE that `035` left on the four user-actor functions (`fn_get_or_create_study_session`, `fn_flush_study_activity`, `fn_legacy_save_progress`, `fn_legacy_restart_round`) — `035` revoked them from `public, anon, authenticated` only, so Supabase's default per-role function grant to `service_role` survived. Exact signatures only, re-grants `authenticated`, and asserts the effective matrix with `has_function_privilege` in the same transaction (PHASE2_RUNBOOK.md §8). |
 | 037 | `037_phase3_prepare_authoritative_cutover.sql` | 3 | **Implemented (Phase 3 pass).** Preparation only under `db push`: corrected authoritative functions (dormant + refuse writes until activated), TS↔SQL grading parity (`fn_normalize_dictation_text`, `fn_classify_dictation_error`), `fn_persist_session_assessment` (explain-all, service_role), `fn_practice_write_status`, cutover state/audit tables, and owner-only stage functions `fn_phase3_restrict_direct_writes` / `fn_phase3_close_gate` / `fn_phase3_backfill` / `fn_phase3_activate` / `fn_phase3_reopen_legacy`. The RLS tightening, fence, backfill and activation run from `supabase/phase3/*.sql` per `supabase/PHASE3_RUNBOOK.md` — never as a side effect of the migration. (Previously planned file name: `037_provenance_backfill_and_completion_cutover.sql`.) |
 | 038 | `038_phase4_shadowing_persistence.sql` | 4 | **Implemented (Phase 4 pass) — not the originally planned file.** Additive only (4 nullable `shadowing_attempts` columns: `azure_evaluated_at`, `azure_detail`, `word_match_evaluated_at`, `word_match_detail`) plus the evaluation lifecycle 035 lacked: `fn_begin_azure_evaluation` (admission: seq+1, pending, server-resolved reference text), `fn_finish_azure_evaluation` (writes only for the current seq from pending), `fn_expire_azure_evaluation` (seq-exact timeout), `fn_record_word_match` (service_role), and owner reads `fn_get_shadowing_attempt` / `fn_shadowing_round_results` (SECURITY INVOKER). No Phase 3 grant/row changed. See `supabase/PHASE4_RUNBOOK.md`. |
-| 039 | `039_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038 (Phase 4 took 038); not created.** `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
+| 039 | `039_phase5_listening_activity.sql` | 5 | **Implemented (Phase 5 pass).** `fn_sync_study_activity` — the routes' single atomic entry point (replay detection by batch id first; attribution by the observed round; late data never opens/closes/re-dates a session); internal `fn_apply_study_flush` (035's flush body with per-kind interval bounds — activity = wall-clock epoch seconds, which 035 rejected — `listening` in `modes_used`, stored-checkpoint response); `fn_flush_study_activity` kept as a wrapper (same signature/grants); index on `activity_flush_log(flush_batch_id)`. No table definition, row or existing grant change |
+| next free | `NNN_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038, then from 039 (Phases 4 and 5 took them); not created; takes the next free number when implemented** (a lower number created after a higher one is applied would need `db push --include-all`). `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -2616,7 +2617,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `039_fn_delete_transcript_revision.sql` (renumbered from 038)
+### 8.16 `NNN_fn_delete_transcript_revision.sql` (renumbered from 038, then 039 — next free number when implemented)
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -4349,7 +4350,7 @@ Deviations from the task list above, with reasons:
   Phase 3 postflight's 25-row matrix is therefore the Phase 3 baseline only — after 038
   its two rows for these functions read `service_role = false`; the Phase 4 postflight
   (13 function rows, 9 definer/invoker rows) is authoritative from then on. The planned
-  `038` deletion migration is renumbered `039` (not created).
+  `038` deletion migration is renumbered (first to `039`; Phase 5 then took `039`, so it takes the next free number when implemented; not created).
 - **Review corrections, made in the not-yet-applied 038 and the route** (regression tests in
   `phase4-review-fixes` and the route/client suites):
   (a) *per-attempt admission* — `fn_begin_azure_evaluation(uuid, uuid, numeric)` locks only
@@ -4429,8 +4430,7 @@ and pinned-sentence links, comparable-only improvement), immutable versioned fin
 summaries (`shadowing_round_summaries`, one row per source watermark), and an optional,
 disabled-by-default, summary-gated compaction of non-representative `azure_detail`
 (sub-word detail only; scores/attempts/coverage/completion never touched). Stages SS1–SS5;
-SS1–SS2 need no migration; SS3+ take the next free migration number (`039` stays reserved
-for Script Versions). Independent of Phase 5 and Phase 6; no change to round completion.
+SS1–SS2 need no migration; SS3+ take the next free migration number (`039` is Phase 5's). Independent of Phase 5 and Phase 6; no change to round completion.
 
 ### Phase 5 — Listening coverage
 
@@ -4466,6 +4466,68 @@ for Script Versions). Independent of Phase 5 and Phase 6; no change to round com
   `src/__tests__/navigation-flush-in-flight.test.tsx`,
   `src/__tests__/navigation-flush-account-switch.test.tsx` covering §11.6's coordinator/observer
   split (scenarios #52, #65, #75–78).
+
+**Implementation status (Phase 5 pass) — operational procedure in `supabase/PHASE5_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes (uncommitted) | `039_phase5_listening_activity.sql`; routes `POST /api/listening/sync`, `POST /api/study-session/activity`, `GET /api/listening/progress`; `ListeningIntervalTracker`, `practiceFlushCoordinator`, `NavigationFlushObserver` (in `Providers`), `useListeningCoverage`, `useActivityPulse`, `usePracticeActivitySources`, `ListeningCoverageLine`, player BUFFERING/sample callbacks, auth flush-before-sign-out; dead `listening-session` routes removed |
+| Unit/mock verified | Yes | tracker + engagement clock 18, coordinator 15, routes 19, Listening lifecycle 11, activity hooks 11; tsc, lint (0 errors), build |
+| Real database verified | Yes, locally | 22 tests on disposable PostgreSQL 17.9 from the production state (001–038 + activated cutover): coverage math, activity bounds, isolation + grants, batch attribution (lost-response retry, retry after Restart, unsent batch after Restart, expired session, payload conflict, concurrent tabs), checkpoint semantics, operator SQL as written. Full suite with the local DB: 1396 passed, 113 skipped (Supabase-HTTP suites), 0 failed |
+| Supabase HTTP verified | No | — |
+| Browser / iPhone verified | No | runbook §8 |
+| Applied to the user's project | No | — |
+| Deployed | No | — |
+
+Deviations from the task list above, with reasons:
+- **Migration `039` was needed** (the task list expected the Phase 2 functions to suffice):
+  `fn_flush_study_activity` validated every interval against the media-time bound
+  `end ≤ 1e7`, so every real wall-clock activity pulse (~1.8e9 epoch seconds) was
+  rejected, and no route-level code could make session attribution atomic. It takes
+  `039`; the Script Versions deletion migration moves to the next free number (a lower
+  number created after a higher one is applied would need `db push --include-all`).
+- **Batch attribution is decided by the database, from facts fixed at observation time**
+  (a targeted audit of the first Phase 5 draft found that the route re-resolved "the
+  video's current round" on every request, before duplicate detection: an unsent batch
+  delivered after Restart landed in the new round's session, and a first-batch retry after
+  a Restart or session rollover escaped the `(session, batch)` dedup and double-applied
+  the additive counters). Now: the client captures user/video/revision/**round** when an
+  observation is recorded and seals an immutable payload + `flushBatchId`;
+  `fn_sync_study_activity` first looks the batch id up among the caller's own sessions
+  (a replay is answered from the session that recorded it, with no side effects), and
+  otherwise attributes by the observed round — the ordinary session rule (§5.3) while
+  that round is still current and the data is at most 30 minutes old, else **late**: the
+  most recent session of that round, without reopening it, closing another, changing its
+  round or moving its timestamps; with no such session the batch is refused
+  (`late_activity_without_session`), never rerouted. The superseded test mirrors 037's
+  `fn_attribute_study_session`. The client never names a session.
+- **Qualifying activity only** (§5.3/§6.3b): pulses come from the practice page alone, and
+  only from answer-field input, hint use, submissions, PLAYING playback ticks and running
+  recordings — not from any key/click on the page, mounting, timers, polling or fetching.
+  `PULSE_LOOKBACK_SEC` = 15 s (not fixed by the plan); engagement ends 45 s after the last
+  event; a late (suspended) timer credits only up to the last observed event; hiding the
+  tab ends engagement; one clock per page, so a mode/round change never double-credits.
+  Activity is wall-clock time and independent of playback rate; server bounds: not older
+  than 24 h, at most 10 min ahead, ≤ 900 s per interval.
+- **Checkpoint** (`last_position_sec`): persisted with each flush, last-writer-wins, moves
+  backward, independent of coverage and of the replay-inclusive `listening_observed_sec`.
+  Only a playhead sampled while PLAYING since the previous hand-over is sent, so opening
+  or leaving without playing never overwrites it (not with the default 0, not with a
+  stale position); an exact retry cannot roll it back; the response reports the stored
+  value. Batches are sent in order per tab; across tabs the checkpoint is
+  last-writer-wins by arrival (accepted for a resume convenience).
+- **Queue bound wording** (§6.3/§9.6): `MAX_PENDING_BUFFER_SEC` (300 s) bounds the unsent
+  in-memory queue, not the total loss — under a prolonged outage everything beyond the
+  newest 300 s is dropped, and a reload loses what was still unsent. `keepalive` is not a
+  delivery guarantee on tab close.
+- **`useDictationSession` was not changed**: Listening never used its autosave (the
+  `listening-session` routes had no caller), so the tracker hangs off the player's new
+  sample/state callbacks in `page.tsx` instead.
+- **Not in Phase 5** (Phase 6): resuming Listening at the saved checkpoint;
+  Dashboard/Library/History reading `listening_progress` and `activity_intervals`
+  (Dashboard still reads legacy `listening_sessions`); the account-wide cross-session
+  union of activity time; `activity_local_date` day-bucketing (the timezone is sent and
+  fingerprinted but not stored).
 
 ### Phase 6 — Dashboard, Library, History rewrite
 
@@ -4518,7 +4580,7 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `039_fn_delete_transcript_revision.sql` (renumbered from 038) — creates the function, fully specified, with
+- **Migrate:** `NNN_fn_delete_transcript_revision.sql` (next free number; renumbered from 038, then 039) — creates the function, fully specified, with
   **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
   merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),
@@ -4657,7 +4719,7 @@ none of the jsdom tests below are described as real-device verification.
   practice page mid-flush) confirmed to unmount the practice page before the flush's response
   lands, and to still invalidate Dashboard/Library/History correctly once it commits (scenario
   #65) — manual, since this repo has no browser-automation test runner (§13's note above).
-- Real Supabase project: confirm all migrations through `039` apply cleanly
+- Real Supabase project: confirm all migrations through the latest one apply cleanly
   against production, RLS actually enforced at runtime (§2.5, including the owner-SELECT-only/
   `SECURITY DEFINER`-write split on every table listed in §9.9, not only `shadowing_attempts`), and
   the §8.15 duplicate-active-round cleanup (migration `030`, run early in Phase 1) affects the

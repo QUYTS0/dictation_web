@@ -53,6 +53,12 @@ interface YouTubePlayerProps {
   /** Continuous mode only — fires whenever playback crosses into a different
    *  segment's time range, so the page can keep the active sentence in sync. */
   onActiveSegmentChange?: (segmentIndex: number) => void;
+  /** Every 200 ms while PLAYING: the media position and playback rate
+   *  (Listening coverage, activity pulses). Never called while paused or
+   *  buffering. */
+  onPlaybackSample?: (positionSec: number, playbackRate: number) => void;
+  /** PLAYING / PAUSED / BUFFERING / ENDED transitions of this instance. */
+  onPlaybackStateChange?: (state: "playing" | "paused" | "buffering" | "ended") => void;
 }
 
 declare global {
@@ -77,7 +83,10 @@ function hideNativeCaptions(player: any) {
 }
 
 const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
-  function YouTubePlayer({ videoId, segments, onSegmentEnd, onReady, continuous = false, onActiveSegmentChange }, ref) {
+  function YouTubePlayer(
+    { videoId, segments, onSegmentEnd, onReady, continuous = false, onActiveSegmentChange, onPlaybackSample, onPlaybackStateChange },
+    ref
+  ) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const playerRef = useRef<any>(null);
     const playerReadyRef = useRef<boolean>(false);
@@ -145,6 +154,13 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
       onActiveSegmentChangeRef.current = onActiveSegmentChange;
     }, [onActiveSegmentChange]);
 
+    const onPlaybackSampleRef = useRef(onPlaybackSample);
+    const onPlaybackStateChangeRef = useRef(onPlaybackStateChange);
+    useEffect(() => {
+      onPlaybackSampleRef.current = onPlaybackSample;
+      onPlaybackStateChangeRef.current = onPlaybackStateChange;
+    }, [onPlaybackSample, onPlaybackStateChange]);
+
     const startTick = useCallback((ownerInstanceId: number) => {
       if (tickRef.current) clearInterval(tickRef.current);
       tickRef.current = setInterval(() => {
@@ -159,6 +175,8 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
         if (!player) return;
         const time = player.getCurrentTime?.() ?? 0;
         setCurrentTime(time);
+        const rate = Number(player.getPlaybackRate?.() ?? playbackRateRef.current) || 1;
+        onPlaybackSampleRef.current?.(time, rate);
 
         const segs = segmentsRef.current;
         if (!segs.length) return;
@@ -282,12 +300,21 @@ const YouTubePlayer = forwardRef<YouTubePlayerHandle, YouTubePlayerProps>(
               setStatus("playing");
               isPausedRef.current = false;
               startTick(myInstanceId);
+              onPlaybackStateChangeRef.current?.("playing");
             } else if (event.data === window.YT.PlayerState.PAUSED) {
               setStatus("paused");
               stopTick();
+              onPlaybackStateChangeRef.current?.("paused");
+            } else if (event.data === window.YT.PlayerState.BUFFERING) {
+              // Stalled: the playhead isn't advancing, so nothing is sampled
+              // (no coverage/activity credit) until PLAYING resumes. The
+              // store's status stays as it was — the UI keeps its controls.
+              stopTick();
+              onPlaybackStateChangeRef.current?.("buffering");
             } else if (event.data === window.YT.PlayerState.ENDED) {
               setStatus("ended");
               stopTick();
+              onPlaybackStateChangeRef.current?.("ended");
             }
           },
         },

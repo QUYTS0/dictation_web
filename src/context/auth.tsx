@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import AuthModal from "@/components/AuthModal";
 import { clearShadowingCache } from "@/app/dictation/[videoId]/shadowingEvaluationPersistence";
+import { practiceFlushCoordinator } from "@/lib/practiceFlushCoordinator";
 
 // ---- Context shape ----
 
@@ -73,7 +74,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  // Buffered Listening/activity data is only ever sent for the account that
+  // produced it; switching accounts drops the other account's unsent data.
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (!loading) practiceFlushCoordinator.setAuthUser(userId);
+  }, [userId, loading]);
+
   const signOut = useCallback(async () => {
+    // Send what this account buffered while its session is still valid
+    // (bounded wait); anything left afterwards is dropped with the account.
+    await practiceFlushCoordinator.flushWithin("signout", 2500);
+    practiceFlushCoordinator.setAuthUser(null);
     const supabase = createClient();
     await supabase.auth.signOut();
     setUser(null);

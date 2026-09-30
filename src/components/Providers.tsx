@@ -1,8 +1,10 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AuthProvider } from "@/context/auth";
+import { NavigationFlushObserver } from "@/components/NavigationFlushObserver";
+import { practiceFlushCoordinator } from "@/lib/practiceFlushCoordinator";
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -17,9 +19,18 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       })
   );
 
+  // The flush coordinator lives as long as the app, like this QueryClient.
+  useEffect(() => {
+    practiceFlushCoordinator.setQueryClient(queryClient);
+    return () => practiceFlushCoordinator.setQueryClient(null);
+  }, [queryClient]);
+
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>{children}</AuthProvider>
+      <AuthProvider>
+        <NavigationFlushObserver />
+        {children}
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

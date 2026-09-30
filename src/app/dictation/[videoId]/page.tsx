@@ -81,6 +81,10 @@ import type { RightPanelTab, ShadowingPersistenceView } from "./types";
 import { computeWordMatch } from "@/lib/practice/wordMatch";
 import { applyStoredEvaluationWait, useEvaluationWaits } from "./useEvaluationWaits";
 import { azureResultFrom } from "./shadowingServerMerge";
+import { useListeningCoverage } from "./useListeningCoverage";
+import { useActivityPulse } from "./useActivityPulse";
+import { usePracticeActivitySources } from "./usePracticeActivitySources";
+import { ListeningCoverageLine } from "./components/ListeningCoverageLine";
 
 // ---- Page component ----
 
@@ -221,6 +225,39 @@ export default function DictationPage({ params }: PageProps) {
   // EvaluationTab) so the sessionStorage-backed map survives switching
   // right-panel tabs, switching sentences, and a same-tab refresh.
   const transcriptId = segments[0]?.transcript_id ?? null;
+
+  // Phase 5: Listening coverage (Listening mode, signed in) and activity
+  // pulses (any mode). Both hand their observations to the app-level flush
+  // coordinator, which outlives this page, tagged with the round the page
+  // is on NOW (so a later Restart can't move them into the new round).
+  const listeningCoverage = useListeningCoverage({
+    enabled: inputMode === "listening",
+    userId: user?.id,
+    videoId,
+    transcriptId,
+    roundId: currentRoundId,
+  });
+  const { noteInteraction } = useActivityPulse({ userId: user?.id, videoId, roundId: currentRoundId });
+  const { onPlaybackSample: onListeningSample } = listeningCoverage;
+  // Qualifying activity (plan §5.3/§6.3b) — and nothing else on this page:
+  //  1. PLAYING playback ticks (Listening, and sentence playback in
+  //     Dictation/Shadowing); never while paused or buffering.
+  const handlePlaybackSample = useCallback(
+    (positionSec: number, rate: number) => {
+      onListeningSample(positionSec, rate);
+      noteInteraction();
+    },
+    [onListeningSample, noteInteraction]
+  );
+  //  2–4. Answer input, hint use and running recordings.
+  usePracticeActivitySources({
+    noteInteraction,
+    answerInputRef: workspaceInputRef,
+    showHintPanel,
+    hintLevel,
+    isRecording: recorder.status === "recording",
+  });
+  //  5. Submissions — see handleWorkspaceCheck below.
   const referenceTextFor = useCallback((segmentIndex: number) => segments[segmentIndex]?.text ?? "", [segments]);
   const {
     scopeKey: evaluationScopeKey,
@@ -719,8 +756,9 @@ export default function DictationPage({ params }: PageProps) {
   const handleWorkspaceCheck = useCallback(() => {
     const trimmed = workspaceInputValue.trim();
     if (!trimmed) return;
+    noteInteraction();
     void handleAnswerSubmit(trimmed);
-  }, [handleAnswerSubmit, workspaceInputValue]);
+  }, [handleAnswerSubmit, workspaceInputValue, noteInteraction]);
 
   // Listening Mode's Play/Pause control — toggles the actual player state
   // directly (no seeking), so pausing always preserves the current timestamp.
@@ -917,6 +955,8 @@ export default function DictationPage({ params }: PageProps) {
           onReady={handlePlayerReady}
           continuous={inputMode === "listening"}
           onActiveSegmentChange={handleActiveSegmentChange}
+          onPlaybackSample={handlePlaybackSample}
+          onPlaybackStateChange={listeningCoverage.onPlaybackStateChange}
         />
       </div>
     </div>
@@ -1246,6 +1286,9 @@ export default function DictationPage({ params }: PageProps) {
             latestScore={latestScore}
             onTriggerEvaluation={handleTriggerTrueEvaluation}
             onOpenEvaluationDetails={handleOpenEvaluationDetails}
+            listeningStatus={
+              <ListeningCoverageLine signedIn={!!user} hasTranscript={!!transcriptId} progress={listeningCoverage.progress} />
+            }
           />
           </div>
 

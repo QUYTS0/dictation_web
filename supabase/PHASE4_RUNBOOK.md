@@ -31,7 +31,7 @@ migration.
 
 Numbering: `038` is Phase 4. The Script Versions deletion migration the plan
 previously called `038_fn_delete_transcript_revision.sql` is renumbered to
-**`039` and is not created**.
+**`039` and is not created**. (Phase 5 later took `039`; that migration now takes the next free number when implemented.)
 
 ## 2. Flow
 

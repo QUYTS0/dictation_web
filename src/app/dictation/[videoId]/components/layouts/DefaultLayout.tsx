@@ -83,6 +83,7 @@ export function DefaultLayout({
   latestScore,
   onTriggerEvaluation,
   onOpenEvaluationDetails,
+  listeningStatus,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -149,6 +150,8 @@ export function DefaultLayout({
   latestScore?: number | null;
   onTriggerEvaluation?: () => void;
   onOpenEvaluationDetails?: () => void;
+  /** Listening mode only: the coverage line shown above the control bar. */
+  listeningStatus?: ReactNode;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -364,6 +367,8 @@ export function DefaultLayout({
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {inputMode === "listening" && listeningStatus}
 
             <ControlBar
               currentSegIdx={currentSegIdx}

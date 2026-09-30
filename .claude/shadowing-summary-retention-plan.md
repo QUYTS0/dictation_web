@@ -20,7 +20,7 @@ evaluation contracts).
 | "N/M evaluated" fix (saved Azure only; denominator `requiredSentenceCount`) | committed `695448c`, **not pushed** | git |
 | Production build | not verified here | — |
 | Browser/iPhone verification of both fixes | not done | — |
-| Next migration number | `039` is **reserved** for Script Versions (`039_fn_delete_transcript_revision.sql`, not created). New migrations here take the next free number at implementation time; no number is pre-claimed | main plan §8 table |
+| Next migration number | `039` is Phase 5's (`039_phase5_listening_activity.sql`); the Script Versions deletion migration (not created) takes a later number. New migrations here take the next free number at implementation time; no number is pre-claimed | main plan §8 table |
 
 This track ("SS") is independent of Phase 5 (Listening) and Phase 6
 (Dashboard/Library). Neither needs the other; §11 lists the only contact
@@ -461,7 +461,7 @@ Existing saved sentence feedback stays exactly as now until retention is enabled
 |---|---|---|---|
 | **SS1** | `shadowingSummary` pure module v2: rules §6 (occurrence identity, comparable improvement, omissions/rhythm, representative-by-`created_at` on the client), contract types; reuse in the existing panel | none | current `main` |
 | **SS2** | UI §5/§10.1–2 on live data; Shadowing coverage label; "Save" hidden until SS3 | none | SS1 |
-| **SS3** | table + `fn_save_shadowing_summary` + watermark fn + POST/GET route + completed view; new version of `fn_shadowing_round_results` adding `position` to history words (`WITH ORDINALITY`) | next free number (not `039`) | SS1–SS2 |
+| **SS3** | table + `fn_save_shadowing_summary` + watermark fn + POST/GET route + completed view; new version of `fn_shadowing_round_results` adding `position` to history words (`WITH ORDINALITY`) | next free number | SS1–SS2 |
 | **SS4** | measurement SQL (§9) as `supabase/shadowing-summary/00_measure.sql`, compaction markers + dry-run function (no writes possible: dry run only granted) | next free number | SS3 |
 | **SS5** | compaction function (write), `fn_finish` compacted rule, policy row (disabled), operator script; enable only after reviewing SS4 numbers | next free number | SS4 + decision |
 

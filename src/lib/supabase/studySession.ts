@@ -1,79 +1,61 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { StudyFlushResult } from "@/lib/practice/listeningTypes";
 
 /**
- * Thin typed wrappers around the two study-session RPCs granted to
- * `authenticated` in Phase 2 (fn_get_or_create_study_session,
- * fn_flush_study_activity — migration 035). Not called from any route or
- * component yet — Phase 2 only adds the functions and this wrapper; the
- * player/practice hooks are not wired to them until a later phase.
- *
- * Callers must pass the cookie-based (RLS-respecting) client from
- * `createClient()` — these RPCs derive the actor from `auth.uid()` inside
- * the function body.
+ * Server side of Phase 5's Listening sync and activity pulses (plan §6.3,
+ * §6.3b, §9.6). One RPC — fn_sync_study_activity (039) — does everything in
+ * one transaction with the caller's own identity (`auth.uid()`), so callers
+ * must pass the cookie-based client from `createClient()`:
+ *   1. a batch id this user already recorded is answered from the session
+ *      it was recorded under (no side effects) — a retry can never reach
+ *      another session;
+ *   2. otherwise the batch is attributed by the round it was OBSERVED under
+ *      (`roundId`, captured by the client at observation time and
+ *      relationship-checked in SQL): the ordinary session rule while that
+ *      round is still current and the data is fresh, else the round's last
+ *      session, untouched ("late"), or a refusal when there is none.
+ * The route never resolves a round or a session itself.
  */
 
-export interface GetOrCreateStudySessionResult {
-  studySessionId: string;
-  roundId: string | null;
-  created: boolean;
-}
-
-export async function getOrCreateStudySession(
-  supabase: SupabaseClient,
-  youtubeVideoId: string,
-  roundId?: string | null
-): Promise<GetOrCreateStudySessionResult> {
-  const { data, error } = await supabase.rpc("fn_get_or_create_study_session", {
-    p_youtube_video_id: youtubeVideoId,
-    p_round_id: roundId ?? null,
-  });
-  if (error || !data) {
-    throw new Error(error?.message ?? "fn_get_or_create_study_session returned no data");
+export class StudyActivityError extends Error {
+  constructor(message: string, public code?: string) {
+    super(message);
   }
-  return data as GetOrCreateStudySessionResult;
 }
 
 export type FlushActivityKind = "listening" | "activity";
 
-export interface FlushStudyActivityInput {
+export interface SyncStudyActivityInput {
   kind: FlushActivityKind;
-  studySessionId: string;
-  /** Client-generated; reused verbatim across network retries of the same buffered batch, regenerated only for genuinely new data. */
-  flushBatchId: string;
   youtubeVideoId: string;
-  intervals?: Array<{ start: number; end: number }>;
-  /** Listening kind only. */
+  flushBatchId: string;
+  /** The round the observations were made under (null = none). */
+  roundId: string | null;
+  intervals: Array<{ start: number; end: number }>;
+  /** Listening only. */
   transcriptId?: string | null;
-  /** Listening kind only — the current playhead, for resume convenience (never feeds coverage). */
+  /** Listening only — resume convenience, never feeds coverage. */
   currentPositionSec?: number | null;
   clientTimezone?: string | null;
+  /** Seconds since the newest observation in the batch (client-measured). */
+  observedAgeSec?: number | null;
 }
 
-export interface FlushStudyActivityResult {
-  processed: boolean;
-  coverageRatio?: number;
-  listenedThrough?: boolean;
-  coveredSec?: number;
-  lastPositionSec?: number;
-  hasHistory?: boolean;
-}
-
-export async function flushStudyActivity(
-  supabase: SupabaseClient,
-  input: FlushStudyActivityInput
-): Promise<FlushStudyActivityResult> {
-  const { data, error } = await supabase.rpc("fn_flush_study_activity", {
+export async function syncStudyActivity(supabase: SupabaseClient, input: SyncStudyActivityInput): Promise<StudyFlushResult> {
+  const { data, error } = await supabase.rpc("fn_sync_study_activity", {
     p_kind: input.kind,
-    p_study_session_id: input.studySessionId,
     p_flush_batch_id: input.flushBatchId,
     p_youtube_video_id: input.youtubeVideoId,
-    p_intervals: input.intervals ?? [],
+    p_round_id: input.roundId,
+    p_intervals: input.intervals,
     p_transcript_id: input.transcriptId ?? null,
     p_current_position_sec: input.currentPositionSec ?? null,
     p_client_timezone: input.clientTimezone ?? null,
+    p_observed_age_sec: input.observedAgeSec ?? null,
   });
   if (error || !data) {
-    throw new Error(error?.message ?? "fn_flush_study_activity returned no data");
+    const e = error as { message?: string; code?: string } | null;
+    throw new StudyActivityError(e?.message || "Couldn't save activity.", e?.code);
   }
-  return data as FlushStudyActivityResult;
+  return data as StudyFlushResult;
 }
