@@ -127,15 +127,18 @@ export async function checkAnswerApi(params: CheckAnswerParams): Promise<CheckAn
   return res.json();
 }
 
+/**
+ * Saves the round checkpoint (sentence + playhead); creates the round on
+ * first touch. Only position and identity are sent: completion, accuracy
+ * and attempt counts are owned by the database (Phase 3), so the client
+ * makes no claim about them (Phase 8).
+ */
 export async function saveProgress(
   videoId: string,
   segmentIndex: number,
   videoCurrentTimeSec: number,
-  accuracy: number,
-  totalAttempts: number,
   sessionId?: string,
-  transcriptId?: string,
-  status: "active" | "completed" | "abandoned" = "active"
+  transcriptId?: string
 ): Promise<{ sessionId: string }> {
   const res = await fetch("/api/session/save-progress", {
     method: "POST",
@@ -146,9 +149,6 @@ export async function saveProgress(
       transcriptId,
       currentSegmentIndex: segmentIndex,
       videoCurrentTimeSec,
-      accuracy,
-      totalAttempts,
-      status,
     }),
   });
   if (!res.ok) throw await toPracticeWriteError(res, "Failed to save progress");

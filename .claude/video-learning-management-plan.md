@@ -4691,7 +4691,43 @@ numbers and every cross-reference to them elsewhere in this document (§5.7, §6
 - **Delete:** any remaining references to the pre-cutover client-trusted `status` write path.
 - **Optional, not required for v1:** physical rename of `learning_sessions` → `practice_rounds`
   (§4) — mechanical, touches every file listed in §2.1/§2.2, zero behavior change, purely a
-  later-readability cleanup.
+  later-readability cleanup. **Not done** (deliberately out of scope for the retirement pass).
+
+**Implementation status (Phase 8 pass) — operational notes in `supabase/PHASE8_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes (uncommitted) | App-only; **no migration** |
+| Unit / route / client verified | Yes (mocked network) | save-progress, restart and dictation/check route tests (a leftover `PRACTICE_WRITE_PATH=legacy` is ignored; old-tab `status: "completed"` completes nothing; a current client body saves its checkpoint); client `saveProgress` body test; `phase8-retirement.test.ts` source guard; player resume, practice-page hooks and the integrated practice page re-run |
+| Real database verified | Yes, locally | All 13 local-DB integration suites (129 tests): Phase 3 completion / resume / Restart / idempotency and the cutover rehearsal (bridges dropped and unreachable), Phase 4 Shadowing, Phase 5 Listening attribution, Phase 6 reports, legacy labels, streaks and removal markers |
+| Supabase HTTP / browser / iPhone | No | runbook §5 |
+| Deployed | No | — |
+
+Removed (runtime):
+- the `PRACTICE_WRITE_PATH` switch (`src/lib/practice/writePath.ts`);
+- the legacy branches of `save-progress`, `session/restart` and `dictation/check`, which called the
+  dropped `fn_legacy_*` bridges — with `legacy` still configured, they made every save fail
+  (PGRST202);
+- `legacyBridgeErrors.ts` and `ownsSession` (used only by that branch);
+- the client's completion claim — checkpoint saves no longer send
+  `status`/`accuracy`/`totalAttempts`, and `selectAccuracy` was removed;
+- the unused `listening_sessions` request/response types.
+
+Already retired by earlier phases:
+- the bridges themselves (Phase 3 activation);
+- direct table writes (Phase 3);
+- server-side trust of client `status` (Phase 3);
+- the old Listening session routes (Phase 5).
+
+Retained on purpose:
+- applied migrations, including `035`'s bridge definitions;
+- the Phase 3 operator, rehearsal and recovery scripts and their tests (the configuration steps are
+  marked historical in `PHASE3_RUNBOOK.md`);
+- the `app_write_gate` protections;
+- the `legacy_writes_retired` → 503 mapping;
+- the deprecated, ignored request fields (old tabs keep working);
+- provenance and legacy labels;
+- the `learning_sessions` name.
 
 ### Phase 9 — Script Versions
 

@@ -72,6 +72,12 @@ No other writer of `learning_sessions` / `attempt_logs` exists in `src/`
 
 ## 3. Two application releases (one codebase)
 
+> **Historical (retired in Phase 8 — see `PHASE8_RUNBOOK.md`).** This section and steps 1 and 5
+> below describe how the original cutover was rolled out. The current codebase no longer reads
+> `PRACTICE_WRITE_PATH` and has no legacy branch: it always uses the authoritative functions. To
+> rehearse this sequence, check out a pre-Phase-8 revision of the app; the database rehearsal
+> tests (`src/__tests__/integration/phase3-*`) still cover the SQL side.
+
 `PRACTICE_WRITE_PATH` fixes the write path **per deployment** — it is never
 switched at runtime and never used as a fallback after a failure:
 

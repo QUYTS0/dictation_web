@@ -627,6 +627,6 @@ describe("Phase 6 — Listening resumes from its own checkpoint", () => {
   it("Shadowing keeps the round's sentence checkpoint (and still creates a round on first entry)", async () => {
     apiMock.fetchResumeSession.mockResolvedValue({ session: null });
     renderHarness({ videoId: "vid1", user: userA, mode: "shadowing" });
-    await waitFor(() => expect(apiMock.saveProgress).toHaveBeenCalledWith("vid1", 0, 0, expect.anything(), expect.anything(), undefined, "rev-A", "active"));
+    await waitFor(() => expect(apiMock.saveProgress).toHaveBeenCalledWith("vid1", 0, 0, undefined, "rev-A"));
   });
 });

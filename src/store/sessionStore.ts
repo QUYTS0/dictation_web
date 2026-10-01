@@ -75,9 +75,3 @@ export const useSessionStore = create<SessionState>()(
     }
   )
 );
-
-/** Accuracy as a percentage (0–100). */
-export function selectAccuracy(state: SessionState): number {
-  if (state.totalAttempts === 0) return 0;
-  return Math.round((state.correctCount / state.totalAttempts) * 100);
-}

@@ -3,10 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import type { YouTubePlayerHandle } from "@/components/YouTubePlayer";
 import { usePlayerStore } from "@/store/playerStore";
-import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
+import { useSessionStore } from "@/store/sessionStore";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
-import { dashboardKeys } from "@/lib/queries/dashboard";
-import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
 import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState, RoundProgress } from "@/lib/types";
 import { CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
@@ -571,7 +569,7 @@ export function useDictationSession({
   }, []);
 
   const triggerAutoSave = useCallback(
-    (segmentIndex: number, status: "active" | "completed" | "abandoned" = "active", timeSecOverride?: number) => {
+    (segmentIndex: number, timeSecOverride?: number) => {
       if (!user) return;
       // Identity (pinned revision) hasn't resolved yet — never send a save
       // built from default/initialization values before we actually know
@@ -592,35 +590,16 @@ export function useDictationSession({
       // listeners below, re-register on every tick). Navigation saves pass
       // the target sentence's start explicitly, since the player hasn't
       // moved there yet at the moment they're issued.
-      void saveProgress(
-        videoId,
-        segmentIndex,
-        timeSecOverride ?? getPersistablePositionSec(),
-        selectAccuracy(state),
-        state.totalAttempts,
-        state.sessionId ?? undefined,
-        transcriptId,
-        status
-      )
+      void saveProgress(videoId, segmentIndex, timeSecOverride ?? getPersistablePositionSec(), state.sessionId ?? undefined, transcriptId)
         .then((r) => {
           if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
           // Every confirmed save changes what Continue Learning / Library
           // show (resume point, last activity). Invalidation only marks the
           // cached views stale: they refetch right away only if mounted,
           // otherwise on their next mount — no requests while practicing.
+          // (Mistakes and error patterns are invalidated by each recorded
+          // answer, not by checkpoint saves.)
           if (user) invalidateLearningViews(queryClient, user.id);
-          if (status === "completed" && user) {
-            // Dashboard/History cache the persisted data this write just
-            // changed (completedVideos/avgAccuracy/resumableSessions, error
-            // patterns, and mistakes are all derived from learning_sessions
-            // + the attempt_logs rows this session accumulated) — mark them
-            // stale so returning to either page picks up this session
-            // instead of showing pre-completion numbers for up to
-            // staleTime (the summary itself is invalidated above on every
-            // confirmed save).
-            void queryClient.invalidateQueries({ queryKey: dashboardKeys.errorPatterns(user.id) });
-            void queryClient.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(user.id) });
-          }
         })
         .catch((err: unknown) => {
           // Only forget the round when the server says it doesn't exist for
@@ -752,7 +731,7 @@ export function useDictationSession({
           setHintLevel(0);
 
           const nextIdx = currentSegIdx + 1;
-          triggerAutoSave(nextIdx, "active", sentenceStartSec(nextIdx));
+          triggerAutoSave(nextIdx, sentenceStartSec(nextIdx));
           scheduleTimeout(() => {
             setCheckResult(null);
             if (nextIdx < segments.length) {
@@ -763,11 +742,10 @@ export function useDictationSession({
             } else {
               // End of the video reached. Whether the ROUND is complete is
               // the server's decision (coverage of every eligible sentence,
-              // Phase 3) — see roundState; the "completed" status sent here
-              // only matters to a preparation-release (legacy) server and is
-              // ignored by the authoritative one.
+              // Phase 3) — see roundState. The checkpoint save makes no
+              // completion claim.
               setUxState("session_completed");
-              triggerAutoSave(nextIdx, "completed");
+              triggerAutoSave(nextIdx);
             }
           }, CORRECT_RESULT_VISIBILITY_DELAY_MS);
         } else {
@@ -820,7 +798,7 @@ export function useDictationSession({
   const handleStart = useCallback(() => {
     firstAttemptBySegmentRef.current = {};
     markUserAction(0);
-    triggerAutoSave(0, "active", sentenceStartSec(0));
+    triggerAutoSave(0, sentenceStartSec(0));
     setUxState("playing");
     ytPlayerRef.current?.playSegment(0);
   }, [triggerAutoSave, markUserAction, sentenceStartSec]);
@@ -853,7 +831,7 @@ export function useDictationSession({
       setWrongAttempts(0);
       setHintLevel(0);
       setUxState("playing");
-      triggerAutoSave(nextIdx, "active", sentenceStartSec(nextIdx));
+      triggerAutoSave(nextIdx, sentenceStartSec(nextIdx));
     }
   }, [currentSegIdx, segments.length, triggerAutoSave, markUserAction, sentenceStartSec]);
 
@@ -869,7 +847,7 @@ export function useDictationSession({
       setWrongAttempts(0);
       setHintLevel(0);
       setUxState("playing");
-      triggerAutoSave(prevIdx, "active", sentenceStartSec(prevIdx));
+      triggerAutoSave(prevIdx, sentenceStartSec(prevIdx));
     }
   }, [currentSegIdx, triggerAutoSave, markUserAction, sentenceStartSec]);
 
@@ -1175,7 +1153,7 @@ export function useDictationSession({
       // Never write initialization defaults over a checkpoint this visit
       // hasn't established yet (see passiveSaveAllowedRef).
       if (!passiveSaveAllowedRef.current) return;
-      triggerAutoSave(currentSegIdxRef.current, "active");
+      triggerAutoSave(currentSegIdxRef.current);
     };
     const onVisibilityChange = () => {
       if (document.visibilityState !== "hidden") return;
@@ -1318,7 +1296,7 @@ export function useDictationSession({
       // checkpoint — if the resume check failed, one may exist and writing
       // sentence 1 / 0:00 would overwrite it. (Listening never creates one:
       // triggerAutoSave is a no-op there.)
-      if (!resumeCheckFailedRef.current) triggerAutoSave(0, "active", 0);
+      if (!resumeCheckFailedRef.current) triggerAutoSave(0, 0);
       setUxState("paused_waiting_input");
     }
   }, [autoEnterPaused, uxState, segments, resumeChecked, resumeState, sessionStore, triggerAutoSave, armResumeTarget]);
@@ -1337,7 +1315,7 @@ export function useDictationSession({
     if (!passiveSaveAllowedRef.current || resumeCheckFailedRef.current) return;
     if (!["paused_waiting_input", "playing"].includes(uxStateRef.current)) return;
     const idx = currentSegIdxRef.current;
-    triggerAutoSave(idx, "active", sentenceStartSec(idx));
+    triggerAutoSave(idx, sentenceStartSec(idx));
   }, [inputMode, user, triggerAutoSave, sentenceStartSec]);
 
   // ---- Jump directly to an arbitrary segment (e.g. from a bookmark deep link) ----
@@ -1352,7 +1330,7 @@ export function useDictationSession({
       setHintLevel(0);
       setUxState("playing");
       ytPlayerRef.current?.playSegment(segIdx);
-      triggerAutoSave(segIdx, "active", sentenceStartSec(segIdx));
+      triggerAutoSave(segIdx, sentenceStartSec(segIdx));
     },
     [segments.length, triggerAutoSave, markUserAction, sentenceStartSec]
   );

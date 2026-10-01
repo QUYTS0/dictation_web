@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Maps errors from the practice write RPCs — Phase 2 bridges and Phase 3
- * authoritative functions alike — to HTTP responses. Every RAISE in those
+ * Maps errors from the practice write RPCs (the Phase 3 authoritative
+ * functions) to HTTP responses. Every RAISE in those
  * functions uses a plain, stable message (SQLSTATE P0001), surfaced by
  * PostgREST as `error.message`.
  *
@@ -45,6 +45,9 @@ const CONFLICTS: Record<string, string> = {
 /** Synchronous mapping of the stable message codes. Returns null if unmatched. */
 export function mapPracticeWriteMessage(error: PracticeRpcError | null | undefined): NextResponse | null {
   const message = error?.message ?? "";
+  // legacy_writes_retired is raised only by the legacy write-gate check the
+  // dropped fn_legacy_* bridges used; kept so any such refusal still reads
+  // as a retryable pause, never a 500.
   if (message === "write_gate_paused" || message === "legacy_writes_retired") return maintenanceResponse();
   if (message === "write_gate_missing") {
     console.error("[practiceWrite] write_gate_missing — app_write_gate row absent");
@@ -91,7 +94,7 @@ export async function mapPracticeWriteError(
 
   if (error?.code === "PGRST202" || error?.code === "42883") {
     console.error(
-      "[practiceWrite] write function missing — is PRACTICE_WRITE_PATH set to the path this database supports?",
+      "[practiceWrite] write function missing — are migrations 037–040 applied to this database?",
       error
     );
     return NextResponse.json({ error: fallback }, { status: 500 });

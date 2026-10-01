@@ -24,6 +24,9 @@ beforeEach(() => {
   getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
   delete process.env.PRACTICE_WRITE_PATH;
 });
+afterAll(() => {
+  delete process.env.PRACTICE_WRITE_PATH;
+});
 
 describe("POST /api/session/restart — authoritative (default)", () => {
   it("requires videoId and authentication before any RPC", async () => {
@@ -59,22 +62,12 @@ describe("POST /api/session/restart — authoritative (default)", () => {
   });
 });
 
-describe("POST /api/session/restart — legacy (preparation release)", () => {
-  beforeEach(() => {
+describe("POST /api/session/restart — Phase 8 retirement", () => {
+  it("a leftover PRACTICE_WRITE_PATH=legacy is ignored: fn_restart_round creates the next round, never a retired bridge", async () => {
     process.env.PRACTICE_WRITE_PATH = "legacy";
-  });
-
-  it("calls fn_legacy_restart_round exactly as in Phase 2", async () => {
-    rpcMock.mockResolvedValue({ data: { status: "ok" }, error: null });
+    rpcMock.mockResolvedValue({ data: { roundId: "new-round", transcriptId: "rev-A", created: true, roundNumber: 2 }, error: null });
     const res = await POST(makeRequest({ videoId: "vid1", sessionId: "sess-1" }));
-    expect(rpcMock).toHaveBeenCalledWith("fn_legacy_restart_round", { p_youtube_video_id: "vid1", p_session_id: "sess-1" });
-    expect(await res.json()).toEqual({ status: "ok" });
-  });
-
-  it("maps a paused gate to a retryable 503", async () => {
-    rpcMock.mockResolvedValue({ data: null, error: { message: "write_gate_paused" } });
-    const res = await POST(makeRequest({ videoId: "vid4" }));
-    expect(res.status).toBe(503);
-    expect(res.headers.get("Retry-After")).toBeTruthy();
+    expect(rpcMock.mock.calls.map(([fn]) => fn)).toEqual(["fn_restart_round"]);
+    expect(await res.json()).toMatchObject({ status: "ok", sessionId: "new-round", created: true });
   });
 });

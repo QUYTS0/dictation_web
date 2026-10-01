@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 
-// Route-level behavior of /api/dictation/check in both deployment modes
-// (src/lib/practice/writePath.ts). Database behavior itself (grading
+// Route-level behavior of /api/dictation/check (authoritative writes only
+// since Phase 8 — the legacy branch was removed). Database behavior (grading
 // parity, idempotency, completion) is verified on real PostgreSQL in
 // src/__tests__/integration/phase3-*.integration.test.ts — these tests
 // cover the route's own contract: which client/RPC it uses, what it sends,
@@ -9,13 +9,11 @@ import { NextRequest } from "next/server";
 const userRpc = jest.fn();
 const serviceRpc = jest.fn();
 const getUser = jest.fn();
-const ownsSession = jest.fn();
 
 jest.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ auth: { getUser }, rpc: userRpc }),
   createServiceClient: () => ({ rpc: serviceRpc }),
 }));
-jest.mock("@/lib/supabase/ownership", () => ({ ownsSession: (...a: unknown[]) => ownsSession(...a) }));
 
 import { POST } from "@/app/api/dictation/check/route";
 
@@ -54,7 +52,6 @@ beforeEach(() => {
   getUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
   userRpc.mockResolvedValue({ data: RECORDED, error: null });
   serviceRpc.mockResolvedValue({ data: { attemptId: "x" }, error: null });
-  ownsSession.mockResolvedValue(true);
 });
 
 describe("unrecorded checks (guest / no round)", () => {
@@ -221,35 +218,23 @@ describe("authoritative path (default)", () => {
   });
 });
 
-describe("legacy path (preparation release: PRACTICE_WRITE_PATH=legacy)", () => {
-  beforeEach(() => {
+describe("Phase 8 retirement", () => {
+  afterEach(() => {
+    delete process.env.PRACTICE_WRITE_PATH;
+  });
+
+  it("a leftover PRACTICE_WRITE_PATH=legacy is ignored: answers go to fn_record_dictation_attempt with the caller's client, never a bridge", async () => {
     process.env.PRACTICE_WRITE_PATH = "legacy";
+    const json = await (await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "hello", expectedText: "Hello.", clientAttemptId: ATTEMPT_ID }))).json();
+    expect(userRpc.mock.calls.map(([fn]) => fn)).toEqual(["fn_record_dictation_attempt"]);
+    expect(serviceRpc).not.toHaveBeenCalled();
+    expect(json).toMatchObject({ recorded: true, attemptId: "att-1" });
   });
 
-  it("records through the Phase 2 bridge after verifying ownership with the caller's client", async () => {
-    const json = await (await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "hello", expectedText: "Hello." }))).json();
-    expect(ownsSession).toHaveBeenCalled();
-    expect(serviceRpc).toHaveBeenCalledWith("fn_legacy_record_dictation_attempt", expect.objectContaining({ p_session_id: "r1", p_is_correct: true }));
-    expect(json).toMatchObject({ isCorrect: true, recorded: true });
-    expect(userRpc).not.toHaveBeenCalled();
-  });
-
-  it("a paused gate is a retryable 503, not a success that silently wasn't saved", async () => {
-    serviceRpc.mockResolvedValueOnce({ data: null, error: { message: "write_gate_paused" } });
-    const res = await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "hello", expectedText: "Hello." }));
+  it("a legacy-gate refusal (legacy_writes_retired) is retryable maintenance, not a silent unsaved success", async () => {
+    userRpc.mockResolvedValueOnce({ data: null, error: { message: "legacy_writes_retired" } });
+    const res = await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "a" }));
     expect(res.status).toBe(503);
     expect((await res.json()).retryable).toBe(true);
-  });
-
-  it("a bridge refused by the retirement flag is also maintenance (503)", async () => {
-    serviceRpc.mockResolvedValueOnce({ data: null, error: { message: "legacy_writes_retired" } });
-    expect((await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "a", expectedText: "a" }))).status).toBe(503);
-  });
-
-  it("an unowned session is graded but not recorded", async () => {
-    ownsSession.mockResolvedValueOnce(false);
-    const json = await (await POST(req({ sessionId: "r1", segmentIndex: 0, userText: "a", expectedText: "a" }))).json();
-    expect(json.recorded).toBe(false);
-    expect(serviceRpc).not.toHaveBeenCalled();
   });
 });

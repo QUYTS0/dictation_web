@@ -320,7 +320,8 @@ other users' data are kept.
    - It is idempotent, and it briefly blocks concurrent app membership writes while it runs.
 6. **Postflight again**, then the §8 checklist.
 
-No environment variable changes. `PRACTICE_WRITE_PATH` must be unset or `authoritative` (Phase 3).
+No environment variable changes. `PRACTICE_WRITE_PATH` must be unset or `authoritative` for the
+Phase 6 build. Since Phase 8 the app ignores this variable entirely (`PHASE8_RUNBOOK.md`).
 
 ## 8. Manual desktop / iPhone checklist
 

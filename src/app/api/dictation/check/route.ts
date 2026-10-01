@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { checkAnswer, wordDiff } from "@/lib/utils/text";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { ownsSession } from "@/lib/supabase/ownership";
-import { mapLegacyBridgeError } from "@/lib/supabase/legacyBridgeErrors";
+import { createClient } from "@/lib/supabase/server";
 import { mapPracticeWriteError } from "@/lib/supabase/practiceWriteErrors";
-import { getPracticeWritePath } from "@/lib/practice/writePath";
 import type { CheckAnswerRequest, CheckAnswerResponse, ErrorType, MatchMode, RoundProgress } from "@/lib/types";
 
 const VALID_MODES: MatchMode[] = ["exact", "relaxed", "learning"];
@@ -31,19 +28,18 @@ interface RecordResult {
  * records it.
  *
  * Recorded answers (a round `sessionId` + a signed-in caller):
- *   authoritative — fn_record_dictation_attempt, called with the caller's
- *     OWN client: the function verifies the round belongs to the caller
- *     (and video), checks the transcript pin, resolves the reference text
- *     from the pinned segment, and grades it itself (parity with
- *     src/lib/utils/text.ts is verified on real PostgreSQL). The client's
- *     expectedText is ignored. One `clientAttemptId` per logical submission
- *     makes retries idempotent; requests from old tabs without one get a
- *     server-generated id (such requests cannot be deduplicated across
- *     retries — documented limitation).
- *   legacy (preparation release) — the Phase 2 bridge.
- * In BOTH paths a failed save is an error response (503 + retryable while
- * maintenance pauses writes) — never a successful grade that silently
- * wasn't saved, so the client keeps the answer and does not advance.
+ * fn_record_dictation_attempt, called with the caller's OWN client: the
+ * function verifies the round belongs to the caller (and video), checks the
+ * transcript pin, resolves the reference text from the pinned segment, and
+ * grades it itself (parity with src/lib/utils/text.ts is verified on real
+ * PostgreSQL). The client's expectedText is ignored. One `clientAttemptId`
+ * per logical submission makes retries idempotent; requests from old tabs
+ * without one get a server-generated id (such requests cannot be
+ * deduplicated across retries — documented limitation). A failed save is
+ * an error response (503 + retryable while maintenance pauses writes) —
+ * never a successful grade that silently wasn't saved, so the client keeps
+ * the answer and does not advance. (Phase 8 removed the pre-cutover
+ * fn_legacy_record_dictation_attempt branch.)
  *
  * Unrecorded answers (guest, or no round yet) are graded with the same
  * TypeScript logic against the client's expectedText and marked
@@ -80,31 +76,6 @@ export async function POST(request: NextRequest) {
       }
       const result = checkAnswer(expectedText, userText, mode);
       return NextResponse.json<CheckAnswerResponse>({ ...result, sessionId, recorded: false });
-    }
-
-    if (getPracticeWritePath() === "legacy") {
-      if (typeof expectedText !== "string") {
-        return NextResponse.json({ error: "expectedText is required." }, { status: 400 });
-      }
-      const result = checkAnswer(expectedText, userText, mode);
-      const owned = await ownsSession(authClient, user.id, sessionId);
-      if (!owned) {
-        console.warn(`[dictation/check] not recorded — sessionId=${sessionId} not owned by caller`);
-        return NextResponse.json<CheckAnswerResponse>({ ...result, sessionId, recorded: false });
-      }
-      const serviceClient = createServiceClient();
-      const { error } = await serviceClient.rpc("fn_legacy_record_dictation_attempt", {
-        p_session_id: sessionId,
-        p_segment_index: segmentIndex,
-        p_expected_text: expectedText,
-        p_user_text: userText,
-        p_normalized_expected_text: result.normalizedExpected,
-        p_normalized_user_text: result.normalizedUser,
-        p_is_correct: result.isCorrect,
-        p_error_type: result.errorType === "none" ? null : result.errorType,
-      });
-      if (error) return mapLegacyBridgeError(error, "Failed to save your answer");
-      return NextResponse.json<CheckAnswerResponse>({ ...result, sessionId, recorded: true });
     }
 
     const idempotency = clientAttemptId ? "client" : "server_generated";

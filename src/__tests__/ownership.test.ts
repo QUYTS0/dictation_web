@@ -1,13 +1,11 @@
 /**
  * Focused tests for src/lib/supabase/ownership.ts, added alongside
  * ownsStudySession (Phase 1 — see .claude/video-learning-management-plan.md
- * §8/§12). No prior test file covered ownsSession/ownsAttempt at all; this
- * file adds the four required ownsStudySession cases plus matching
- * coverage for the two pre-existing helpers so a future change to any of
- * the three is caught the same way.
+ * §8/§12), plus ownsAttempt. (ownsSession served only the pre-cutover
+ * Dictation write path and was removed with it in Phase 8.)
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ownsSession, ownsAttempt, ownsStudySession } from "@/lib/supabase/ownership";
+import { ownsAttempt, ownsStudySession } from "@/lib/supabase/ownership";
 
 type QueryResult = { data: unknown; error: unknown };
 
@@ -56,19 +54,6 @@ describe("ownsStudySession", () => {
   it("returns false (not a throw) when the database request fails", async () => {
     const { client } = makeClient({ data: null, error: { message: "connection reset" } });
     await expect(ownsStudySession(client, "user-1", "study-1")).resolves.toBe(false);
-  });
-});
-
-describe("ownsSession (existing behavior, unchanged)", () => {
-  it("returns true for the owner, false for a non-owner/missing row, and false (not a throw) on a DB error", async () => {
-    const owned = makeClient({ data: { id: "sess-1" }, error: null });
-    await expect(ownsSession(owned.client, "user-1", "sess-1")).resolves.toBe(true);
-
-    const notOwned = makeClient({ data: null, error: null });
-    await expect(ownsSession(notOwned.client, "user-2", "sess-1")).resolves.toBe(false);
-
-    const failed = makeClient({ data: null, error: { message: "timeout" } });
-    await expect(ownsSession(failed.client, "user-1", "sess-1")).resolves.toBe(false);
   });
 });
 

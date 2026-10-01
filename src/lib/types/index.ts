@@ -298,8 +298,12 @@ export interface SaveProgressRequest {
   transcriptId?: string;
   currentSegmentIndex: number;
   videoCurrentTimeSec?: number;
-  accuracy: number;
-  totalAttempts: number;
+  /** @deprecated Sent only by pre-Phase-8 tabs; accepted and ignored. */
+  accuracy?: number;
+  /** @deprecated Sent only by pre-Phase-8 tabs; accepted and ignored. */
+  totalAttempts?: number;
+  /** @deprecated Sent only by pre-Phase-8 tabs; accepted and ignored —
+   *  "completed" never completes a round (completion is server-owned). */
   status?: "active" | "completed" | "abandoned";
 }
 
@@ -342,32 +346,6 @@ export interface ResumeSessionResponse {
     latestDictationResults?: Array<{ segmentIndex: number; isCorrect: boolean }>;
     /** Phase 6: the round's server-side progress (null if unavailable). */
     progress?: RoundProgress | null;
-  } | null;
-}
-
-// ---- Listening mode session tracking (listening_sessions table) ----
-// Separate from the dictation save-progress/resume shapes above since
-// listening has no grading/attempts concept — just a watch position.
-
-export interface SaveListeningProgressRequest {
-  sessionId?: string;
-  youtubeVideoId: string;
-  transcriptId?: string;
-  videoCurrentTimeSec: number;
-  status?: "active" | "completed" | "abandoned";
-}
-
-export interface SaveListeningProgressResponse {
-  sessionId: string;
-  status: string;
-}
-
-export interface ResumeListeningSessionResponse {
-  session: {
-    sessionId: string;
-    videoCurrentTimeSec: number;
-    updatedAt: string;
-    status: "active" | "completed" | "abandoned";
   } | null;
 }
 
