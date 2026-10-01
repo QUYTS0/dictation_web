@@ -73,6 +73,30 @@ describe("PracticeFlushCoordinator", () => {
     expect(qc.getQueryData(KEY_A)).toMatchObject({ coverageRatio: 0.5, coveredSec: 10 });
   });
 
+  it("a sealed activity batch keeps the timezone captured when it was sealed — a later browser zone only affects new batches", async () => {
+    const { fetchMock, coordinator, clock } = setup();
+    let zone = "Asia/Ho_Chi_Minh";
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+    jest.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...real.call(this), timeZone: zone };
+    });
+    fetchMock.mockRejectedValueOnce(new TypeError("offline")).mockResolvedValue(ok());
+    const act = { ...A, transcriptId: null };
+    coordinator.record("activity", act, [{ start: 1_000, end: 1_030 }]);
+    await coordinator.requestFlush("periodic"); // fails after sealing
+    zone = "America/New_York"; // the device moved / the zone changed after midnight
+    clock.advance(3_600_000);
+    await coordinator.requestFlush("periodic"); // the retry
+    coordinator.record("activity", act, [{ start: 4_700, end: 4_730 }]);
+    await coordinator.requestFlush("periodic");
+    const bodies = fetchMock.mock.calls.map(bodyOf);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(Array(3).fill("/api/study-session/activity"));
+    expect(bodies.map((b) => b.clientTimezone)).toEqual(["Asia/Ho_Chi_Minh", "Asia/Ho_Chi_Minh", "America/New_York"]);
+    expect(bodies[1].flushBatchId).toBe(bodies[0].flushBatchId);
+    expect(bodies[1].intervals).toEqual(bodies[0].intervals);
+    expect(bodies[2].flushBatchId).not.toBe(bodies[0].flushBatchId);
+  });
+
   it("observations that arrive while a batch is in flight never alter it — they become the next batch", async () => {
     const { fetchMock, coordinator } = setup();
     let resolve!: (r: Response) => void;
@@ -220,7 +244,37 @@ describe("PracticeFlushCoordinator", () => {
     await coordinator.requestFlush("periodic");
     coordinator.record("listening", A, [{ start: 28, end: 29 }], 29);
     await coordinator.requestFlush("periodic");
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    const dashboardCalls = invalidate.mock.calls.filter(([arg]) => JSON.stringify(arg?.queryKey) === '["dashboard-summary","user-a"]');
+    expect(dashboardCalls).toHaveLength(1);
+  });
+
+  it("Phase 6: partial Listening progress marks the Library stale (not the Dashboard); an unchanged response marks nothing", async () => {
+    const { fetchMock, coordinator, invalidate } = setup();
+    fetchMock.mockResolvedValue(listeningOk({ coverageRatio: 0.25, listenedThrough: false, coveredSec: 10, lastPositionSec: 10 }));
+    coordinator.record("listening", A, [{ start: 0, end: 10 }], 10);
+    await coordinator.requestFlush("periodic");
+    const keys = () => invalidate.mock.calls.map(([arg]) => JSON.stringify(arg?.queryKey));
+    expect(keys()).toEqual(['["video-library","user-a"]']);
+    coordinator.record("listening", A, [{ start: 0, end: 10 }], 10); // a replay: same coverage, same checkpoint
+    await coordinator.requestFlush("periodic");
+    expect(keys()).toEqual(['["video-library","user-a"]']);
+  });
+
+  it("Phase 6: a navigation flush invalidates Dashboard, Library and History — only after the write succeeded, only for its own user", async () => {
+    const { fetchMock, coordinator, invalidate } = setup();
+    let answer!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (answer = r)));
+    coordinator.record("activity", A, [{ start: 100, end: 120 }]);
+    const done = coordinator.requestFlush("navigation");
+    await Promise.resolve();
+    expect(invalidate).not.toHaveBeenCalled();
+    answer(ok());
+    await done;
+    expect(invalidate.mock.calls.map(([arg]) => JSON.stringify(arg?.queryKey)).sort()).toEqual([
+      '["dashboard-summary","user-a"]',
+      '["history-sessions","user-a"]',
+      '["video-library","user-a"]',
+    ]);
   });
 
   it("the unsent queue keeps at most MAX_PENDING_BUFFER_SEC (300 s) of listening: under sustained failure the oldest is dropped", async () => {

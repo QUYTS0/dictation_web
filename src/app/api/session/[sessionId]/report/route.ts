@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { mapLearningReadError } from "@/lib/supabase/learningReadErrors";
 import type { ErrorType, SessionAssessment, SessionReportMistake, SessionReportResponse } from "@/lib/types";
+import type { RoundReport } from "@/lib/types/learning";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -39,10 +41,14 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    // The whole-round report (fn_round_report, migration 040): every metric
+    // across ALL study sessions of this round and its pinned revision — the
+    // same contract the practice page's completion view uses.
     const [
       { data: video, error: videoError },
       { count: totalSegments, error: segmentsError },
       { data: attempts, error: attemptsError },
+      { data: roundReport, error: roundReportError },
     ] = await Promise.all([
       supabase
         .from("videos")
@@ -61,7 +67,10 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         .eq("session_id", sessionId)
         .order("segment_index", { ascending: true })
         .order("created_at", { ascending: true }),
+      supabase.rpc("fn_round_report", { p_round_id: sessionId }),
     ]);
+
+    if (roundReportError || !roundReport) return mapLearningReadError(roundReportError, "session/report");
 
     if (videoError) {
       console.error("[session/report] video query error:", videoError);
@@ -186,6 +195,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       },
       errorBreakdown,
       mistakes,
+      round: roundReport as RoundReport,
     };
 
     return NextResponse.json(response);

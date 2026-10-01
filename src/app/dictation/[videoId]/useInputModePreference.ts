@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { InputMode } from "./types";
 
@@ -28,11 +28,17 @@ function parseInputMode(value: string | null): InputMode {
 /**
  * Which central-input-area component the practice page shows: the dictation
  * typing box, the read-only Listening Mode transcript, or the Shadowing
- * recorder UI. The `?mode=` URL query param is the source of truth — set by
- * the dashboard, a resumable session link, or a direct URL — so refreshes
- * and shared links always agree on the mode. A per-video localStorage
- * fallback recalls the last mode used for links (typed URLs, old bookmarks)
- * that omit the param.
+ * recorder UI.
+ *
+ * Precedence (Phase 6), highest first:
+ *   1. an explicit `?mode=` in the URL (a link or navigation that asks for a
+ *      mode) — always wins for that load;
+ *   2. the server's saved last mode for this video (the last EXPLICIT mode
+ *      switch on any device) — applied via applyServerMode when the resume
+ *      check answers, unless the user already switched on this page;
+ *   3. this browser's per-video localStorage fallback (applied at once, so
+ *      the page doesn't wait for the server; replaced by 2 when it arrives);
+ *   4. Dictation.
  */
 export function useInputModePreference(videoId: string) {
   const router = useRouter();
@@ -40,6 +46,13 @@ export function useInputModePreference(videoId: string) {
   const modeParam = searchParams.get("mode");
 
   const [inputMode, setInputModeState] = useState<InputMode>(parseInputMode(modeParam));
+  // Set once the user switches modes on this page — a later server answer
+  // must not override their own choice.
+  const switchedThisVisitRef = useRef(false);
+  const modeParamRef = useRef(modeParam);
+  useEffect(() => {
+    modeParamRef.current = modeParam;
+  }, [modeParam]);
 
   useEffect(() => {
     if (modeParam) {
@@ -56,6 +69,7 @@ export function useInputModePreference(videoId: string) {
       }
       return;
     }
+    switchedThisVisitRef.current = false;
     setInputModeState("dictation");
     if (typeof window === "undefined") return;
     try {
@@ -72,6 +86,7 @@ export function useInputModePreference(videoId: string) {
 
   const setInputMode = useCallback(
     (mode: InputMode) => {
+      switchedThisVisitRef.current = true;
       setInputModeState(mode);
       try {
         window.localStorage.setItem(storageKey(videoId), mode);
@@ -87,5 +102,19 @@ export function useInputModePreference(videoId: string) {
     [router, videoId]
   );
 
-  return { inputMode, setInputMode };
+  /** Precedence step 2 (see above): the server's saved last mode. */
+  const applyServerMode = useCallback(
+    (mode: InputMode) => {
+      if (modeParamRef.current || switchedThisVisitRef.current) return;
+      setInputModeState(mode);
+      try {
+        window.localStorage.setItem(storageKey(videoId), mode);
+      } catch {
+        // ignore
+      }
+    },
+    [videoId]
+  );
+
+  return { inputMode, setInputMode, applyServerMode };
 }

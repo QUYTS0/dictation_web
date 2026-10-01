@@ -4,15 +4,7 @@ import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
-import {
-  Calendar,
-  CheckCircle2,
-  ChevronRight,
-  Clock,
-  History as ClockIcon,
-  PlayCircle,
-} from "lucide-react";
-import { motion } from "motion/react";
+import { Calendar, Clock, FileText, Headphones, History as ClockIcon, PlayCircle } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
@@ -20,19 +12,89 @@ import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { usePersistedViewState } from "@/hooks/usePersistedViewState";
 import { useDashboardSummaryQuery } from "@/lib/queries/dashboard";
 import { useHistoryMistakesQuery } from "@/lib/queries/historyMistakes";
-import type { ResumableSession } from "@/lib/types";
+import { useHistorySessionsQuery } from "@/lib/queries/historySessions";
+import type { HistorySession } from "@/lib/types/learning";
 import { ERROR_TYPE_OPTIONS, errorTypeLabel } from "@/lib/constants/errorTypes";
-import { formatMinutesAsHm, formatDurationSeconds } from "@/lib/utils/time";
-import { resumableSessionHref } from "@/lib/utils/sessions";
-import { formatAnswerAccuracy, formatResumePoint, formatRoundStatus, pluralize, recordModeBadgeLabel } from "@/lib/utils/sessionLabels";
+import { formatDurationSeconds } from "@/lib/utils/time";
+import { pluralize } from "@/lib/utils/sessionLabels";
 
-// Only rendered when the record's mode is actually known — see
-// recordModeBadgeLabel for why learning_sessions rows get no badge.
-function ModeBadge({ mode }: { mode: ResumableSession["mode"] }) {
-  const label = recordModeBadgeLabel(mode);
-  if (!label) return null;
+const MODE_LABEL: Record<string, string> = { dictation: "Dictation", listening: "Listening", shadowing: "Shadowing" };
+
+/** One study session (one sitting): what was practiced, never blended into one score. */
+function SessionCard({ item }: { item: HistorySession }) {
+  const practiced = item.dictationSentences + item.shadowingSentences > 0;
   return (
-    <span className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-semibold text-purple-600">{label}</span>
+    <article
+      data-testid={`history-session-${item.studySessionId}`}
+      className="rounded-3xl border border-white/60 bg-white/40 p-4 shadow-lg backdrop-blur-xl sm:p-5"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row">
+        <Link
+          href={`/dictation/${item.videoId}`}
+          className="relative w-full shrink-0 overflow-hidden rounded-2xl bg-slate-800 shadow-md sm:w-44"
+          aria-label={`Open ${item.title ?? item.videoId}`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`https://img.youtube.com/vi/${item.videoId}/hqdefault.jpg`}
+            alt=""
+            className="aspect-[16/9] h-full w-full object-cover opacity-80"
+            loading="lazy"
+          />
+          <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <PlayCircle className="fill-white/20 text-white" size={22} />
+          </span>
+        </Link>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <h3 className="font-bold leading-tight text-slate-900">{item.title ?? `Video ${item.videoId}`}</h3>
+            {item.roundId && (
+              <Link href={`/results/${item.roundId}`} className="flex items-center gap-1 text-xs font-semibold text-primary-600 hover:underline">
+                <FileText size={13} /> Round {item.roundNumber ?? ""} report
+              </Link>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold">
+            {item.modesUsed.map((m) => (
+              <span key={m} className="rounded-full bg-purple-50 px-2 py-0.5 text-purple-600">
+                {MODE_LABEL[m] ?? m}
+              </span>
+            ))}
+            {!item.roundId && <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700">No practice round</span>}
+            {item.roundStatus === "completed" && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-600">Round completed</span>}
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+            <span className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1">
+              <Calendar size={13} className="text-slate-400" />
+              {new Date(item.startedAt).toLocaleString()}
+            </span>
+            <span className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1" title="Engaged time, estimated from your activity">
+              <Clock size={13} className="text-slate-400" />
+              Est. active {item.activeSec > 0 ? formatDurationSeconds(item.activeSec) : "—"}
+            </span>
+            <span className="rounded-lg border border-white/40 bg-white/50 px-2 py-1 font-medium text-slate-500" title="First to last activity — not practice time">
+              Session span {formatDurationSeconds(item.elapsedSpanSec)}
+            </span>
+          </div>
+          {practiced && (
+            <p className="text-xs text-slate-600" data-testid="history-sentences">
+              {pluralize(item.uniqueSentences, "sentence")} practiced (Dictation {item.dictationSentences} · Shadowing{" "}
+              {item.shadowingSentences}
+              {item.overlapSentences > 0 ? ` · ${item.overlapSentences} in both` : ""}) · {item.newlyCoveredInRound} new to the round
+              {item.dictationLatest.practiced > 0 &&
+                ` · ${item.dictationLatest.correct}/${item.dictationLatest.practiced} correct on the latest answer this session`}
+            </p>
+          )}
+          {item.listeningObservedSec > 0 && (
+            <p className="flex items-center gap-1 text-xs text-sky-700">
+              <Headphones size={12} />
+              Listened to {formatDurationSeconds(item.listeningObservedSec)} of video (replays included) ·{" "}
+              {formatDurationSeconds(item.listeningNewlyCoveredSec)} newly covered
+            </p>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -44,12 +106,9 @@ function HistoryPageContent() {
   const userId = user?.id;
   const pathname = usePathname();
 
-  // Shared with the Dashboard page — same query key, same cache entry, so
-  // this no longer issues an independent duplicate request for data
-  // Dashboard likely already fetched.
+  // Shared with the Dashboard page — same query key, same cache entry.
   const summaryQuery = useDashboardSummaryQuery(userId);
   const dashboardData = summaryQuery.data;
-  const dashboardError = summaryQuery.isError ? "Failed to load history data. Please refresh and try again." : null;
 
   const [filters, updateFilters, viewStateHydrated] = usePersistedViewState("history-viewstate", userId, {
     videoId: "",
@@ -57,36 +116,33 @@ function HistoryPageContent() {
     dateFrom: "",
     dateTo: "",
   });
+  const [sessionView, updateSessionView, sessionViewHydrated] = usePersistedViewState("history-sessions-viewstate", userId, {
+    sessionVideo: "",
+  });
+
+  const sessionsQuery = useHistorySessionsQuery(userId, { videoId: sessionView.sessionVideo });
+  const sessions = useMemo(() => sessionsQuery.data?.pages.flatMap((page) => page.items) ?? [], [sessionsQuery.data]);
+  const unattributed = sessionsQuery.data?.pages[0]?.unattributed ?? null;
+  const sessionsError = sessionsQuery.isError ? "Failed to load your study sessions." : null;
 
   const mistakesQuery = useHistoryMistakesQuery(userId, filters);
   const mistakes = useMemo(() => mistakesQuery.data?.pages.flatMap((page) => page.items) ?? [], [mistakesQuery.data]);
   const mistakesTotal = mistakesQuery.data?.pages[0]?.total ?? 0;
 
-  // `filters` feeds directly into the query key, so a sessionStorage-
-  // restored filter set (arriving one render after the default filters'
-  // initial render) swaps the mistakes query to a different cache entry.
-  // `keepPreviousData` means `isLoading` alone can stay false while it's
-  // still showing the *previous* (default-filter) page as a placeholder —
-  // `isPlaceholderData` is what actually distinguishes "showing the final,
-  // correctly-filtered list" from that transient state, so scroll
-  // restoration must wait for it too, on top of view-state hydration.
-  const viewStateApplied = viewStateHydrated && !mistakesQuery.isPlaceholderData;
-  useScrollRestoration(pathname, userId, viewStateApplied && !summaryQuery.isLoading && !mistakesQuery.isLoading);
-
-  const historyItems = useMemo(() => dashboardData?.resumableSessions ?? [], [dashboardData]);
+  // Scroll restoration waits until both persisted views are applied and their
+  // (non-placeholder) first pages are on screen.
+  const viewStateApplied =
+    viewStateHydrated && sessionViewHydrated && !mistakesQuery.isPlaceholderData && !sessionsQuery.isPlaceholderData;
+  useScrollRestoration(pathname, userId, viewStateApplied && !sessionsQuery.isLoading && !mistakesQuery.isLoading);
 
   const videoOptions = useMemo(() => {
     const map = new Map<string, string>();
-    for (const item of historyItems) {
-      map.set(item.videoId, item.videoTitle ?? item.videoId);
-    }
+    for (const item of sessions) map.set(item.videoId, item.title ?? item.videoId);
     for (const item of mistakes) {
-      if (!map.has(item.videoId)) {
-        map.set(item.videoId, item.videoTitle ?? item.videoId);
-      }
+      if (!map.has(item.videoId)) map.set(item.videoId, item.videoTitle ?? item.videoId);
     }
     return [...map.entries()];
-  }, [historyItems, mistakes]);
+  }, [sessions, mistakes]);
 
   return (
     <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
@@ -116,157 +172,93 @@ function HistoryPageContent() {
                 Sign in
               </button>
             </section>
-          ) : summaryQuery.isLoading ? (
-            <p className="text-sm text-slate-500">Loading history…</p>
-          ) : dashboardError && !dashboardData ? (
-            <p className="text-sm text-red-600">{dashboardError}</p>
-          ) : !dashboardData ? (
-            <p className="text-sm text-slate-500">Loading history…</p>
           ) : (
             <>
-              {dashboardError && (
-                <p className="flex items-center gap-2 text-xs text-amber-600">
-                  Couldn&apos;t refresh — showing the last loaded data.
-                  <button
-                    type="button"
-                    onClick={() => summaryQuery.refetch()}
-                    className="font-semibold underline hover:text-amber-700"
-                  >
-                    Retry
-                  </button>
-                </p>
-              )}
               <section className="flex flex-col items-start justify-between gap-6 border-b border-white/40 pb-6 md:flex-row md:items-end">
                 <div>
                   <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">Practice History</h1>
-                  <p className="text-sm text-slate-500">Track your dictation sessions and progress.</p>
+                  <p className="text-sm text-slate-500">Every study session, across Dictation, Listening and Shadowing.</p>
                 </div>
                 <div className="flex w-full gap-4 md:w-auto">
                   <div className="flex flex-1 items-center gap-3 rounded-2xl border border-white/60 bg-white/50 p-3 px-5 shadow-sm backdrop-blur-md md:flex-initial">
                     <ClockIcon className="text-primary-500" size={20} />
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Total Time</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Est. active time</p>
                       <p className="text-lg font-black leading-none text-slate-800">
-                        {formatMinutesAsHm(dashboardData.totalPracticeMinutes)}
+                        {dashboardData && dashboardData.activeTime.activeSec > 0 ? formatDurationSeconds(dashboardData.activeTime.activeSec) : "—"}
                       </p>
                     </div>
                   </div>
                   <div className="flex flex-1 items-center gap-3 rounded-2xl border border-white/60 bg-white/50 p-3 px-5 shadow-sm backdrop-blur-md md:flex-initial">
                     <PlayCircle className="text-emerald-500" size={20} />
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Videos</p>
-                      <p className="text-lg font-black leading-none text-slate-800">{dashboardData.completedVideos}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Completed videos</p>
+                      <p className="text-lg font-black leading-none text-slate-800">{dashboardData ? dashboardData.completedVideos : "—"}</p>
                     </div>
                   </div>
                 </div>
               </section>
 
-              <section className="flex flex-col gap-4">
-                {historyItems.length === 0 ? (
+              <section className="flex flex-col gap-4" aria-labelledby="sessions-heading">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h2 id="sessions-heading" className="text-xl font-semibold tracking-tight text-slate-900">
+                    Study sessions
+                  </h2>
+                  <select
+                    value={sessionView.sessionVideo}
+                    onChange={(e) => updateSessionView({ sessionVideo: e.target.value })}
+                    className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
+                    aria-label="Filter sessions by video"
+                  >
+                    <option value="">All videos</option>
+                    {videoOptions.map(([id, title]) => (
+                      <option key={id} value={id}>
+                        {title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {sessionsError && !sessionsQuery.data ? (
+                  <p className="text-sm text-red-600">
+                    {sessionsError}{" "}
+                    <button type="button" onClick={() => sessionsQuery.refetch()} className="font-semibold underline hover:text-red-700">
+                      Retry
+                    </button>
+                  </p>
+                ) : !sessionsQuery.data ? (
+                  <p className="text-sm text-slate-500">Loading history…</p>
+                ) : sessions.length === 0 ? (
                   <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-lg backdrop-blur-xl">
-                    No recent sessions yet.
+                    No study sessions yet.
                   </div>
                 ) : (
-                  historyItems.map((item, idx) => (
-                    <motion.div
-                      key={item.sessionId}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: idx * 0.1 }}
-                      className="group relative rounded-3xl border border-white/60 bg-white/40 p-4 shadow-lg transition-all hover:-translate-y-1 backdrop-blur-xl sm:p-5"
-                    >
-                      <Link
-                        href={resumableSessionHref(item)}
-                        className="flex cursor-pointer flex-col gap-5 sm:flex-row"
-                      >
-                        <div className="relative w-full shrink-0 overflow-hidden rounded-2xl bg-slate-800 shadow-md sm:w-56">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={`https://img.youtube.com/vi/${item.videoId}/hqdefault.jpg`}
-                            alt={item.videoTitle ?? `Thumbnail for ${item.videoId}`}
-                            className="aspect-[16/9] h-full w-full object-cover opacity-80 transition-opacity group-hover:opacity-100"
-                            loading="lazy"
-                          />
-                          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/30 bg-white/20 shadow-lg backdrop-blur-md transition-transform group-hover:scale-110">
-                              <PlayCircle className="fill-white/20 text-white" size={20} />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-1 flex-col justify-between py-1">
-                          <div>
-                            <div className="mb-1 flex items-start justify-between gap-4">
-                              <h3 className="text-lg font-bold leading-tight text-slate-900 transition-colors group-hover:text-primary-600">
-                                {item.videoTitle ?? `Video ${item.videoId}`}
-                              </h3>
-                              <span className="shrink-0 text-primary-600 opacity-0 transition-opacity group-hover:opacity-100">
-                                <ChevronRight size={20} />
-                              </span>
-                            </div>
-                            <div className="mb-3 flex items-center gap-2">
-                              <ModeBadge mode={item.mode} />
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                  item.status === "completed"
-                                    ? "bg-emerald-50 text-emerald-600"
-                                    : "bg-primary-50 text-primary-600"
-                                }`}
-                              >
-                                {formatRoundStatus(item)}
-                              </span>
-                              {item.mode === "dictation" && (
-                                <p className="text-sm font-medium text-slate-500">
-                                  {(item.mistakesCount ?? 0) > 0
-                                    ? `${pluralize(item.mistakesCount ?? 0, "mistake")} to review`
-                                    : "No mistakes logged"}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          {item.mode === "dictation" ? (
-                            <div>
-                              <div className="mb-4 flex flex-wrap gap-4">
-                                <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
-                                  <Calendar size={14} className="text-slate-400" />
-                                  {new Date(item.updatedAt).toLocaleString()}
-                                </div>
-                                <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
-                                  <Clock size={14} className="text-slate-400" />
-                                  {pluralize(item.totalAttempts ?? 0, "attempt")}
-                                </div>
-                                {formatAnswerAccuracy(item.accuracy, item.totalAttempts) && (
-                                  <div className="flex items-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
-                                    <CheckCircle2 size={14} className="text-emerald-500" />
-                                    {formatAnswerAccuracy(item.accuracy, item.totalAttempts)}
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* No progress bar: the old one was drawn from answer
-                                  accuracy, not from how much of the video was practiced.
-                                  Real coverage arrives with the scheduled cutover. */}
-                              <p className="text-xs font-bold text-slate-500">
-                                {formatResumePoint(item.currentSegmentIndex)}
-                              </p>
-                            </div>
-                          ) : (
-                            <div className="flex flex-wrap gap-4">
-                              <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
-                                <Calendar size={14} className="text-slate-400" />
-                                {new Date(item.updatedAt).toLocaleString()}
-                              </div>
-                              <div className="flex items-center gap-1.5 rounded-lg border border-white/40 bg-white/50 px-2 py-1 text-xs font-semibold text-slate-600">
-                                <Clock size={14} className="text-slate-400" />
-                                Watched to {formatDurationSeconds(item.videoCurrentTimeSec ?? 0)}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </Link>
-                    </motion.div>
-                  ))
+                  <div className={clsx("flex flex-col gap-4", sessionsQuery.isFetching && "opacity-90")} data-testid="history-sessions">
+                    {sessions.map((item) => (
+                      <SessionCard key={item.studySessionId} item={item} />
+                    ))}
+                  </div>
+                )}
+                {sessionsQuery.hasNextPage && (
+                  <button
+                    onClick={() => sessionsQuery.fetchNextPage()}
+                    disabled={sessionsQuery.isFetchingNextPage}
+                    className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
+                  >
+                    {sessionsQuery.isFetchingNextPage ? "Loading…" : "Load more"}
+                  </button>
+                )}
+                {unattributed && (unattributed.legacyRounds > 0 || unattributed.unattributedAnswers > 0 || unattributed.unattributedTakes > 0) && (
+                  <p className="text-xs text-slate-500" data-testid="history-unattributed">
+                    Earlier practice isn&apos;t grouped into sessions:{" "}
+                    {[
+                      unattributed.legacyRounds > 0 ? pluralize(unattributed.legacyRounds, "round") + " from before sessions were tracked" : null,
+                      unattributed.unattributedAnswers > 0 ? pluralize(unattributed.unattributedAnswers, "answer") + " without a session" : null,
+                      unattributed.unattributedTakes > 0 ? pluralize(unattributed.unattributedTakes, "recording") + " without a session" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    . Their results are in each round&apos;s report.
+                  </p>
                 )}
               </section>
 

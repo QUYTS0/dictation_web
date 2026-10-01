@@ -48,6 +48,7 @@ export function ControlBar({
   currentSegIdx,
   totalSegments,
   accuracy,
+  practiceProgress = null,
   onReset,
   onPrevious,
   onReplay,
@@ -88,6 +89,8 @@ export function ControlBar({
   /** Sentence accuracy (latest answer per practiced sentence), or null
    *  when no sentence has been answered yet in this round. */
   accuracy: number | null;
+  /** Round practice coverage — a separate, separately labeled number (plan §10.6). */
+  practiceProgress?: { covered: number; required: number } | null;
   onReset: () => void;
   onPrevious: () => void;
   onReplay: () => void;
@@ -288,13 +291,19 @@ export function ControlBar({
     />
   );
 
+  const practicedText = practiceProgress ? `${practiceProgress.covered}/${practiceProgress.required} practiced` : null;
   const timeStatusText =
     totalSegments > 0
-      ? !isDictationMode
-        ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
-        : accuracy === null
-          ? "Sentence accuracy —"
-          : `${accuracy}% sentence accuracy`
+      ? [
+          !isDictationMode
+            ? `${formatClockTime(currentTimeSec)} / ${formatClockTime(durationSec)}`
+            : accuracy === null
+              ? "Sentence accuracy —"
+              : `${accuracy}% sentence accuracy`,
+          practicedText,
+        ]
+          .filter(Boolean)
+          .join(" · ")
       : "";
 
   return (
@@ -394,10 +403,12 @@ export function ControlBar({
               !isDictationMode ? (
                 <span>
                   {currentSegIdx + 1} / {totalSegments} · {formatClockTime(currentTimeSec)} / {formatClockTime(durationSec)}
+                  {practicedText && <> · {practicedText}</>}
                 </span>
               ) : (
                 <span>
                   {currentSegIdx + 1} / {totalSegments} · Sentence accuracy {accuracy === null ? "—" : `${accuracy}%`}
+                  {practicedText && <> · {practicedText}</>}
                 </span>
               )
             ) : (

@@ -68,7 +68,10 @@ describe("POST /api/listening/sync", () => {
     const res = await sync();
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ processed: true, coverageRatio: 0.25, lastPositionSec: 10, hasHistory: true, studySessionId: SESSION, attribution: "current" });
-    expect(rpc).toHaveBeenCalledTimes(1);
+    // One atomic sync call; then (Phase 6) the implicit Library membership —
+    // never over a removal (p_explicit false).
+    expect(rpc.mock.calls.filter((c) => c[0] === "fn_sync_study_activity")).toHaveLength(1);
+    expect(rpc).toHaveBeenLastCalledWith("fn_library_add_video", { p_youtube_video_id: "vid", p_explicit: false });
     expect(rpc).toHaveBeenCalledWith("fn_sync_study_activity", {
       p_kind: "listening",
       p_flush_batch_id: BATCH,
@@ -89,11 +92,28 @@ describe("POST /api/listening/sync", () => {
     expect(JSON.stringify(rpc.mock.calls[0][1])).not.toContain(SESSION);
   });
 
+  it("Phase 6: Library membership is implicit — only for fresh observations, and a membership failure never fails the sync", async () => {
+    for (const attribution of ["late", "replay"]) {
+      rpc.mockClear();
+      rpc.mockResolvedValueOnce({ data: { processed: true, coverageRatio: 0.25, attribution }, error: null });
+      expect((await sync()).status).toBe(200);
+      expect(rpc.mock.calls.map((c) => c[0])).toEqual(["fn_sync_study_activity"]);
+    }
+    rpc.mockClear();
+    rpc
+      .mockResolvedValueOnce({ data: { processed: true, coverageRatio: 0.25, attribution: "current" }, error: null })
+      .mockResolvedValueOnce({ data: null, error: { code: "PGRST202", message: "missing" } });
+    const res = await sync();
+    expect(res.status).toBe(200);
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["fn_sync_study_activity", "fn_library_add_video"]);
+  });
+
   it("a checkpoint is passed only when the client observed one (null stays null — never 0)", async () => {
     await sync({ currentPositionSec: null });
-    expect(rpc.mock.calls[0][1].p_current_position_sec).toBeNull();
+    const syncs = () => rpc.mock.calls.filter((c) => c[0] === "fn_sync_study_activity");
+    expect(syncs()[0][1].p_current_position_sec).toBeNull();
     await sync({ currentPositionSec: 0.4 }); // a real return to the beginning
-    expect(rpc.mock.calls[1][1].p_current_position_sec).toBe(0.4);
+    expect(syncs()[1][1].p_current_position_sec).toBe(0.4);
   });
 
   it("validates the payload before touching the database", async () => {

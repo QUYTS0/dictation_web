@@ -110,6 +110,16 @@ export async function handleStudyActivityFlush(request: Request, kind: FlushActi
       currentPositionSec: kind === "listening" ? ((currentPositionSec as number | null | undefined) ?? null) : null,
       clientTimezone: (clientTimezone as string | null | undefined) ?? null,
     });
+    // Listening on a video puts it in the Library (Phase 6) — a Listening-
+    // only video has no round to do it. Implicit: never re-adds a video the
+    // user removed, and only for fresh (not replayed/late) observations.
+    if (kind === "listening" && result.attribution === "current") {
+      const { error: membershipError } = await supabase.rpc("fn_library_add_video", {
+        p_youtube_video_id: videoId,
+        p_explicit: false,
+      });
+      if (membershipError) console.error("[listening/sync] library membership error:", membershipError);
+    }
     return NextResponse.json(result);
   } catch (err) {
     return mapStudyActivityError(err);

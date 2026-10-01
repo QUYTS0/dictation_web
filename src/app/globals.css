@@ -62,3 +62,26 @@ body {
 .app-scrollbar::-webkit-scrollbar-thumb:active {
   background-color: rgba(100, 116, 139, 0.55) !important;
 }
+
+/*
+ * Light values for the design tokens RoundReportPanel is styled with, so the
+ * SAME report component renders on the light full-report page as on the
+ * dark practice page (.player-dark-theme defines the dark values).
+ */
+.report-light-theme {
+  --surface: rgba(255, 255, 255, 0.75);
+  --surface-2: rgba(248, 250, 252, 0.9);
+  --surface-glass: rgba(255, 255, 255, 0.5);
+  --border: rgba(148, 163, 184, 0.35);
+  --border-strong: rgba(148, 163, 184, 0.6);
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #64748b;
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+  --accent-border: rgba(79, 70, 229, 0.35);
+  --green: #059669;
+  --purple: #7c3aed;
+  --red: #dc2626;
+}

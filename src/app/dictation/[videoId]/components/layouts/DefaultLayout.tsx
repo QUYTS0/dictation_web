@@ -84,6 +84,7 @@ export function DefaultLayout({
   onTriggerEvaluation,
   onOpenEvaluationDetails,
   listeningStatus,
+  practiceProgress,
 }: {
   isZenMode: boolean;
   showVideo: boolean;
@@ -152,6 +153,8 @@ export function DefaultLayout({
   onOpenEvaluationDetails?: () => void;
   /** Listening mode only: the coverage line shown above the control bar. */
   listeningStatus?: ReactNode;
+  /** Round practice coverage (sentences practiced / required) — never accuracy. */
+  practiceProgress?: { covered: number; required: number } | null;
 }) {
   const isPracticing = uxState === "paused_waiting_input" || uxState === "playing" || uxState === "checking_answer";
   const isDictationMode = inputMode === "dictation";
@@ -374,6 +377,7 @@ export function DefaultLayout({
               currentSegIdx={currentSegIdx}
               totalSegments={totalSegments}
               accuracy={accuracy}
+              practiceProgress={inputMode === "listening" ? null : practiceProgress}
               onReset={onReset}
               onPrevious={onPrevious}
               onReplay={onReplay}

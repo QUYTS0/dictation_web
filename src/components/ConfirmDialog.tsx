@@ -15,6 +15,8 @@ export interface ConfirmDialogProps {
   /** Disables both buttons and swaps the confirm label to a busy state
    *  while the caller's own delete mutation is in flight. */
   isConfirming?: boolean;
+  /** Confirm label while `isConfirming` (default "Deleting…"). */
+  busyLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -38,6 +40,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   destructive = true,
   isConfirming = false,
+  busyLabel = "Deleting…",
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -123,7 +126,7 @@ export function ConfirmDialog({
               destructive ? "bg-red-600 hover:bg-red-700" : "bg-primary-600 hover:bg-primary-700"
             )}
           >
-            {isConfirming ? "Deleting…" : confirmLabel}
+            {isConfirming ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>

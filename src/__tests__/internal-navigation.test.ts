@@ -1,52 +1,42 @@
 import fs from "fs";
 import path from "path";
-import { resumableSessionHref } from "@/lib/utils/sessions";
-import type { ResumableSession } from "@/lib/types";
+import { libraryPracticeHref } from "@/components/library/LibraryCard";
+import type { LibraryItem } from "@/lib/types/learning";
 
-function baseSession(overrides: Partial<ResumableSession>): ResumableSession {
+function item(overrides: Partial<LibraryItem>): LibraryItem {
   return {
-    sessionId: "sess-1",
-    mode: "dictation",
     videoId: "abc12345678",
-    videoTitle: "Test video",
-    updatedAt: new Date().toISOString(),
-    status: "active",
+    title: "Test video",
+    addedAt: new Date().toISOString(),
+    lastActivityAt: new Date().toISOString(),
+    lastMode: null,
+    state: "in_progress",
+    hasCompletedRound: false,
+    hasLegacyCompletion: false,
+    completedRoundCount: 0,
+    round: null,
+    listening: { transcriptId: null, coverageRatio: null, listenedThrough: false, lastPositionSec: null, hasHistory: false, historyOnOtherRevision: false },
     ...overrides,
   };
 }
 
-describe("resumableSessionHref (dashboard/history resume + listening→shadowing entry)", () => {
-  it("resumes an in-progress dictation session on the practice route", () => {
-    expect(resumableSessionHref(baseSession({ mode: "dictation", status: "active" }))).toBe(
-      "/dictation/abc12345678"
-    );
+describe("libraryPracticeHref (Library / Continue Learning → practice page)", () => {
+  it("opens the practice route without ?mode= so the saved last mode decides (cross-device resume)", () => {
+    expect(libraryPracticeHref(item({ lastMode: "shadowing" }))).toBe("/dictation/abc12345678");
+    expect(libraryPracticeHref(item({ state: "completed" }))).toBe("/dictation/abc12345678");
   });
 
-  it("sends a completed dictation session to its results page", () => {
-    expect(
-      resumableSessionHref(baseSession({ mode: "dictation", status: "completed", sessionId: "sess-42" }))
-    ).toBe("/results/sess-42");
-  });
-
-  it("resumes a listening session on the practice route with ?mode=listening", () => {
-    expect(resumableSessionHref(baseSession({ mode: "listening", status: "active" }))).toBe(
-      "/dictation/abc12345678?mode=listening"
-    );
-  });
-
-  it("keeps a completed listening session on the practice route (no results page for listening)", () => {
-    expect(resumableSessionHref(baseSession({ mode: "listening", status: "completed" }))).toBe(
-      "/dictation/abc12345678?mode=listening"
-    );
+  it("a Listening-only video with no saved mode opens in Listening explicitly", () => {
+    expect(libraryPracticeHref(item({ state: "listening" }))).toBe("/dictation/abc12345678?mode=listening");
+    expect(libraryPracticeHref(item({ state: "listening_prior_revision" }))).toBe("/dictation/abc12345678?mode=listening");
+    expect(libraryPracticeHref(item({ state: "listening", lastMode: "dictation" }))).toBe("/dictation/abc12345678");
   });
 
   it("never produces an absolute/external URL", () => {
-    for (const mode of ["dictation", "listening"] as const) {
-      for (const status of ["active", "completed", "abandoned"] as const) {
-        const href = resumableSessionHref(baseSession({ mode, status }));
-        expect(href.startsWith("/")).toBe(true);
-        expect(href).not.toMatch(/^https?:\/\//);
-      }
+    for (const state of ["not_started", "in_progress", "completed", "listening", "listening_prior_revision"] as const) {
+      const href = libraryPracticeHref(item({ state }));
+      expect(href.startsWith("/")).toBe(true);
+      expect(href).not.toMatch(/^https?:\/\//);
     }
   });
 });
@@ -67,7 +57,9 @@ describe("internal navigation stays inside the app shell (no new-tab / hard-code
     "app/page.tsx",
     "app/listening/[videoId]/page.tsx",
     "app/dictation/[videoId]/useInputModePreference.ts",
-    "lib/utils/sessions.ts",
+    "components/library/LibraryCard.tsx",
+    "components/report/RoundReportPanel.tsx",
+    "app/dictation/[videoId]/components/PracticeReportView.tsx",
     "components/AppHeader.tsx",
   ];
 

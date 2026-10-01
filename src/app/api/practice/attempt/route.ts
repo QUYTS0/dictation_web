@@ -78,6 +78,15 @@ export async function POST(request: NextRequest) {
       });
       if (error || !data) return mapPracticeWriteError(supabase, error, "Failed to save your recording");
       resolvedRoundId = (data as { roundId: string }).roundId;
+      // A video's first round puts it in the Library (Phase 6) — implicitly,
+      // never over a removal.
+      if ((data as { created?: boolean }).created) {
+        const { error: membershipError } = await supabase.rpc("fn_library_add_video", {
+          p_youtube_video_id: youtubeVideoId,
+          p_explicit: false,
+        });
+        if (membershipError) console.error("[practice/attempt] library membership error:", membershipError);
+      }
     }
 
     const { data, error } = await supabase.rpc("fn_record_shadowing_attempt", {

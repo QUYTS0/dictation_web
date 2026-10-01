@@ -25,6 +25,7 @@ import type { User } from "@supabase/supabase-js";
 import YouTubePlayer from "@/components/YouTubePlayer";
 import { useDictationSession } from "@/app/dictation/[videoId]/useDictationSession";
 import { useKeyboardShortcuts } from "@/app/dictation/[videoId]/useKeyboardShortcuts";
+import { useListeningResume } from "@/app/dictation/[videoId]/useListeningResume";
 import { usePlayerStore } from "@/store/playerStore";
 import { useSessionStore } from "@/store/sessionStore";
 import type { ResumeSessionResponse, TranscriptResponse, TranscriptSegment } from "@/lib/types";
@@ -145,6 +146,14 @@ function deferred<T>() {
 const userA = { id: "user-A" } as User;
 const userB = { id: "user-B" } as User;
 
+// Listening keeps its OWN checkpoint (listening_progress.last_position_sec,
+// per account/video/revision) — independent of the round's Dictation/
+// Shadowing checkpoint (Phase 6). Tests set it per (user, video, revision).
+let listeningCheckpoints: Record<string, number> = {};
+function listeningCheckpoint(userId: string, videoId: string, sec: number, transcriptId = "rev-A") {
+  listeningCheckpoints[`${userId}|${videoId}|${transcriptId}`] = sec;
+}
+
 // ---- Harness mirroring page.tsx wiring -----------------------------------
 type Session = ReturnType<typeof useDictationSession>;
 let latest: Session;
@@ -153,7 +162,23 @@ function captureSession(s: Session) {
 }
 
 function Harness({ videoId, user, mode }: { videoId: string; user: User | null; mode: "listening" | "shadowing" | "dictation" }) {
-  const session = useDictationSession({ videoId, user, autoEnterPaused: mode !== "dictation" });
+  const session = useDictationSession({ videoId, user, autoEnterPaused: mode !== "dictation", inputMode: mode });
+  // Same wiring as page.tsx: Listening resumes from the revision-scoped
+  // Listening checkpoint (the page reads it from GET /api/listening/progress).
+  const transcriptId = session.segments[0]?.transcript_id ?? null;
+  const cpKey = `${user?.id}|${videoId}|${transcriptId}`;
+  const progress = transcriptId
+    ? { transcriptId, hasHistory: cpKey in listeningCheckpoints, lastPositionSec: listeningCheckpoints[cpKey] ?? 0 }
+    : null;
+  useListeningResume({
+    inputMode: mode,
+    userId: user?.id,
+    videoId,
+    transcriptId,
+    uxState: session.uxState,
+    progress,
+    restoreListeningPosition: session.restoreListeningPosition,
+  });
   // Exposes the latest committed hook value to the test body.
   useEffect(() => captureSession(session));
   // Destructured the same way page.tsx consumes the hook.
@@ -227,6 +252,7 @@ async function waitRestored(segIdx: number) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  listeningCheckpoints = {};
   FakeYTPlayer.instances = [];
   window.YT = { Player: FakeYTPlayer, PlayerState: PLAYER_STATE };
   usePlayerStore.getState().reset();
@@ -242,6 +268,7 @@ beforeEach(() => {
 describe("first Play / Space after reopening a lesson", () => {
   it("resume target resolved BEFORE player readiness → first Play starts at the target", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
 
@@ -255,6 +282,7 @@ describe("first Play / Space after reopening a lesson", () => {
   it("player readiness BEFORE resume data → same outcome", async () => {
     const resume = deferred<ResumeSessionResponse>();
     apiMock.fetchResumeSession.mockReturnValue(resume.promise as never);
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
 
     act(() => current().fireReady()); // ready first
@@ -272,6 +300,7 @@ describe("first Play / Space after reopening a lesson", () => {
     for (const mode of ["listening", "shadowing"] as const) {
       FakeYTPlayer.instances = [];
       apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+      listeningCheckpoint("user-A", `vid-${mode}`, 4.5);
       const { unmount } = renderHarness({ videoId: `vid-${mode}`, user: userA, mode });
       await waitRestored(2);
       act(() => current().fireReady());
@@ -301,7 +330,7 @@ describe("first Play / Space after reopening a lesson", () => {
 
   it("falls back to the selected sentence's start when the saved time doesn't belong to it (e.g. a 0:00 row)", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 0));
-    const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "shadowing" });
     await waitRestored(2);
     act(() => current().fireReady());
     press(() => fireEvent.click(getByText("Play")));
@@ -310,6 +339,7 @@ describe("first Play / Space after reopening a lesson", () => {
 
   it("first action is Replay → starts at the selected sentence's beginning", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 5.1));
+    listeningCheckpoint("user-A", "vid1", 5.1);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
     act(() => current().fireReady());
@@ -320,6 +350,7 @@ describe("first Play / Space after reopening a lesson", () => {
 
   it("Shift+Space replays only — it never also toggles playback", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 5.1));
+    listeningCheckpoint("user-A", "vid1", 5.1);
     renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
     act(() => current().fireReady());
@@ -332,6 +363,7 @@ describe("first Play / Space after reopening a lesson", () => {
 
   it("Space inside a text field keeps typing behavior and does not start playback; held Space doesn't repeat", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByLabelText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
     act(() => current().fireReady());
@@ -347,6 +379,7 @@ describe("first Play / Space after reopening a lesson", () => {
 
   it("Pause midway, then Play → continues from the paused playhead (no seek back to the sentence start)", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
     act(() => current().fireReady());
@@ -366,6 +399,7 @@ describe("first Play / Space after reopening a lesson", () => {
 describe("stale restores never override newer context or user intent", () => {
   it("resume pending, then switching video → the old target is ignored by the new video's player", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText, rerender } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
 
@@ -383,6 +417,7 @@ describe("stale restores never override newer context or user intent", () => {
   it("resume in flight for user A, then user B signs in → A's late response is ignored", async () => {
     const resumeA = deferred<ResumeSessionResponse>();
     apiMock.fetchResumeSession.mockReturnValueOnce(resumeA.promise as never).mockResolvedValue({ session: null });
+    listeningCheckpoint("user-A", "vid1", 8.5);
     const { getByText, rerender } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
 
     rerender({ videoId: "vid1", user: userB, mode: "listening" });
@@ -414,6 +449,7 @@ describe("stale restores never override newer context or user intent", () => {
   it("a restore that lands after the user already started playback does not move the playhead", async () => {
     const resume = deferred<ResumeSessionResponse>();
     apiMock.fetchResumeSession.mockReturnValue(resume.promise as never);
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     act(() => current().fireReady());
     press(() => fireEvent.click(getByText("Play"))); // user plays before resume data exists
@@ -434,7 +470,7 @@ describe("stale restores never override newer context or user intent", () => {
 describe("initialization never overwrites the saved checkpoint", () => {
   it("reopen, do not play, then leave (tab hidden + pagehide) → re-saves the restored checkpoint, never 0:00", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
-    renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    renderHarness({ videoId: "vid1", user: userA, mode: "shadowing" });
     await waitRestored(2);
     act(() => current().fireReady());
 
@@ -454,6 +490,7 @@ describe("initialization never overwrites the saved checkpoint", () => {
 
   it("the sessionStorage snapshot keeps the checkpoint time too (not the player's 0:00)", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
+    listeningCheckpoint("user-A", "vid1", 4.5);
     renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
     await waitFor(() => expect(window.sessionStorage.getItem("dictation.active-session.vid1")).not.toBeNull());
@@ -505,6 +542,7 @@ describe("initialization never overwrites the saved checkpoint", () => {
   it("regenerating while restored keeps the pinned revision, selected sentence and resume target", async () => {
     apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5));
     apiMock.regenerateTranscript.mockResolvedValue({ status: "ready", transcriptId: "rev-B" });
+    listeningCheckpoint("user-A", "vid1", 4.5);
     const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
     await waitRestored(2);
 
@@ -533,5 +571,62 @@ describe("Dictation's explicit Resume button", () => {
     press(() => latest.handleResume());
     expect(current().timeAtFirstPlay).toBe(4.5);
     expect(current().log.filter(([c]) => c === "seekTo")).toEqual([["seekTo", 4.5]]);
+  });
+});
+
+// -------------------------------------------------------------------------
+describe("Phase 6 — Listening resumes from its own checkpoint", () => {
+  it("uses the Listening checkpoint, not the round's Dictation/Shadowing checkpoint", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5)); // round checkpoint: sentence 3
+    listeningCheckpoint("user-A", "vid1", 9.1); // Listening got further, in sentence 5 [8, 10)
+    const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    await waitRestored(4);
+    act(() => current().fireReady());
+    press(() => fireEvent.click(getByText("Play")));
+    expect(current().timeAtFirstPlay).toBe(9.1);
+    expect(current().droppedSeeks).toEqual([]); // no autoplay / no seek outside a gesture
+  });
+
+  it("a legitimate BACKWARD checkpoint is honored as saved", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue(resumeAt(4, 8.5));
+    listeningCheckpoint("user-A", "vid1", 1.3); // went back to the start and stopped there
+    const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    await waitRestored(0);
+    act(() => current().fireReady());
+    press(() => fireEvent.click(getByText("Play")));
+    expect(current().timeAtFirstPlay).toBe(1.3);
+  });
+
+  it("another revision's checkpoint is never applied to the revision on screen", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue(resumeAt(2, 4.5)); // the round (and the page) show rev-A
+    listeningCheckpoint("user-A", "vid1", 9.1, "rev-OLD");
+    const { getByText } = renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    await waitFor(() => expect(latest.uxState).toBe("paused_waiting_input"));
+    act(() => current().fireReady());
+    press(() => fireEvent.click(getByText("Play")));
+    expect(current().timeAtFirstPlay).toBe(0);
+    expect(latest.currentSegIdx).toBe(0);
+  });
+
+  it("opening Listening creates no round and writes no round checkpoint (open, jump, hide, leave)", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue({ session: null }); // no round yet (Listening-only)
+    renderHarness({ videoId: "vid1", user: userA, mode: "listening" });
+    await waitFor(() => expect(latest.uxState).toBe("paused_waiting_input"));
+    act(() => current().fireReady());
+    press(() => latest.jumpToSegment(3));
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    expect(apiMock.saveProgress).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().sessionId).toBeNull();
+  });
+
+  it("Shadowing keeps the round's sentence checkpoint (and still creates a round on first entry)", async () => {
+    apiMock.fetchResumeSession.mockResolvedValue({ session: null });
+    renderHarness({ videoId: "vid1", user: userA, mode: "shadowing" });
+    await waitFor(() => expect(apiMock.saveProgress).toHaveBeenCalledWith("vid1", 0, 0, expect.anything(), expect.anything(), undefined, "rev-A", "active"));
   });
 });

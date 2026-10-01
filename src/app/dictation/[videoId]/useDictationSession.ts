@@ -7,6 +7,7 @@ import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { checkAnswer as evaluateAnswer } from "@/lib/utils/text";
 import { dashboardKeys } from "@/lib/queries/dashboard";
 import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
+import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import type { TranscriptSegment, CheckAnswerResponse, HintLevel, UXState, RoundProgress } from "@/lib/types";
 import { CORRECT_RESULT_VISIBILITY_DELAY_MS } from "./constants";
 import { resolveResumeTarget, type ResumeTarget } from "@/lib/utils/resumeTarget";
@@ -84,6 +85,13 @@ interface UseDictationSessionOptions {
    *  soon as the transcript is ready — used for Listening Mode entries, which
    *  must never show an intermediate start screen or autoplay the video. */
   autoEnterPaused?: boolean;
+  /** The page's current mode. In Listening the ROUND checkpoint is never
+   *  written (Listening keeps its own checkpoint — plan Phase 6), and no
+   *  round is created just by opening Listening. */
+  inputMode?: "dictation" | "listening" | "shadowing";
+  /** Called with the server's saved last mode as soon as the resume check
+   *  answers — before the lesson auto-enters (see useInputModePreference). */
+  onServerLastMode?: (mode: "dictation" | "listening" | "shadowing") => void;
 }
 
 /**
@@ -94,7 +102,13 @@ interface UseDictationSessionOptions {
  * since its pieces (segment index, playback, answer checking, autosave) are
  * all facets of the same session, not separable concerns.
  */
-export function useDictationSession({ videoId, user, autoEnterPaused = false }: UseDictationSessionOptions) {
+export function useDictationSession({
+  videoId,
+  user,
+  autoEnterPaused = false,
+  inputMode = "dictation",
+  onServerLastMode,
+}: UseDictationSessionOptions) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
   const queryClient = useQueryClient();
@@ -178,6 +192,16 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   const submitSeqRef = useRef(0);
 
   const ytPlayerRef = useRef<YouTubePlayerHandle>(null);
+  // Read by triggerAutoSave (and its passive-save listeners) without
+  // re-creating them on a mode switch.
+  const inputModeRef = useRef(inputMode);
+  useEffect(() => {
+    inputModeRef.current = inputMode;
+  }, [inputMode]);
+  const onServerLastModeRef = useRef(onServerLastMode);
+  useEffect(() => {
+    onServerLastModeRef.current = onServerLastMode;
+  }, [onServerLastMode]);
   // Tracks whether the user manually triggered a replay while already paused
   // (keyboard shortcut / Replay button while input is visible). In this case we keep the
   // input and its typed words intact when the segment ends.
@@ -553,6 +577,11 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // built from default/initialization values before we actually know
       // which revision this session belongs to.
       if (pinnedRevisionId === undefined) return;
+      // Listening never writes the ROUND checkpoint (Dictation/Shadowing's
+      // sentence + playhead) and never creates a round: its own checkpoint is
+      // listening_progress.last_position_sec, saved with each sync. Position
+      // and coverage of the two stay independent (plan Phase 6).
+      if (inputModeRef.current === "listening") return;
       const state = useSessionStore.getState();
       // Read every field of this save's context at the same instant,
       // directly from its owning store, rather than closing over a
@@ -575,12 +604,11 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       )
         .then((r) => {
           if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
-          // Every confirmed save changes what Continue Learning shows
-          // (saved sentence, attempts, last practiced). Invalidation only
-          // marks the cached summary stale: it refetches right away only if
-          // Dashboard/History is mounted, otherwise on their next mount — so
-          // this adds no requests while practicing.
-          if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+          // Every confirmed save changes what Continue Learning / Library
+          // show (resume point, last activity). Invalidation only marks the
+          // cached views stale: they refetch right away only if mounted,
+          // otherwise on their next mount — no requests while practicing.
+          if (user) invalidateLearningViews(queryClient, user.id);
           if (status === "completed" && user) {
             // Dashboard/History cache the persisted data this write just
             // changed (completedVideos/avgAccuracy/resumableSessions, error
@@ -681,6 +709,9 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // this context at all.
         if (contextEpochRef.current !== epoch || (sessionStore.sessionId ?? null) !== roundId) return;
         setLatestResults((prev) => ({ ...prev, [segIdx]: result.isCorrect }));
+        // Partial progress (not only completion) changes the Dashboard,
+        // Library, History, Mistakes and this round's report.
+        if (user && result.recorded) invalidateLearningViews(queryClient, user.id, { roundIds: [roundId], mistakes: true });
         if (result.roundStatus) {
           setRoundState((prev) => ({
             status: result.roundStatus ?? null,
@@ -782,7 +813,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         setUxState("paused_waiting_input");
       }
     },
-    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout, sentenceStartSec, transcriptId, videoId]
+    [currentSegIdx, segments, sessionStore, triggerAutoSave, wrongAttempts, hintLevel, combo, scheduleTimeout, sentenceStartSec, transcriptId, videoId, user, queryClient]
   );
 
   // ---- Start session (seek to segment 0 and play) ----
@@ -1076,6 +1107,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // was in flight — applying it now would restore a session/revision
         // that belongs to a context the user has already left.
         if (contextEpochRef.current !== requestEpoch) return;
+        if (data.lastMode) onServerLastModeRef.current?.(data.lastMode);
         if (data.session) {
           // Only a fully completed prior run is a fair "vs last run" baseline —
           // an interrupted "active" session reflects partial progress, not a full attempt.
@@ -1101,7 +1133,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
           setLatestResults(
             Object.fromEntries((data.session.latestDictationResults ?? []).map((r) => [r.segmentIndex, r.isCorrect]))
           );
-          setRoundState({ status: data.session.status, progress: null, completedByThisPage: false });
+          setRoundState({ status: data.session.status, progress: data.session.progress ?? null, completedByThisPage: false });
           // null (no pinned revision on a legacy/pre-Phase-0 row) falls back
           // to fetching current, same as "no session at all".
           setPinnedRevisionId(data.session.transcriptId ?? null);
@@ -1266,6 +1298,10 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       setResumeState(null);
       setUxState("paused_waiting_input");
       passiveSaveAllowedRef.current = true;
+      // Listening resumes from ITS OWN checkpoint (restoreListeningPosition,
+      // fed by listening_progress for the displayed revision) — never from
+      // the round's Dictation/Shadowing checkpoint.
+      if (inputModeRef.current === "listening") return;
       // If the user already started playback themselves (Play/Space before
       // this restore ran), their action wins: keep the session identity
       // above, but don't move the selected sentence or arm a stale target.
@@ -1280,11 +1316,29 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
       // "Start Dictation" screen for the paused practicing view. The round
       // is only created when the server positively confirmed there's no
       // checkpoint — if the resume check failed, one may exist and writing
-      // sentence 1 / 0:00 would overwrite it.
+      // sentence 1 / 0:00 would overwrite it. (Listening never creates one:
+      // triggerAutoSave is a no-op there.)
       if (!resumeCheckFailedRef.current) triggerAutoSave(0, "active", 0);
       setUxState("paused_waiting_input");
     }
   }, [autoEnterPaused, uxState, segments, resumeChecked, resumeState, sessionStore, triggerAutoSave, armResumeTarget]);
+
+  // ---- Leaving Listening for round practice ----
+  // Listening never creates a round (Phase 6), so a visit that started in
+  // Listening may have none. Switching to Dictation/Shadowing is the start of
+  // round practice: create (or get) the round at the selected sentence now,
+  // so the first answer/recording is recorded — the same write Start makes.
+  const previousInputModeRef = useRef(inputMode);
+  useEffect(() => {
+    const previous = previousInputModeRef.current;
+    previousInputModeRef.current = inputMode;
+    if (previous !== "listening" || inputMode === "listening") return;
+    if (!user || useSessionStore.getState().sessionId || resumeStateRef.current) return;
+    if (!passiveSaveAllowedRef.current || resumeCheckFailedRef.current) return;
+    if (!["paused_waiting_input", "playing"].includes(uxStateRef.current)) return;
+    const idx = currentSegIdxRef.current;
+    triggerAutoSave(idx, "active", sentenceStartSec(idx));
+  }, [inputMode, user, triggerAutoSave, sentenceStartSec]);
 
   // ---- Jump directly to an arbitrary segment (e.g. from a bookmark deep link) ----
   const jumpToSegment = useCallback(
@@ -1317,7 +1371,8 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
   const handleRestart = useCallback(() => {
     if (!user) return;
     setRestartError(null);
-    void restartSession(videoId, resumeState?.sessionId ?? sessionStore.sessionId ?? undefined)
+    const previousRoundId = resumeState?.sessionId ?? sessionStore.sessionId ?? null;
+    void restartSession(videoId, previousRoundId ?? undefined)
       .then((restarted) => {
         // An explicit restart establishes a new context — invalidate any
         // regenerate/resume-fetch still in flight for the abandoned
@@ -1357,7 +1412,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         // Dashboard/History. It never touches attempt_logs, so
         // error-patterns/history-mistakes are unaffected and deliberately
         // left alone.
-        if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+        if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [previousRoundId, restarted.sessionId] });
       })
       .catch((err: unknown) => {
         // Nothing was reset locally (that only happens after the server
@@ -1413,12 +1468,74 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
         progress: r.progress ?? prev.progress,
         completedByThisPage: prev.completedByThisPage || r.roundCompletedByThisRequest,
       }));
-      // Partial progress changes what Dashboard/History show, not only completion.
-      if (user) void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(user.id) });
+      // Partial progress changes what Dashboard/Library/History and the
+      // round's report show, not only completion.
+      if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [r.roundId] });
       return true;
     },
     [queryClient, sessionStore, user]
   );
+
+  /**
+   * Listening resume: selects the sentence containing `timeSec` and arms the
+   * player so the first Play/Space starts there — no autoplay, nothing saved.
+   * The caller passes the checkpoint of the revision ON SCREEN only (another
+   * revision's timestamp is never applied). Skipped once the player has
+   * played or another target (a same-tab restore, a deliberate navigation)
+   * is already armed — those are newer intent.
+   */
+  const restoreListeningPosition = useCallback(
+    (timeSec: number): boolean => {
+      if (segments.length === 0 || !Number.isFinite(timeSec) || timeSec <= 0) return false;
+      if (ytPlayerRef.current?.getLivePlayheadSec() != null) return false;
+      const pending = resumeTargetRef.current;
+      if (pending && pending.epoch === contextEpochRef.current) return false;
+      let idx = 0;
+      for (let i = 0; i < segments.length; i++) {
+        if (segments[i].start <= timeSec) idx = i;
+        else break;
+      }
+      currentSegIdxRef.current = idx;
+      setCurrentSegIdx(idx);
+      armResumeTarget({ segmentIndex: idx, timeSec, source: "saved_time" });
+      return true;
+    },
+    [segments, armResumeTarget]
+  );
+
+  /**
+   * Review a sentence from the round report: select it in the practice view
+   * (its script/player context), paused. Never plays, never saves, never
+   * starts a round — a completed round stays completed; only an actual new
+   * answer is recorded (into that same round).
+   */
+  const reviewSegment = useCallback(
+    (segIdx: number) => {
+      if (segIdx < 0 || segIdx >= segments.length) return;
+      if (!sessionStore.sessionId && resumeState) {
+        sessionStore.setSessionId(resumeState.sessionId);
+        sessionStore.hydrateAccuracy(resumeState.totalAttempts, Math.round((resumeState.accuracy / 100) * resumeState.totalAttempts));
+        setResumeState(null);
+      }
+      ytPlayerRef.current?.pauseVideo();
+      markUserAction(segIdx);
+      currentSegIdxRef.current = segIdx;
+      setCurrentSegIdx(segIdx);
+      setCheckResult(null);
+      setWrongAttempts(0);
+      setHintLevel(0);
+      setUxState("paused_waiting_input");
+    },
+    [segments.length, sessionStore, resumeState, markUserAction]
+  );
+
+  /** A mode switch (or leaving the report) must visibly leave the end-of-round state (D17). */
+  const exitCompletedView = useCallback(() => {
+    if (uxStateRef.current === "session_completed") {
+      uxStateRef.current = "paused_waiting_input";
+      setUxState("paused_waiting_input");
+    }
+  }, []);
 
   const sentenceAccuracy = useMemo(() => {
     const values = Object.values(latestResults);
@@ -1439,11 +1556,7 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     hintLevel,
     setHintLevel,
     combo,
-    bestCombo,
-    cleanSolveCount,
     isLastResultClean,
-    previousRunSnapshot,
-    mistakes,
     resumeState,
     resumeLoading,
     previousReview,
@@ -1482,5 +1595,8 @@ export function useDictationSession({ videoId, user, autoEnterPaused = false }: 
     handleActiveSegmentChange,
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
+    restoreListeningPosition,
+    reviewSegment,
+    exitCompletedView,
   };
 }

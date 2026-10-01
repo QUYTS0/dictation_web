@@ -1,26 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import type { ErrorType, ResumableSession } from "@/lib/types";
+import type { ErrorType } from "@/lib/types";
+import type { DashboardSummary } from "@/lib/types/learning";
+import { viewerTimeZone } from "@/lib/utils/streak";
 
-export interface DashboardSummary {
-  /** Videos with a round completed under the server-owned (Phase 3) rule. */
-  completedVideos: number;
-  /** Videos whose only completions predate the cutover (client-reported,
-   *  unverified). Optional: older servers don't send it. */
-  legacyCompletedVideos?: number;
-  avgAccuracy: number;
-  totalPracticeMinutes: number;
-  vocabularyCount: number;
-  streakDays: number;
-  recentVocabulary: Array<{
-    id: string;
-    term: string;
-    sentence_context: string;
-    created_at: string;
-  }>;
-  resumableSessions: ResumableSession[];
-}
+export type { DashboardSummary };
 
 export interface DashboardErrorPatterns {
   total: number;
@@ -32,8 +17,15 @@ export const dashboardKeys = {
   errorPatterns: (userId: string | undefined) => ["dashboard-error-patterns", userId] as const,
 };
 
+/** `?tz=<browser IANA zone>` — the streak's "today" is the viewer's local
+ *  date. Shared by the Dashboard and the practice header (useStreak). */
+export function streakQueryString(): string {
+  const tz = viewerTimeZone();
+  return tz ? `?tz=${encodeURIComponent(tz)}` : "";
+}
+
 async function fetchDashboardSummary(): Promise<DashboardSummary> {
-  const res = await fetch("/api/dashboard/summary");
+  const res = await fetch(`/api/dashboard/summary${streakQueryString()}`);
   if (!res.ok) throw new Error("Failed to fetch dashboard summary");
   return res.json();
 }

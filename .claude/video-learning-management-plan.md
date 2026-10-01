@@ -889,7 +889,13 @@ counters are not, hence this table.
 timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) on each flush; the server derives
 `activity_local_date` from it for day-grouping. No per-user timezone column is introduced — this
 is a pragmatic, low-stakes choice (day-bucketing only, nothing security- or ownership-relevant)
-rather than a new preferences subsystem.
+rather than a new preferences subsystem. *As implemented (Phase 6 correction pass, migration
+040):* the dates are stored **per activity batch**, not as one session-wide
+`activity_local_date`. The columns are `activity_flush_log.client_timezone`, `activity_dates
+date[]` and `day_basis`. Each batch keeps every local date its intervals touch, so a session
+crossing midnight or receiving a delayed batch keeps every day. Rules, the UTC fallback for
+history and invalid zones, and "today" = the viewer's local date are all in
+`supabase/PHASE6_RUNBOOK.md` §3.
 
 **Labeling discipline:** until this mechanism actually ships (§12), no API response field is
 named `activeDurationSec` anywhere in this plan — a response carries `elapsedSpanSec` (the
@@ -1467,7 +1473,7 @@ with existing vocabulary/bookmark rows, enabled otherwise" (the gap named above)
 
 **Enforcement mechanism, chosen concretely (per the requirement that a route-level flag or a
 hidden button is not sufficient if a directly callable RPC can still delete):**
-`fn_delete_transcript_revision` **is created by the Script Versions migration (renumbered twice — from `038`, which Phase 4 used, then from `039`, which Phase 5 used; it takes the next free number when Phase 9 is implemented) fully specified, but with no
+`fn_delete_transcript_revision` **is created by the Script Versions migration (renumbered three times — from `038`, which Phase 4 used, from `039`, which Phase 5 used, and past `040`, which Phase 6 used; it takes the next free number when Phase 9 is implemented) fully specified, but with no
 `EXECUTE` grant issued to any application role at all** — `revoke execute on function
 fn_delete_transcript_revision from public, anon, authenticated;`, and no accompanying `grant`
 statement to `authenticated` (contrast every other authenticated-user function in §9.9's matrix,
@@ -1627,7 +1633,22 @@ was originally scheduled before that table existed).
 | 037 | `037_phase3_prepare_authoritative_cutover.sql` | 3 | **Implemented (Phase 3 pass).** Preparation only under `db push`: corrected authoritative functions (dormant + refuse writes until activated), TS↔SQL grading parity (`fn_normalize_dictation_text`, `fn_classify_dictation_error`), `fn_persist_session_assessment` (explain-all, service_role), `fn_practice_write_status`, cutover state/audit tables, and owner-only stage functions `fn_phase3_restrict_direct_writes` / `fn_phase3_close_gate` / `fn_phase3_backfill` / `fn_phase3_activate` / `fn_phase3_reopen_legacy`. The RLS tightening, fence, backfill and activation run from `supabase/phase3/*.sql` per `supabase/PHASE3_RUNBOOK.md` — never as a side effect of the migration. (Previously planned file name: `037_provenance_backfill_and_completion_cutover.sql`.) |
 | 038 | `038_phase4_shadowing_persistence.sql` | 4 | **Implemented (Phase 4 pass) — not the originally planned file.** Additive only (4 nullable `shadowing_attempts` columns: `azure_evaluated_at`, `azure_detail`, `word_match_evaluated_at`, `word_match_detail`) plus the evaluation lifecycle 035 lacked: `fn_begin_azure_evaluation` (admission: seq+1, pending, server-resolved reference text), `fn_finish_azure_evaluation` (writes only for the current seq from pending), `fn_expire_azure_evaluation` (seq-exact timeout), `fn_record_word_match` (service_role), and owner reads `fn_get_shadowing_attempt` / `fn_shadowing_round_results` (SECURITY INVOKER). No Phase 3 grant/row changed. See `supabase/PHASE4_RUNBOOK.md`. |
 | 039 | `039_phase5_listening_activity.sql` | 5 | **Implemented (Phase 5 pass).** `fn_sync_study_activity` — the routes' single atomic entry point (replay detection by batch id first; attribution by the observed round; late data never opens/closes/re-dates a session); internal `fn_apply_study_flush` (035's flush body with per-kind interval bounds — activity = wall-clock epoch seconds, which 035 rejected — `listening` in `modes_used`, stored-checkpoint response); `fn_flush_study_activity` kept as a wrapper (same signature/grants); index on `activity_flush_log(flush_batch_id)`. No table definition, row or existing grant change |
-| next free | `NNN_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038, then from 039 (Phases 4 and 5 took them); not created; takes the next free number when implemented** (a lower number created after a higher one is applied would need `db push --include-all`). `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
+| 040 | `040_phase6_library_history_reports.sql` | 6 | **Implemented (Phase 6 pass), not applied anywhere shared.** Read models, Library membership writes and local-day streak attribution. Edited in place by the pre-rollout correction pass, which was safe because it was never applied.
+- **Table:** `user_video_removals` — removal markers plus the removed video's `last_mode`, owner-SELECT RLS.
+- **Membership functions:**
+  - `fn_library_add_video(text, boolean)`: explicit = Add Video, the only writer that clears a removal; automatic = first round / Listening, never re-adds a removed video.
+  - `fn_library_remove_video`.
+  - `fn_set_video_last_mode`: never restores a removed video; the mode goes on the marker.
+  - `fn_video_last_mode`.
+  - All membership writers serialize on `fn_lock_library_entry`.
+- **Day attribution:** three nullable `activity_flush_log` columns (`client_timezone`, `activity_dates`, `day_basis`), filled by a replaced `fn_apply_study_flush` (039's body plus dating; same signature), with `fn_valid_time_zone` and `fn_local_activity_dates`.
+- **Reads:** `fn_video_library`, `fn_dashboard_summary`, `fn_activity_days` (local dates plus a labeled UTC fallback), `fn_history_sessions`, `fn_round_report`, `fn_my_round_progress`. All are SECURITY DEFINER, `auth.uid()`-scoped, `authenticated` only.
+- **Internal:** `fn_dictation_accuracy_summary` / `fn_shadowing_summary` / `fn_activity_union`.
+- **Operator-only:** `fn_phase6_reconcile_membership` / `fn_phase6_membership_gap`.
+- **Indexes:** four read indexes.
+
+No historical row or existing grant changed. See `supabase/PHASE6_RUNBOOK.md`. |
+| next free | `NNN_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038, then from 039, then past 040 (Phases 4, 5 and 6 took them); not created; takes the next free number when implemented** (a lower number created after a higher one is applied would need `db push --include-all`). `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -2617,7 +2638,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `NNN_fn_delete_transcript_revision.sql` (renumbered from 038, then 039 — next free number when implemented)
+### 8.16 `NNN_fn_delete_transcript_revision.sql` (renumbered from 038, then 039, then past 040 — next free number when implemented)
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -4430,7 +4451,7 @@ and pinned-sentence links, comparable-only improvement), immutable versioned fin
 summaries (`shadowing_round_summaries`, one row per source watermark), and an optional,
 disabled-by-default, summary-gated compaction of non-representative `azure_detail`
 (sub-word detail only; scores/attempts/coverage/completion never touched). Stages SS1–SS5;
-SS1–SS2 need no migration; SS3+ take the next free migration number (`039` is Phase 5's). Independent of Phase 5 and Phase 6; no change to round completion.
+SS1–SS2 need no migration; SS3+ take the next free migration number (`039` is Phase 5's, `040` Phase 6's). Independent of Phase 5 and Phase 6; no change to round completion.
 
 ### Phase 5 — Listening coverage
 
@@ -4527,7 +4548,8 @@ Deviations from the task list above, with reasons:
   Dashboard/Library/History reading `listening_progress` and `activity_intervals`
   (Dashboard still reads legacy `listening_sessions`); the account-wide cross-session
   union of activity time; `activity_local_date` day-bucketing (the timezone is sent and
-  fingerprinted but not stored).
+  fingerprinted but not stored). → All four shipped in Phase 6 (below). Local-day bucketing
+  landed in the Phase 6 correction pass, as per-batch dates on `activity_flush_log`.
 
 ### Phase 6 — Dashboard, Library, History rewrite
 
@@ -4552,6 +4574,108 @@ Deviations from the task list above, with reasons:
 - **Test:** new `src/__tests__/dashboard-summary-formulas.test.ts` seeding fixtures across all
   D5/D8/D9/D10 defect scenarios *and* the review's R11/R16 scenarios (in-progress+completed
   coexisting, cross-session time dedup) to lock in the corrected formulas.
+
+**Implementation status (Phase 6 pass) — operational procedure in `supabase/PHASE6_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes (uncommitted) | `040_phase6_library_history_reports.sql`; routes `GET /api/videos/library`, `DELETE /api/videos/library/[videoId]`, `POST /api/videos/[videoId]/mode`, `GET /api/history/sessions`; rewritten `GET /api/dashboard/summary` and `GET /api/streak`; extended `GET /api/session/resume` (`listening`, `lastMode`, round `progress`) and `GET /api/session/[id]/report` (`round` = whole-round report); membership writes in `POST /api/video/resolve`, save-progress/practice-attempt (first round) and Listening sync; queries `videoLibrary.ts`, `historySessions.ts`, `roundReport.ts`, `learningInvalidation.ts`; `LibraryCard`, `RoundReportPanel` (shared by the practice page and `/results/[roundId]`), `PracticeReportView`, `useReportViewLayout`, `useListeningResume`; video-first Dashboard; History sessions view (Mistakes kept); coverage readout in `ControlBar`; operator SQL `supabase/phase6/00–02` |
+| Unit / route / component verified | Yes (mocked network) | Phase 6 routes 12, Dashboard/Library 7, round report + layout 9, History 3, practice-page hooks 8, **the real practice page in report view 7** (`practice-report-layout.test.tsx`: fake YouTube IFrame API, auth and network only), player resume 25, resume route 7, dashboard + streak routes 8, streak rules 13, coordinator 18, Listening route 20; tsc; lint 0 errors (3 pre-existing warnings); build |
+| Real database verified | Yes, locally | 30 tests on disposable PostgreSQL 17.9 (`phase6-library` 18 + `phase6-corrections` 12), upgrading from the production state (001–038 with legacy history seeded before the real cutover, activated, 039 with pre-040 activity) to 040, incl. the operator scripts as written and concurrent removal races. Full suite with the local DB: see the runbook §10 |
+| Supabase HTTP verified | No | — |
+| Browser / iPhone verified | No | runbook §8 |
+| Applied to the user's project | No | — |
+| Deployed | No | — |
+
+Already shipped by earlier phases and reused, not rebuilt: `POST /api/session/restart` →
+`fn_restart_round` (abandon + force-close the study session + next round, Phase 3); the
+nullable `round` (`session`) in the resume response (Phase 0); the Listening progress read and
+the app-wide flush coordinator (Phase 5).
+
+Deviations from the task list above, with reasons:
+- **Migration `040` was needed.** `user_videos` had no writer after the 027 backfill (every
+  video first used after Phase 1 was missing from the Library), `fn_round_progress` is
+  internal, and the Library/Dashboard/History/report aggregates (latest-per-sentence,
+  first-coverage attribution, interval unions, Azure/Word Match separation) must be computed
+  once, server-side, without shipping every attempt to the browser. Reads are SECURITY DEFINER,
+  `auth.uid()`-scoped, `authenticated`-only; no historical row is rewritten.
+- **Membership model (corrected before rollout).** Only an explicit Add (Add Video) restores a
+  video the user removed. A mode switch, practice in any mode, Listening, reads and the
+  reconciliation never do.
+  - Where the mode lives: on the membership, or on the removal marker
+    (`user_video_removals.last_mode`) while the video is removed. An explicit Add carries it
+    back.
+  - Never-removed videos still join the Library automatically on genuine first use.
+  - Re-adding a removed video creates a new membership (`added_at` = re-add time) whose
+    rounds, reports and Listening history reappear. Repeated Add is idempotent.
+  - All membership writers take one per-(user, video) lock, so a removal racing a delayed write
+    always wins. The reconciliation locks both tables while it runs.
+  - A Library read never writes. Gaps from before Phase 6 are closed by a one-time, idempotent,
+    operator-run reconciliation (`02_reconcile_membership.sql`, after the deploy). Its
+    `gap_before` may be 0; `gap_after = 0` means no eligible missing membership remains,
+    excluding removed videos.
+- **Round details** load through the report route by an explicit, owned round id
+  (`["round-report", userId, roundId]`) instead of `GET /api/session/resume?roundId=` — the
+  report already carries the round, its pinned transcript's sentence texts and every metric.
+- **`src/lib/queries/practiceRound.ts` was not created**: the practice page keeps its current-round
+  state in `useDictationSession` (seeded from the resume response, now incl. `progress`); a
+  second cached copy would compete with it.
+- **Listening and the round checkpoint are independent.** Listening resumes from
+  `listening_progress.last_position_sec` for the revision on screen, never writes the round's
+  sentence checkpoint and never creates a round (a Listening-only visit stays round-less;
+  switching to Dictation/Shadowing creates the round at the selected sentence). Revisions: the
+  practice page shows one transcript for every mode (the round's pin, else current); the Library
+  reports Listening against the current revision (§10.2), so Listening accrued under an older
+  pinned revision shows "Previously listened (script updated)", never "Not started"; no
+  revision's timestamp is applied to another, and no round is re-pinned.
+- **In-progress videos** count an active round only once it has valid practice (a fresh
+  "Practice again" round or an old Listening-created round with no answers is not "in
+  progress"). **Sentence accuracy** on the Dashboard counts only latest answers written by the
+  verified writer (unverified legacy latest answers are reported as `excludedUnverified`).
+- **Streaks (corrected before rollout)** count **local calendar days** with practice in any
+  mode (answers, takes, activity intervals incl. Listening).
+  - Each activity batch is dated in the IANA timezone the client captured when it sealed the
+    batch, by when the activity happened.
+  - Answers/takes are dated in their own study session's zone.
+  - "Today" is the viewer's local date (`?tz=`).
+  - Calendar arithmetic, so DST is safe.
+  - The header and the Dashboard share one loader.
+  - Historical records and batches without a valid zone keep their **UTC** date (labeled
+    `utcFallbackDays` / `streakIncludesUtcFallback`). No past zone is guessed, and nothing is
+    re-bucketed.
+- **Whole-round report (agreed in the Phase 6 brief).** Root cause of the mixed-scope completion
+  card: accuracy and "N attempts" were round-wide (server-seeded) while best streak, "first try"
+  (÷ `segments.length`) and the mistakes list were page-local React state that reset every
+  visit. Replaced by one server contract (`fn_round_report`) rendered by one component in both
+  places. Definitions: sentence accuracy = latest Dictation answer per practiced sentence; first
+  try = first recorded answer (only when the round's history is complete — verified, no legacy
+  answers; otherwise "Not enough historical data"), hinted first answers counted separately,
+  unknown hint stays unknown; answers submitted = stored logical submissions (retries once);
+  still needs review = latest incorrect; corrected = latest correct after a recorded incorrect;
+  best run = longest run of consecutive correct answers over the whole round, labeled "not your
+  daily streak", omitted when unprovable; Dictation denominators = Dictation-practiced sentences
+  (mixed rounds). Layout: reaching the end (or "View round results") makes the report the main
+  content — the practice area stays mounted but hidden (no second player, no autoplay), the side
+  panel collapses and is restored exactly on return (the user's own choice is never
+  overwritten), "Open script" shows it, one scroll area; actions: review a sentence (selects it,
+  no playback, no write, no new round), continue in another mode (visible switch, D17), Full
+  report, Library, "Practice again (new round)" (confirmed). A completed round reopens as
+  completed; only that explicit action creates a round.
+- **Report layout verified on the real page (correction pass).** `practice-report-layout.test.tsx`
+  renders the actual practice page and exercises nine scenarios through rendered controls:
+  - completion from active practice, and a reloaded completed round;
+  - Open/close script, and return with the panel open or closed;
+  - mode switch, sentence review, and no Restart/round/answer writes;
+  - playback stopping.
+
+  It caught one production defect: "View round results" opened the report (hiding the player)
+  without pausing it, so a playing video kept playing out of sight and kept crediting
+  playback/activity. Fixed: the page now pauses whenever the report is open, however it was
+  opened. jsdom can't verify CSS layout, scrolling or iPhone rendering; those stay on the
+  runbook §8 checklist.
+- **Explicitly deferred:** Library "Practice again" from the card
+  (it lives in the practice page's results); Shadowing summary reports/retention (track "SS");
+  AI-generated summaries; Script Versions (Phase 9).
 
 ### Phase 7 — retired (merged into Phase 1, R21)
 
@@ -4580,7 +4704,7 @@ underneath (Phase 0) is a true, standalone prerequisite; the rest of this phase'
 needs Phase 1 too, which is why the dependency graph below draws an edge from Phase 1, not only
 Phase 0.
 
-- **Migrate:** `NNN_fn_delete_transcript_revision.sql` (next free number; renumbered from 038, then 039) — creates the function, fully specified, with
+- **Migrate:** `NNN_fn_delete_transcript_revision.sql` (next free number — `041` or later; renumbered from 038, 039, then past 040) — creates the function, fully specified, with
   **no `EXECUTE` grant to any application role** (§6.9/§8.16 — deletion is unreachable in v1, not
   merely disabled behind a flag).
 - **New:** `src/app/api/transcripts/[videoId]/versions/route.ts` (`GET`),

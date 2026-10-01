@@ -25,7 +25,7 @@ const attempts = [
 
 function builder(result: unknown) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "order", "limit"]) b[m] = () => b;
+  for (const m of ["select", "eq", "is", "order", "limit"]) b[m] = () => b;
   b.maybeSingle = async () => result;
   b.then = (res: (v: unknown) => unknown) => Promise.resolve(result).then(res);
   return b;
@@ -35,7 +35,12 @@ jest.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: { getUser: async () => ({ data: { user: { id: "user-1" } } }) },
     from: (table: string) =>
-      table === "attempt_logs" ? builder({ data: attempts, error: null }) : builder({ data: round, error: null }),
+      table === "attempt_logs"
+        ? builder({ data: attempts, error: null })
+        : table === "learning_sessions"
+          ? builder({ data: round, error: null })
+          : builder({ data: null, error: null }),
+    rpc: async () => ({ data: null, error: null }),
   }),
 }));
 

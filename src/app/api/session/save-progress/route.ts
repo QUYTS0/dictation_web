@@ -89,7 +89,17 @@ export async function POST(request: NextRequest) {
       p_video_current_time_sec: timeSec,
     });
     if (error || !data) return mapPracticeWriteError(supabase, error, "Failed to save session");
-    const result = data as { roundId: string; roundStatus: string };
+    const result = data as { roundId: string; roundStatus: string; created?: boolean };
+    // Starting a video's first round puts it in the Library (Phase 6) — for
+    // videos opened without Add Video (a shared or typed link). Implicit:
+    // never re-adds a video the user removed.
+    if (result.created) {
+      const { error: membershipError } = await supabase.rpc("fn_library_add_video", {
+        p_youtube_video_id: youtubeVideoId,
+        p_explicit: false,
+      });
+      if (membershipError) console.error("[save-progress] library membership error:", membershipError);
+    }
     return NextResponse.json<SaveProgressResponse>({ sessionId: result.roundId, status: result.roundStatus });
   } catch (err) {
     console.error("[save-progress] unexpected error:", err);

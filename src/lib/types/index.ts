@@ -131,6 +131,8 @@ export interface ResolveVideoResponse {
   videoId: string;
   status: "ok" | "error";
   message?: string;
+  /** Signed-in callers: whether this call created the Library card (false = it already existed). */
+  libraryAdded?: boolean;
 }
 
 export interface TranscriptResponse {
@@ -307,6 +309,17 @@ export interface SaveProgressResponse {
 }
 
 export interface ResumeSessionResponse {
+  /** Phase 6: the last EXPLICIT mode switch for this video (any device); null = never switched. */
+  lastMode?: "dictation" | "listening" | "shadowing" | null;
+  /** Phase 6: Listening for the video's current revision, independent of any round. */
+  listening?: {
+    transcriptId: string | null;
+    coverageRatio: number | null;
+    listenedThrough: boolean;
+    lastPositionSec: number | null;
+    /** Listening exists under ANY revision (possibly not the current one). */
+    hasHistory: boolean;
+  };
   session: {
     sessionId: string;
     currentSegmentIndex: number;
@@ -327,6 +340,8 @@ export interface ResumeSessionResponse {
     /** Latest Dictation result per practiced sentence of this round — seeds
      *  the client's sentence-accuracy map on resume. */
     latestDictationResults?: Array<{ segmentIndex: number; isCorrect: boolean }>;
+    /** Phase 6: the round's server-side progress (null if unavailable). */
+    progress?: RoundProgress | null;
   } | null;
 }
 
@@ -354,27 +369,6 @@ export interface ResumeListeningSessionResponse {
     updatedAt: string;
     status: "active" | "completed" | "abandoned";
   } | null;
-}
-
-// ---- Shared "resumable session" shape for Dashboard/History (either mode) ----
-
-export interface ResumableSession {
-  sessionId: string;
-  mode: "dictation" | "listening";
-  videoId: string;
-  videoTitle: string | null;
-  updatedAt: string;
-  status: "active" | "completed" | "abandoned";
-  /** Dictation rounds only: 'legacy_unverified' for rounds from before the
-   *  Phase 3 cutover (their completion is shown as unverified history). */
-  provenance?: "current" | "legacy_unverified";
-  /** Dictation-only — undefined for listening sessions. */
-  accuracy?: number;
-  currentSegmentIndex?: number;
-  totalAttempts?: number;
-  mistakesCount?: number;
-  /** Listening-only — undefined for dictation sessions. */
-  videoCurrentTimeSec?: number;
 }
 
 // ---- Session results / report ----
@@ -410,6 +404,8 @@ export interface SessionReportResponse {
   };
   errorBreakdown: Array<{ errorType: ErrorType; count: number; percentage: number }>;
   mistakes: SessionReportMistake[];
+  /** Phase 6: the whole-round report (every metric, all study sessions of this round). */
+  round: import("./learning").RoundReport;
 }
 
 export type SessionExplainAllItemStatus = "explained" | "duplicate" | "minor";

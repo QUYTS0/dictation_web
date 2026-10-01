@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { dashboardKeys } from "@/lib/queries/dashboard";
+import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import { listeningProgressKeys } from "@/lib/queries/listeningProgress";
+import { videoLibraryKeys } from "@/lib/queries/videoLibrary";
 import { LISTENING, type Interval, type ListeningProgressResponse, type ListeningSyncResponse } from "@/lib/practice/listeningTypes";
 
 /**
@@ -26,10 +27,13 @@ import { LISTENING, type Interval, type ListeningProgressResponse, type Listenin
  *    dropped when that user signs out.
  *  - A trigger that arrives while a send is in flight waits for it (instead
  *    of concluding "nothing to do") and then sends whatever is left.
- *  - Navigation / visibility / sign-out flushes invalidate the Dashboard only
- *    AFTER the write succeeded; the Listening progress query is patched from
- *    each sync response (any in-flight read of it is cancelled first, so an
- *    older read can't overwrite the patch).
+ *  - Navigation / visibility / sign-out flushes invalidate the Dashboard,
+ *    Library and History (Phase 6) only AFTER the write succeeded — including
+ *    a send that was already in flight when navigation happened — so a
+ *    destination page never caches pre-flush data. The Listening progress
+ *    query is patched from each sync response (any in-flight read of it is
+ *    cancelled first, so an older read can't overwrite the patch), and the
+ *    Library is marked stale whenever coverage or the checkpoint changed.
  *  - The unsent QUEUE is bounded to MAX_PENDING_BUFFER_SEC of Listening
  *    media time: when more accumulates (sustained failure), the oldest
  *    batches are dropped. This bounds memory, not total loss — while the
@@ -301,12 +305,21 @@ export class PracticeFlushCoordinator {
       lastPositionSec: Number(data.lastPositionSec ?? prev?.lastPositionSec ?? 0),
       hasHistory: data.hasHistory ?? true,
     });
-    if (listenedThrough && !prev?.listenedThrough) this.invalidateDashboard(identity.userId);
+    if (listenedThrough && !prev?.listenedThrough) {
+      this.invalidateDashboard(identity.userId);
+    } else if (
+      !prev ||
+      prev.coverageRatio !== Number(data.coverageRatio) ||
+      prev.lastPositionSec !== Number(data.lastPositionSec ?? prev.lastPositionSec)
+    ) {
+      // Partial Listening progress shows on the Library card (coverage, resume point).
+      if (identity.userId === this.authUserId) void qc.invalidateQueries({ queryKey: videoLibraryKeys.allForUser(identity.userId) });
+    }
   }
 
   private invalidateDashboard(userId: string): void {
     if (!this.queryClient || userId !== this.authUserId) return;
-    void this.queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
+    invalidateLearningViews(this.queryClient, userId);
   }
 }
 

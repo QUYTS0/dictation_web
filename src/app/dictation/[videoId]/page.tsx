@@ -24,14 +24,13 @@ import {
   Columns2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import YouTubePlayer from "@/components/YouTubePlayer";
 import UserButton from "@/components/UserButton";
-import VocabularySaveButton from "@/components/VocabularySaveButton";
 import { StatusCard } from "@/components/StatusCard";
 
 import { usePlayerStore } from "@/store/playerStore";
-import { useSessionStore, selectAccuracy } from "@/store/sessionStore";
 import { useAuth, useRequireAuth } from "@/context/auth";
 import { useManualTranscriptPaste } from "./useManualTranscriptPaste";
 import { useSrtTranscriptUpload } from "./useSrtTranscriptUpload";
@@ -85,6 +84,12 @@ import { useListeningCoverage } from "./useListeningCoverage";
 import { useActivityPulse } from "./useActivityPulse";
 import { usePracticeActivitySources } from "./usePracticeActivitySources";
 import { ListeningCoverageLine } from "./components/ListeningCoverageLine";
+import { PracticeReportView } from "./components/PracticeReportView";
+import { useReportViewLayout } from "./useReportViewLayout";
+import { useListeningResume } from "./useListeningResume";
+import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
+import { persistLastMode, videoLibraryKeys } from "@/lib/queries/videoLibrary";
+import type { InputMode } from "./types";
 
 // ---- Page component ----
 
@@ -99,11 +104,6 @@ export default function DictationPage({ params }: PageProps) {
 
   // Stores
   const playerStore = usePlayerStore();
-  const sessionStore = useSessionStore();
-  // Legacy attempt-based answer accuracy (correct submissions ÷ all
-  // submissions) — only used for the "vs your last run" comparison, whose
-  // baseline is stored with that same meaning.
-  const answerAccuracy = selectAccuracy(sessionStore);
   // Local state
   const [showLearningPanel, setShowLearningPanel] = useState(true);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("script");
@@ -127,7 +127,8 @@ export default function DictationPage({ params }: PageProps) {
     score: number | null;
     feedbackTitle: string | null;
   } | null>(null);
-  const { inputMode, setInputMode } = useInputModePreference(videoId);
+  const { inputMode, setInputMode, applyServerMode } = useInputModePreference(videoId);
+  const queryClient = useQueryClient();
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -149,11 +150,7 @@ export default function DictationPage({ params }: PageProps) {
     hintLevel,
     setHintLevel,
     combo,
-    bestCombo,
-    cleanSolveCount,
     isLastResultClean,
-    previousRunSnapshot,
-    mistakes,
     resumeState,
     resumeLoading,
     previousReview,
@@ -190,7 +187,22 @@ export default function DictationPage({ params }: PageProps) {
     handleRegenerateTranscript,
     jumpToSegment,
     handleActiveSegmentChange,
-  } = useDictationSession({ videoId, user, autoEnterPaused: inputMode !== "dictation" });
+    restoreListeningPosition,
+    reviewSegment,
+    exitCompletedView,
+  } = useDictationSession({
+    videoId,
+    user,
+    autoEnterPaused: inputMode !== "dictation",
+    inputMode,
+    onServerLastMode: applyServerMode,
+  });
+
+  // Round results as the page's main content (plan Phase 6 §9).
+  const { reportOpen, openReport, closeReport, openScript } = useReportViewLayout({
+    showPanel: showLearningPanel,
+    setShowPanel: setShowLearningPanel,
+  });
 
   const currentSegment = segments[currentSegIdx];
 
@@ -249,6 +261,58 @@ export default function DictationPage({ params }: PageProps) {
     },
     [onListeningSample, noteInteraction]
   );
+  // Listening resume (Phase 6): the first Play/Space starts at the saved
+  // Listening checkpoint of the revision on screen (see useListeningResume).
+  useListeningResume({
+    inputMode,
+    userId: user?.id,
+    videoId,
+    transcriptId,
+    uxState,
+    progress: listeningCoverage.progress,
+    restoreListeningPosition,
+  });
+
+  // Results belong to one account's round of one video — another video or
+  // account never inherits an open results view.
+  useEffect(() => {
+    closeReport();
+  }, [videoId, user?.id, closeReport]);
+
+  // Reaching the end of the lesson opens the round results.
+  const previousUxStateRef = useRef(uxState);
+  useEffect(() => {
+    if (uxState === "session_completed" && previousUxStateRef.current !== "session_completed") {
+      openReport();
+    }
+    previousUxStateRef.current = uxState;
+  }, [uxState, openReport]);
+  // The report hides the player, however it was opened (end of the lesson,
+  // "View round results"): it must never keep playing out of sight — no
+  // unseen audio, no playback ticks crediting Listening or activity time.
+  useEffect(() => {
+    if (reportOpen) ytPlayerRef.current?.pauseVideo();
+  }, [reportOpen, ytPlayerRef]);
+
+  // An EXPLICIT mode switch: always visible (leaves the results / end-of-round
+  // state — D17) and saved as this video's last mode for any device. It
+  // creates no practice credit and no activity pulse.
+  const handleSelectInputMode = useCallback(
+    (mode: InputMode) => {
+      closeReport();
+      exitCompletedView();
+      if (mode === inputMode) return;
+      setInputMode(mode);
+      if (user) {
+        const uid = user.id;
+        void persistLastMode(videoId, mode).then((ok) => {
+          if (ok) void queryClient.invalidateQueries({ queryKey: videoLibraryKeys.allForUser(uid) });
+        });
+      }
+    },
+    [closeReport, exitCompletedView, inputMode, setInputMode, user, videoId, queryClient]
+  );
+
   //  2–4. Answer input, hint use and running recordings.
   usePracticeActivitySources({
     noteInteraction,
@@ -288,10 +352,22 @@ export default function DictationPage({ params }: PageProps) {
   // Phase 4: every finished take is saved as practice right away, then its
   // Word Match; Pronunciation needs the saved attempt's id.
   const [shadowingRoundCompleted, setShadowingRoundCompleted] = useState(false);
+  // A saved Azure / Word Match result changes the round report and the
+  // Dashboard's Shadowing aggregates.
+  const refreshShadowingAggregates = useCallback(() => {
+    if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [getRoundContext().roundId] });
+  }, [user, queryClient, getRoundContext]);
+  const handleWordMatchPersisted = useCallback(
+    (...args: Parameters<typeof setWordMatchPersisted>) => {
+      setWordMatchPersisted(...args);
+      refreshShadowingAggregates();
+    },
+    [setWordMatchPersisted, refreshShadowingAggregates]
+  );
   const recordings = useShadowingRecordings({
     getRoundContext,
     applyRoundUpdate: applyShadowingRoundUpdate,
-    onWordMatchPersisted: setWordMatchPersisted,
+    onWordMatchPersisted: handleWordMatchPersisted,
     onScorePersistence: setTrueEvaluationPersistence,
     onRoundCompleted: () => setShadowingRoundCompleted(true),
   });
@@ -607,6 +683,7 @@ export default function DictationPage({ params }: PageProps) {
         if (persistence === "unsaved" && d.recoveryToken) {
           recordings.rememberRecovery(d.attemptId, d.recoveryToken, origin, segmentIndex);
         }
+        if (persistence === "saved") refreshShadowingAggregates();
         if (!wasViewingEvaluationTab) {
           const isMobileViewport = typeof window !== "undefined" && !window.matchMedia("(min-width: 768px)").matches;
           if (isMobileViewport) {
@@ -632,8 +709,10 @@ export default function DictationPage({ params }: PageProps) {
         // The take was forgotten meanwhile (reset) — nothing to update.
         if (waited.kind !== "cancelled" && recordings.view(clipId) === null) return;
         applyStoredEvaluationWait(waited, outcome.attemptId, {
-          complete: (dto) =>
-            completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" }),
+          complete: (dto) => {
+            completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" });
+            refreshShadowingAggregates();
+          },
           fail: (message) => failTrueEvaluation(origin, segmentIndex, message),
           updated: () => {
             if (rightPanelTabRef.current !== "evaluation") setHasUnreadEvaluation(true);
@@ -656,6 +735,7 @@ export default function DictationPage({ params }: PageProps) {
     startTrueEvaluation,
     completeTrueEvaluation,
     failTrueEvaluation,
+    refreshShadowingAggregates,
   ]);
 
   // Score badge / mobile "View details" — opens the Evaluation tab without
@@ -759,6 +839,28 @@ export default function DictationPage({ params }: PageProps) {
     noteInteraction();
     void handleAnswerSubmit(trimmed);
   }, [handleAnswerSubmit, workspaceInputValue, noteInteraction]);
+
+  // ---- Round results actions ----
+  const handleReviewSentence = useCallback(
+    (segIdx: number) => {
+      closeReport();
+      reviewSegment(segIdx);
+    },
+    [closeReport, reviewSegment]
+  );
+  const handleBackToPractice = useCallback(() => {
+    closeReport();
+    exitCompletedView();
+  }, [closeReport, exitCompletedView]);
+  const handleOpenScript = useCallback(() => {
+    setRightPanelTab("script");
+    openScript();
+  }, [openScript]);
+  const handlePracticeAgain = useCallback(() => {
+    if (!window.confirm("Start a new round of this video? This round's results stay in your history.")) return;
+    closeReport();
+    handleRestart();
+  }, [closeReport, handleRestart]);
 
   // Listening Mode's Play/Pause control — toggles the actual player state
   // directly (no seeking), so pausing always preserves the current timestamp.
@@ -1177,11 +1279,10 @@ export default function DictationPage({ params }: PageProps) {
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
           className={clsx(
             "flex flex-col md:min-h-0 md:overflow-y-auto md:overflow-x-hidden lg:h-full lg:min-w-0 lg:flex-1 lg:overflow-hidden",
-            !isPracticing && "md:flex-1",
+            (!isPracticing || reportOpen) && "md:flex-1",
             isZenMode && "z-50"
           )}
         >
-          <div className={clsx("flex flex-col gap-2 pt-2 lg:pt-3", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0")}>
           <SettingsDrawer
             open={showSettingsDrawer}
             onClose={() => setShowSettingsDrawer(false)}
@@ -1198,7 +1299,7 @@ export default function DictationPage({ params }: PageProps) {
             practiceMode={practiceMode}
             setPracticeMode={setPracticeMode}
             inputMode={inputMode}
-            onSelectInputMode={setInputMode}
+            onSelectInputMode={handleSelectInputMode}
             soundEnabled={soundEnabled}
             onToggleSound={() => setSoundEnabled(!soundEnabled)}
             autoWordMatch={autoWordMatch}
@@ -1220,6 +1321,13 @@ export default function DictationPage({ params }: PageProps) {
             srtUploadError={srtUploadError}
           />
 
+          {/* The practice area stays MOUNTED while the results are shown (no
+              second player instance, no lost playhead) — only hidden. */}
+          <div
+            className={clsx("flex flex-col gap-2 pt-2 lg:pt-3", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0", reportOpen && "hidden")}
+            data-testid="practice-area"
+            aria-hidden={reportOpen || undefined}
+          >
           <DefaultLayout
             isZenMode={isZenMode}
             showVideo={showVideo}
@@ -1265,7 +1373,7 @@ export default function DictationPage({ params }: PageProps) {
             onRestoreConsumed={consumeRestoredInputState}
             onInputStateChange={reportInputState}
             inputMode={inputMode}
-            onSelectInputMode={setInputMode}
+            onSelectInputMode={handleSelectInputMode}
             isVideoPlaying={isVideoPlaying}
             onTogglePlayback={handleTogglePlayback}
             currentTimeSec={playerStore.currentTimeSec}
@@ -1289,12 +1397,49 @@ export default function DictationPage({ params }: PageProps) {
             listeningStatus={
               <ListeningCoverageLine signedIn={!!user} hasTranscript={!!transcriptId} progress={listeningCoverage.progress} />
             }
+            practiceProgress={
+              roundState.progress?.requiredSentenceCount
+                ? { covered: roundState.progress.coveredSentences.overall, required: roundState.progress.requiredSentenceCount }
+                : null
+            }
           />
           </div>
 
-          {(!isPracticing || isZenMode) && (
-          <div className={clsx("py-3", !isPracticing && "lg:min-h-0 lg:flex-1 lg:overflow-y-auto")}>
-          <div className="bg-[var(--surface)] backdrop-blur-xl border border-[var(--border)] rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-300 ease-out text-[var(--text)]">
+          {(!isPracticing || isZenMode || reportOpen) && (
+          <div className={clsx("py-3", (!isPracticing || reportOpen) && "lg:min-h-0 lg:flex-1 lg:overflow-y-auto")}>
+          <div className="relative overflow-hidden bg-[var(--surface)] backdrop-blur-xl border border-[var(--border)] rounded-3xl p-4 flex flex-col gap-3 shadow-xl transition-all duration-300 ease-out text-[var(--text)]">
+
+            {reportOpen && (
+              <>
+                {roundState.completedByThisPage && <ConfettiBurst />}
+                <PracticeReportView
+                  userId={user?.id}
+                  roundId={user ? currentRoundId : null}
+                  videoTitle={workspaceTitle}
+                  inputMode={inputMode}
+                  onReviewSentence={handleReviewSentence}
+                  onSwitchMode={handleSelectInputMode}
+                  onBackToPractice={handleBackToPractice}
+                  onOpenScript={handleOpenScript}
+                  onPracticeAgain={handlePracticeAgain}
+                  restartError={restartError}
+                  guestFallback={
+                    <div className="flex flex-col gap-2 text-sm text-[var(--text-muted)]">
+                      <p>
+                        Sentence accuracy this visit:{" "}
+                        <span className="font-semibold text-[var(--text)]">
+                          {sentenceAccuracy.percent === null ? "—" : `${sentenceAccuracy.percent}%`}
+                        </span>{" "}
+                        ({sentenceAccuracy.correct}/{sentenceAccuracy.practiced} sentences correct on your latest answer).
+                      </p>
+                      <p>Sign in to save your progress and keep a full report of every round.</p>
+                    </div>
+                  }
+                />
+              </>
+            )}
+            {!reportOpen && (
+            <>
 
             {uxState === "loading_transcript" && (
               <StatusCard icon="⏳" title="Loading transcript…" description="Fetching transcript from the database." />
@@ -1413,20 +1558,24 @@ export default function DictationPage({ params }: PageProps) {
                   <>
                     <p className="text-sm text-[var(--text-muted)]">
                       {resumeState.provenance === "legacy_unverified"
-                        ? "You finished this video before completion tracking was verified"
-                        : "You already completed this video"}{" "}
-                      — <span className="font-semibold">{resumeState.accuracy}% of answers correct</span> over{" "}
-                      {resumeState.totalAttempts} {resumeState.totalAttempts === 1 ? "attempt" : "attempts"}.
+                        ? "You finished this video before completion tracking was verified."
+                        : "You completed this round. Reopening it never restarts it — review it, practice more in it, or start a new round."}
                     </p>
-                    <div className="flex items-center gap-3 mt-1">
-                      <Link
-                        href={`/results/${resumeState.sessionId}`}
+                    <div className="mt-1 flex flex-wrap items-center gap-3">
+                      <button
+                        onClick={openReport}
                         className="px-6 py-2 rounded-xl bg-[var(--accent)] text-[#1a1206] font-semibold text-sm hover:brightness-110 transition-colors"
                       >
-                        View Results
-                      </Link>
-                      <button onClick={handleRestart} className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors">
-                        Practice Again
+                        View round results
+                      </button>
+                      <button
+                        onClick={() => reviewSegment(Math.min(Math.max(resumeState.currentSegmentIndex, 0), segments.length - 1))}
+                        className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors"
+                      >
+                        Review sentences
+                      </button>
+                      <button onClick={handlePracticeAgain} className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors">
+                        Practice again (new round)
                       </button>
                     </div>
                   </>
@@ -1476,98 +1625,20 @@ export default function DictationPage({ params }: PageProps) {
             </AnimatePresence>
 
             {uxState === "session_completed" && (
-              <div className="relative overflow-hidden rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] backdrop-blur-md p-6 flex flex-col gap-4 mt-6">
-                {/* Whether the ROUND is complete is the server's call (every
-                    eligible sentence practiced — Phase 3). The celebration only
-                    fires when a submission from this page completed it, so a
-                    retry or a reload never celebrates twice. Without a server
-                    status (guest / preparation release) the previous
-                    end-of-video behavior applies. */}
-                {(roundState.status
-                  ? roundState.completedByThisPage
-                  : mistakes.length === 0 || (previousRunSnapshot && answerAccuracy > previousRunSnapshot.accuracy)) && <ConfettiBurst />}
-                <div className="text-center">
-                  <p className="text-3xl">{roundState.status && roundState.status !== "completed" ? "🏁" : "🎉"}</p>
-                  <p className="text-[var(--accent)] font-bold text-xl">
-                    {roundState.status === "completed"
-                      ? "Round complete!"
-                      : roundState.status
-                        ? "You reached the end of the video"
-                        : "Session Complete!"}
-                  </p>
-                  {roundState.status && roundState.status !== "completed" && roundState.progress?.requiredSentenceCount ? (
-                    <p className="text-[var(--text-muted)] text-sm mt-1">
-                      {roundState.progress.coveredSentences.overall} of {roundState.progress.requiredSentenceCount} sentences practiced —
-                      practice the skipped ones to complete this round.
-                    </p>
-                  ) : null}
-                  <p className="text-[var(--text-muted)] text-sm mt-1">
-                    Sentence accuracy:{" "}
-                    <span className="font-bold text-[var(--text)]">
-                      {sentenceAccuracy.percent === null ? "—" : `${sentenceAccuracy.percent}%`}
-                    </span>{" "}
-                    ({sentenceAccuracy.correct}/{sentenceAccuracy.practiced} sentences correct on your latest answer) ·{" "}
-                    {sessionStore.totalAttempts} {sessionStore.totalAttempts === 1 ? "attempt" : "attempts"}.
-                  </p>
-                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs font-semibold">
-                    {bestCombo > 1 && (
-                      <span className="rounded-full bg-[var(--red)]/15 px-3 py-1 text-[var(--red)]">
-                        🔥 Best streak: {bestCombo} in a row
-                      </span>
-                    )}
-                    <span className="rounded-full bg-[var(--accent)]/20 px-3 py-1 text-[var(--accent)]">
-                      ⚡ {cleanSolveCount}/{segments.length} sentences on the first try
-                    </span>
-                    {previousRunSnapshot && (
-                      <span
-                        className={clsx(
-                          "rounded-full px-3 py-1",
-                          answerAccuracy > previousRunSnapshot.accuracy
-                            ? "bg-[var(--green)]/20 text-[var(--green)]"
-                            : "bg-[var(--surface-2)] text-[var(--text-muted)]"
-                        )}
-                      >
-                        {answerAccuracy > previousRunSnapshot.accuracy
-                          ? `+${answerAccuracy - previousRunSnapshot.accuracy}%`
-                          : answerAccuracy < previousRunSnapshot.accuracy
-                          ? `${answerAccuracy - previousRunSnapshot.accuracy}%`
-                          : "Same as"}{" "}
-                        answers correct vs your last run ({previousRunSnapshot.accuracy}%)
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {mistakes.length > 0 ? (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-[var(--text)] font-semibold text-sm">Mistakes ({mistakes.length} sentence{mistakes.length !== 1 ? "s" : ""}):</p>
-                    <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
-                      {mistakes.map((m) => (
-                        <div key={m.segIdx} className="bg-[var(--surface-2)] backdrop-blur-md rounded-lg border border-[var(--border)] p-3 flex flex-col gap-1">
-                          <span className="text-xs text-[var(--text-faint)] font-medium">Sentence {m.segIdx + 1}</span>
-                          <span className="text-sm text-[var(--text)]">{m.expectedText}</span>
-                          <span className="text-xs text-[var(--red)]">You typed: {m.userText || <span className="italic text-[var(--text-faint)]">nothing</span>}</span>
-                          <VocabularySaveButton videoId={videoId} segmentIndex={m.segIdx} sentenceContext={m.expectedText} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[var(--green)] text-sm font-medium text-center">Perfect session - no mistakes!</p>
-                )}
-                <div className="mt-2 flex items-center justify-center gap-3">
-                  {sessionStore.sessionId && (
-                    <Link
-                      href={`/results/${sessionStore.sessionId}`}
-                      className="rounded-xl border border-[var(--accent-border)] text-[var(--accent)] px-6 py-2 font-semibold hover:bg-[var(--accent-soft)] transition-colors text-center"
-                    >
-                      View full report
-                    </Link>
-                  )}
-                  <Link href="/" className="rounded-xl bg-[var(--accent)] text-[#1a1206] px-6 py-2 font-semibold hover:brightness-110 transition-colors text-center">
-                    Try another video
-                  </Link>
-                </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+                <p className="text-sm font-semibold text-[var(--accent)]">
+                  {roundState.status === "completed" ? "Round complete" : "You reached the end of the video"}
+                </p>
+                <button
+                  type="button"
+                  onClick={openReport}
+                  className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#1a1206] hover:brightness-110"
+                >
+                  View round results
+                </button>
               </div>
+            )}
+            </>
             )}
           </div>
           </div>

@@ -1,36 +1,26 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { computeStreakDays } from "@/lib/utils/streak";
+import { loadActivityStreak, viewerTimeZoneFrom } from "@/lib/supabase/activityStreak";
 
 /**
  * Lightweight streak-only endpoint (vs. the heavier /api/dashboard/summary)
- * so pages like Dictation Mode can surface the daily streak without paying
- * for the vocabulary/recent-videos/mistakes queries that page doesn't need.
+ * so the practice page can show the daily learning streak. Same source and
+ * rule as the Dashboard (loadActivityStreak): calendar days with practice in
+ * any mode — local dates per activity batch, UTC for older records —
+ * counted back from the viewer's local today (`?tz=`, IANA; UTC fallback).
+ * A read: it never records activity.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
-    if (!user) {
-      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-    }
-
-    const { data: attempts, error } = await supabase
-      .from("attempt_logs")
-      .select("created_at, learning_sessions!inner(user_id)")
-      .eq("learning_sessions.user_id", user.id);
-
-    if (error) {
-      console.error("[streak] query error:", error);
-      return NextResponse.json({ error: "Failed to load streak" }, { status: 500 });
-    }
-
-    const streakDays = computeStreakDays((attempts ?? []).map((a) => new Date(a.created_at)));
-
-    return NextResponse.json({ streakDays });
+    const result = await loadActivityStreak(supabase, viewerTimeZoneFrom(request.url));
+    if (!result.ok) return result.response;
+    return NextResponse.json(result.streak);
   } catch (err) {
     console.error("[streak] unexpected error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
