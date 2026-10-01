@@ -231,6 +231,29 @@ function route(path: string, method: string, body: unknown): Response {
       errorType: null,
     });
   if (path === "/api/videos/vid1/mode") return json({ videoId: "vid1", lastMode: (body as { mode: string }).mode, added: false, inLibrary: true });
+  if (path === "/api/transcripts/vid1/versions")
+    return json({
+      videoId: "vid1",
+      language: "en",
+      deletionEnabled: false,
+      retentionGraceDays: 30,
+      revisions: [
+        {
+          transcriptId: "rev-A",
+          version: 1,
+          source: "cache",
+          status: "ready",
+          createdAt: "2026-09-01T00:00:00Z",
+          supersededAt: null,
+          isCurrent: true,
+          sentenceCount: 4,
+          yourRound: { roundId: "round-done", status: "completed", roundNumber: 1 },
+          size: { textBytes: 40, segmentsBytes: 400, translationsBytes: 0, highlightsBytes: 0, filesBytes: 0, totalBytes: 440, estimatedAt: "2026-10-01T00:00:00Z" },
+          retention: { reasons: ["current", "practice_round"], protected: true, eligibleAt: null, inGracePeriod: false, cleanupCandidate: false },
+          eligibleForRemovalBytes: 0,
+        },
+      ],
+    });
   if (path.startsWith("/api/streak")) return json({ streakDays: 3, streakTimeZone: "UTC", streakToday: "2026-10-01", streakIncludesUtcFallback: false });
   if (path.startsWith("/api/study-session/activity") || path.startsWith("/api/listening/sync"))
     return json({ processed: true, studySessionId: "ss-1", attribution: "current" });
@@ -472,5 +495,24 @@ describe("completed-round report on the practice page", () => {
     fireEvent.click(within(view).getByRole("button", { name: /Practice again/ }));
     expect(forbiddenWrites()).toEqual([]);
     expect(reportView()).toBeInTheDocument();
+  });
+
+  it("Phase 9: Settings → Script versions opens the read-only dialog for this video (no write, no delete action)", async () => {
+    resume = roundSession("completed", "round-done");
+    await renderPage();
+    await screen.findByRole("button", { name: "View round results" });
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    const before = calls.length; // the page's own startup loads are not the dialog's
+    fireEvent.click(await screen.findByRole("button", { name: "Script versions" }));
+    const dialog = await screen.findByRole("dialog", { name: "Script versions" });
+    const row = await within(dialog).findByTestId("script-version-1");
+    expect(within(row).getByText("Current")).toBeInTheDocument();
+    expect(within(row).getByText("Showing now")).toBeInTheDocument();
+    expect(within(row).getByText(/Used by your round 1/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /delete/i })).toBeNull();
+    const dialogCalls = calls.slice(before);
+    expect(dialogCalls.filter((c) => c.method !== "GET")).toEqual([]);
+    expect(dialogCalls.map((c) => c.path)).toContain("/api/transcripts/vid1/versions");
+    expect(forbiddenWrites()).toEqual([]);
   });
 });

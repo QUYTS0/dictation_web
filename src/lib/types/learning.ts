@@ -218,3 +218,69 @@ export interface RoundReport {
   activity: ActivitySummary & { unattributedAnswers: number; unattributedTakes: number };
   sentences: ReportSentence[];
 }
+
+// ---- Script Versions (Phase 9, migration 041) ----
+
+/** Why a revision is kept (plan §6.9). Generic labels — never counts or owners. */
+export type RetentionReason =
+  | "current"
+  | "processing"
+  | "practice_round"
+  | "attempts"
+  | "legacy_history"
+  | "listening"
+  | "legacy_listening"
+  | "saved_words";
+
+export interface TranscriptVersion {
+  transcriptId: string;
+  version: number;
+  source: "cache" | "ai" | "manual";
+  status: "processing" | "ready" | "failed";
+  createdAt: string;
+  supersededAt: string | null;
+  isCurrent: boolean;
+  sentenceCount: number;
+  /** The VIEWER's own round pinned to this revision (never another user's). */
+  yourRound: { roundId: string; status: "active" | "completed" | "abandoned"; roundNumber: number } | null;
+  /** Logical row-storage estimate (not index overhead or compression; never "bytes freed"). */
+  size: {
+    textBytes: number | null;
+    segmentsBytes: number | null;
+    translationsBytes: number | null;
+    highlightsBytes: number | null;
+    /** No revision-owned file storage exists — always 0. */
+    filesBytes: number;
+    totalBytes: number | null;
+    estimatedAt: string | null;
+  };
+  retention: {
+    reasons: RetentionReason[];
+    protected: boolean;
+    /** When the grace period ends — only when nothing protects the revision. */
+    eligibleAt: string | null;
+    inGracePeriod: boolean;
+    /** A classification under the retention rules, NOT "deletable now". */
+    cleanupCandidate: boolean;
+  };
+  /** The size estimate for a cleanup candidate, else 0 (derived, never stored). */
+  eligibleForRemovalBytes: number;
+}
+
+export interface TranscriptVersionsResponse {
+  videoId: string;
+  language: string;
+  /** Always false in v1 — no role can execute revision deletion. */
+  deletionEnabled: boolean;
+  retentionGraceDays: number;
+  revisions: TranscriptVersion[];
+}
+
+export interface TranscriptVersionPreview {
+  transcriptId: string;
+  videoId: string;
+  version: number;
+  status: "ready" | "failed";
+  isCurrent: boolean;
+  segments: Array<{ segmentIndex: number; start: number; end: number; text: string }>;
+}

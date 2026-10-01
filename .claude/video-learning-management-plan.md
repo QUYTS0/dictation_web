@@ -1648,7 +1648,7 @@ was originally scheduled before that table existed).
 - **Indexes:** four read indexes.
 
 No historical row or existing grant changed. See `supabase/PHASE6_RUNBOOK.md`. |
-| next free | `NNN_fn_delete_transcript_revision.sql` | 9 | **Renumbered from 038, then from 039, then past 040 (Phases 4, 5 and 6 took them); not created; takes the next free number when implemented** (a lower number created after a higher one is applied would need `db push --include-all`). `SECURITY DEFINER`, row-locked (`FOR UPDATE`, ordinary `READ COMMITTED` — the lock coordinates with publication, not a stricter isolation level, §6.9), checks `learning_sessions.transcript_id` for every round status (R28) — fully specified, but **no `EXECUTE` grant to any application role ships in this migration**: deletion is unreachable by anyone in v1, not merely disabled for videos with vocabulary/bookmark activity (§6.9/§8.16's corrected release gate, issue group 3). **Not created or executed in Phase 2.** |
+| 041 | `041_phase9_script_versions.sql` | 9 | **Implemented (Phase 9 pass), not applied anywhere.** Named for the whole phase because it also carries the listing: `fn_transcript_versions(text, text)` (listing, `authenticated` only); internal `fn_transcript_retention(uuid)` / `fn_refresh_transcript_size_estimate(uuid)`; `fn_delete_transcript_revision(uuid)` fully specified (`SECURITY DEFINER`, `auth.uid()` must be `is_admin`, row-locked `FOR UPDATE`, every direct protection re-checked under the lock) with **EXECUTE revoked from public, anon, authenticated and service_role and no grant** (the v1 gate); five lookup indexes. No existing table, row, function or grant changes. See `supabase/PHASE9_RUNBOOK.md`. |
 
 ### 8.2 `020_transcript_revision_identity.sql`
 
@@ -2638,7 +2638,7 @@ that happened *because* the surviving round was treated as the sole active one i
 (e.g. new attempts recorded against it post-cleanup) — the rollback restores which rows are
 `active`, not the consequences of that period having passed under the new invariant.
 
-### 8.16 `NNN_fn_delete_transcript_revision.sql` (renumbered from 038, then 039, then past 040 — next free number when implemented)
+### 8.16 `fn_delete_transcript_revision` — shipped in `041_phase9_script_versions.sql` (renumbered from 038, then 039, then past 040)
 
 Full logic specified in §6.9: `SECURITY DEFINER` (§9.9), takes only `transcript_id` — actor
 identity is `auth.uid()`, checked against `users.is_admin` inside the function, never a caller-
@@ -4761,6 +4761,45 @@ Phase 0.
   connection since no application role can reach the function in v1 — not a v1 release gate for
   Phase 9's actual shipped scope, which is listing/preview/size-estimates/duplicate-prevention
   only.
+
+**Implementation status (Phase 9 pass) — operational notes in `supabase/PHASE9_RUNBOOK.md`:**
+
+| State | Status | Evidence |
+|---|---|---|
+| Implemented | Yes (uncommitted) | `041_phase9_script_versions.sql`; `GET /api/transcripts/[videoId]/versions`, `GET /api/transcripts/[videoId]/versions/[transcriptId]/preview`; `src/lib/queries/transcriptVersions.ts`; `ScriptVersionsDialog` (Settings → Script → "Script versions") |
+| Unit / route / component verified | Yes (mocked network) | `transcript-versions-route.test.ts` (7), `script-versions-dialog.test.tsx` (6, incl. no delete action even if a response claimed deletion enabled), the real practice page opening the dialog (1) |
+| Real database verified | Yes, locally | `phase9-script-versions.integration.test.ts` (11) on disposable PostgreSQL 17.9, upgrading 001–038 → activated → 039 → 040 → 041. Covers scenarios #46, #47, #56, #58, #59, #74 and the library-removal separation |
+| Supabase HTTP / browser / iPhone | No | runbook §5 |
+| Applied / deployed | No | — |
+
+Already shipped earlier, reused: duplicate prevention — fingerprint match, reuse, the
+single-current index, and publication's *lock → verify → retire → promote* (`020`/`021`, Phase 0);
+`users.is_admin` and the size-estimate columns (`029`, Phase 1).
+
+Deviations from the task list above, with reasons:
+- **Migration name/number:** `041_phase9_script_versions.sql` (next free number). It holds the
+  listing as well as the deletion function.
+- **Viewer association computed server-side, so the listing key is user-scoped**
+  (`["transcript-versions", userId, videoId]`, not `["transcript-versions", videoId]`, §11). The
+  client knows only its current round, not every round the viewer pinned to an older revision.
+  `yourRound` is scoped to `auth.uid()` and never reveals another user's rounds. Retention reasons
+  are generic labels without counts.
+- **Size estimates are computed lazily** — on the first listing, then when older than an hour —
+  instead of at publication. Computing them at publication would have meant replacing Phase 0's
+  `fn_publish_transcript_revision`. Rows another transaction holds (publication) are skipped
+  (`SKIP LOCKED`) and keep their previous estimate.
+- **One more protection than §6.9 lists:** the legacy `listening_sessions.transcript_id`
+  (`012`). Every FK into `transcripts` is `ON DELETE SET NULL`/`CASCADE`, so an unlisted reference
+  would be silently detached by a deletion. Deletion's refusal codes: `admin_required`,
+  `transcript_not_found`, `revision_now_referenced` (any direct reference),
+  `revision_protected_saved_words` (the indirect vocabulary/bookmark check) and
+  `revision_in_grace_period`.
+- **Placement:** the app has no separate per-video actions menu or Script-tab overflow menu.
+  "Script versions" lives in the Settings drawer's **Script** section, next to Regenerate script
+  (signed-in users only). The dialog is a bottom sheet on phones and a centered modal on desktop.
+- **Not built (as planned):** `DELETE /api/transcripts/versions/[transcriptId]`, any delete control
+  and any grant on the deletion function. Automatic cleanup also stays out (a later, separate,
+  initially-disabled phase).
 
 ### Dependency graph
 

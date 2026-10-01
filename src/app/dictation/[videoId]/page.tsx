@@ -85,6 +85,7 @@ import { useActivityPulse } from "./useActivityPulse";
 import { usePracticeActivitySources } from "./usePracticeActivitySources";
 import { ListeningCoverageLine } from "./components/ListeningCoverageLine";
 import { PracticeReportView } from "./components/PracticeReportView";
+import { ScriptVersionsDialog } from "./components/ScriptVersionsDialog";
 import { useReportViewLayout } from "./useReportViewLayout";
 import { useListeningResume } from "./useListeningResume";
 import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
@@ -113,6 +114,8 @@ export default function DictationPage({ params }: PageProps) {
   const [showHintPanel, setShowHintPanel] = useState(false);
   const [bookmarkDeletingId, setBookmarkDeletingId] = useState<string | null>(null);
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
+  const [showScriptVersions, setShowScriptVersions] = useState(false);
+  const closeScriptVersions = useCallback(() => setShowScriptVersions(false), []);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
   const [showReplayHint, setShowReplayHint] = useState(false);
@@ -1319,7 +1322,24 @@ export default function DictationPage({ params }: PageProps) {
             onLoadSrtFile={handleLoadSrtClick}
             srtParsing={srtParsing}
             srtUploadError={srtUploadError}
+            onOpenScriptVersions={
+              user
+                ? () => {
+                    setShowSettingsDrawer(false);
+                    setShowScriptVersions(true);
+                  }
+                : undefined
+            }
           />
+          {showScriptVersions && (
+            <ScriptVersionsDialog
+              open
+              onClose={closeScriptVersions}
+              userId={user?.id}
+              videoId={videoId}
+              onScreenTranscriptId={transcriptId}
+            />
+          )}
 
           {/* The practice area stays MOUNTED while the results are shown (no
               second player instance, no lost playhead) — only hidden. */}

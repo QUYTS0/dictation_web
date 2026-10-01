@@ -91,6 +91,7 @@ export function SettingsDrawer({
   onLoadSrtFile,
   srtParsing,
   srtUploadError,
+  onOpenScriptVersions,
 }: {
   open: boolean;
   onClose: () => void;
@@ -133,6 +134,9 @@ export function SettingsDrawer({
   onLoadSrtFile: () => void;
   srtParsing: boolean;
   srtUploadError: string | null;
+  /** Opens the read-only Script Versions dialog (Phase 9). Omitted for
+   *  guests — the listing is for signed-in users. */
+  onOpenScriptVersions?: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -330,6 +334,15 @@ export function SettingsDrawer({
                 >
                   {srtParsing ? "Loading…" : "📄 Load .srt/.vtt file"}
                 </button>
+                {onOpenScriptVersions && (
+                  <button
+                    onClick={onOpenScriptVersions}
+                    title="See every version of this video's script, what uses each one, and preview them"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs font-semibold text-[var(--text-muted)] hover:bg-white/10"
+                  >
+                    Script versions
+                  </button>
+                )}
                 {regenerateError && <p className="text-xs text-[var(--red)]">{regenerateError}</p>}
                 {pendingRevisionNotice && (
                   <p className="flex items-center justify-between gap-2 text-xs text-[var(--accent)]">
