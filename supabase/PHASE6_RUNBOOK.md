@@ -23,7 +23,7 @@ never runs it.
 | Add Video | One URL field, no mode choice. Opens the practice page, which picks the mode. Repeating Add never duplicates the card and never moves `added_at`. | `POST /api/video/resolve` → `fn_library_add_video(explicit)` |
 | Continue Learning | Up to 3 videos with real unfinished work: an active round with practice, or Listening in progress (Listening-only included). | `fn_video_library(filter='continue')` |
 | Dashboard metrics | Separate tiles: completed videos (+ earlier unverified), in progress, listened through, estimated active practice, sentence accuracy, pronunciation; learning streak on local calendar days. | `fn_dashboard_summary`, `fn_activity_days` |
-| History | One entry per study session, plus the existing Mistakes view (unchanged). | `fn_history_sessions` (keyset pages) |
+| History | **One entry per video with learning history** (changed after Phase 6 — migration `042`). Its rounds, the selected round's report and the study sessions are inside the card. The Mistakes view is unchanged. | `fn_history_videos`, `fn_history_video_rounds`, `fn_history_video_sessions` (`042`); `fn_round_report` |
 | Round report | Whole-round results. Shown in the practice page (main content) and on `/results/[roundId]`, using the same component and the same query. | `fn_round_report` via `GET /api/session/[id]/report` |
 | Listening resume | Listening starts at its own saved checkpoint for the revision on screen. | `listening_progress.last_position_sec` (Phase 5) |
 | Last mode | A mode switch is saved and used on the next plain reopen, on any device. It never puts a removed video back in the Library. | `fn_set_video_last_mode`, `fn_video_last_mode` |
@@ -123,7 +123,19 @@ Other card fields:
 - `hasCompletedRound` (verified) and `hasLegacyCompletion` are reported independently of `state`. A card can be in progress and "Completed before".
 - Card progress is **practice coverage** (`covered/required sentences`, from `fn_round_progress`). Sentence accuracy is a separate line on completed cards, never a progress bar.
 
-### History entry (`fn_history_sessions`)
+### History card (`fn_history_videos`, migration `042` — replaces the session-first list)
+
+| Field | Meaning |
+|---|---|
+| Which videos | Videos with **actual learning history**: a study session, a recorded answer or take, a completed round (incl. earlier unverified ones) or Listening progress. Not videos that were only added, nor rounds created but never practiced. Library membership doesn't matter: a removed video keeps its card ("Not in your Library"), and reading History never re-adds it. |
+| Order and pages | `lastActivityAt desc, videoId asc`, keyset-paged by video on the server. No video repeats or goes missing across pages. `lastActivityAt` = the latest session activity, answer, take, completion or Listening update. |
+| Study sessions / rounds | Counts over **all** of the video's sessions and rounds. |
+| Default round | The active round, else the latest. Its status and **its own** coverage (unique sentences of that round, never a sum of per-session counts). |
+| Est. active (all sessions) | The union of the wall-clock intervals of every session of the video (overlap counted once). An estimate. |
+| Listening | Coverage of the **current** revision ("on an earlier script version" otherwise). |
+| Expanded | A round selector; the selected round named explicitly; its whole-round report (the shared component, the round's own pinned transcript and metrics); a collapsed "Study sessions" list for that round; a separate collapsed "Listening without a practice round"; and per-round counts of answers/takes that no session owns (labeled, never grouped). All loaded on demand, and none of it writes anything. |
+
+### Study-session row (inside a round; `fn_history_video_sessions`, same fields as 040's `fn_history_sessions`)
 
 | Field | Meaning |
 |---|---|
@@ -134,8 +146,9 @@ Other card fields:
 | Session span | `last_activity_at − started_at`. Bookkeeping only, labeled separately. |
 | Listened to … of video | `listening_observed_sec`: replay-inclusive **media** seconds (not wall-clock at non-1× speeds). "Newly covered" is what the session added to coverage. |
 
-Practice no session owns is labeled on the first page, never grouped into invented sessions:
-- legacy rounds from before study sessions existed;
+Practice no session owns is labeled per round in the expanded card, never grouped into invented
+sessions:
+- answers from before study sessions existed (legacy rounds);
 - late answers recorded with no open session.
 
 ### Whole-round report (`fn_round_report`)
@@ -224,7 +237,9 @@ Keys:
 | `["video-library", userId, "list", filter]` | Library pages |
 | `["video-library", userId, "continue"]` | Continue Learning |
 | `["round-report", userId, roundId]` | Report for an explicit round, independent of the practice page's current round |
-| `["history-sessions", userId, filters]` | History sessions |
+| `["history-sessions", userId, "videos"]` | History cards (video-first) |
+| `["history-sessions", userId, "rounds", videoId]` | A History card's rounds (on expand) |
+| `["history-sessions", userId, "sessions", videoId, roundId \| "none"]` | One round's sittings, or the round-less ones (on opening the section) |
 | `["dashboard-summary", userId]` | Dashboard |
 | `["listening-progress", userId, videoId, transcriptId]` | Listening progress for one revision |
 
@@ -323,6 +338,30 @@ other users' data are kept.
 No environment variable changes. `PRACTICE_WRITE_PATH` must be unset or `authoritative` for the
 Phase 6 build. Since Phase 8 the app ignores this variable entirely (`PHASE8_RUNBOOK.md`).
 
+### 7b. History grouped by video (migration `042`, after Phase 6 shipped)
+
+`042` adds three read functions and changes nothing else: no table, row or existing function or
+grant. `040`'s `fn_history_sessions` stays for already-open old tabs.
+
+1. **Order:** `001`–`040` are applied. `041` (Script Versions, `PHASE9_RUNBOOK.md`) is in the repo
+   and also pending. Migrations apply in number order, so `supabase db push` applies `041` and then
+   `042`. Don't skip `041`: a lower number created after a higher one is applied would need
+   `--include-all`.
+2. **Postflight (read-only):** every `ok` must be true.
+   ```sql
+   with expected(sig) as (values
+     ('public.fn_history_videos(integer,timestamptz,text)'),
+     ('public.fn_history_video_rounds(text,integer)'),
+     ('public.fn_history_video_sessions(text,uuid,boolean,integer,timestamptz,uuid)'))
+   select sig, (not has_function_privilege('anon', sig, 'EXECUTE')
+                and has_function_privilege('authenticated', sig, 'EXECUTE')
+                and not has_function_privilege('service_role', sig, 'EXECUTE')) as ok
+   from expected;
+   ```
+3. **Deploy the app** after the migration. An app deployed without `042` shows "Failed to load your
+   history" (HTTP 503 `learning_data_unavailable`) on History only; everything else works.
+4. Run the §8 History checks.
+
 ## 8. Manual desktop / iPhone checklist
 
 1. **Dashboard, Library, Continue Learning**
@@ -343,9 +382,14 @@ Phase 6 build. Since Phase 8 the app ignores this variable entirely (`PHASE8_RUN
    - [ ] iPhone (Safari, portrait): the report is the only content under the header, with no horizontal scroll; "Back to practice", "Open script", "Continue in …", "Practice again" and every "Review sentence N" can be reached and tapped; "Open script" shows the panel below the report and the page still scrolls as one area.
    - [ ] "Review sentence N" selects that sentence (no autoplay, no new round); "Continue in Listening/Shadowing" switches visibly; "Practice again (new round)" asks first.
    - [ ] Open a completed round from the Library → "View round results", "Review sentences" or "Practice again" — nothing restarts on its own.
-4. **History**
-   - [ ] One entry per sitting, showing modes, "Est. active" vs "Session span" (labeled separately), sentences with the "in both" and "new to the round" counts, and Listening as video time.
-   - [ ] The round report link opens that round even after a newer round exists.
+4. **History** (video-first, `042`)
+   - [ ] A video practiced over several days and rounds is **one** card: last practiced, "N study sessions · M rounds", the current round's coverage, "View report" and "Continue".
+   - [ ] "Rounds and sessions" → the selected round is named; choosing an older round shows **its** report (its own sentences and numbers); practicing from the card still continues the current round.
+   - [ ] "Study sessions in round N" opens collapsed rows (modes, "Est. active" vs "span", sentences with "in both" and "new to the round", Listening as video time) — no repeated thumbnails or report links.
+   - [ ] A Listening-only video shows "Listening only — no practice round", its round-less sittings in their own section, and no report link; opening it creates no round.
+   - [ ] A video removed from the Library is still in History ("Not in your Library"), and stays out of the Library after viewing History.
+   - [ ] Practice a sentence on an older video, come back → that video is now first, with the new counts.
+   - [ ] "Load more" never repeats a video.
    - [ ] Mistakes still filter and load more.
 5. **Accounts**
    - [ ] Sign out and in as another account → no previous Library, filters or reports appear.

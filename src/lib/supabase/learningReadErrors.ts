@@ -7,7 +7,11 @@ import { NextResponse } from "next/server";
  * app must never be deployed before 040 (supabase/PHASE6_RUNBOOK.md), but if
  * it is, the pages show a retryable error instead of a crash or fake zeros.
  */
-export function mapLearningReadError(error: { message?: string; code?: string } | null | undefined, context: string): NextResponse {
+export function mapLearningReadError(
+  error: { message?: string; code?: string } | null | undefined,
+  context: string,
+  migration = "040"
+): NextResponse {
   const message = error?.message ?? "";
   if (message === "authentication_required") return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   if (message === "invalid_payload") return NextResponse.json({ error: "Invalid request.", code: "invalid_payload" }, { status: 400 });
@@ -15,7 +19,7 @@ export function mapLearningReadError(error: { message?: string; code?: string } 
     return NextResponse.json({ error: "Practice round not found.", code: "round_not_found" }, { status: 404 });
   }
   if (error?.code === "PGRST202" || error?.code === "42883") {
-    console.error(`[${context}] Phase 6 function missing — apply migration 040 before deploying this app`, error);
+    console.error(`[${context}] read function missing — apply migration ${migration} before deploying this app`, error);
     return NextResponse.json({ error: "This feature is not available yet.", code: "learning_data_unavailable" }, { status: 503 });
   }
   console.error(`[${context}] RPC error:`, error);

@@ -3516,11 +3516,43 @@ with raw technical metadata (round ids, transcript ids stay in the API response 
 
 ### 10.4 History — three distinct views
 
+> **Accepted change (post-Phase-6, migration `042`): History is video-first, not session-first.**
+> The session-first page showed a video practiced over several days as many large cards, often
+> repeating the same round-report link. History now shows **one card per video with actual
+> learning history**, grouped and paginated on the server, with the video's rounds and sittings
+> nested inside the card. The per-session fields below are unchanged; they now appear as compact
+> rows in a collapsed "Study sessions" section of the selected round.
+
 | View | Grain | Backing |
 |---|---|---|
-| **Video library** (§10.1) | One entry per video | `GET /api/videos/library` |
-| **History** | One entry per **study session** (chronological, may span modes) | new `GET /api/history/sessions` |
-| **Round details** | One entry per practice round for a chosen video | `GET /api/session/resume`-shaped, historical rounds via a `roundId` param |
+| **Video library** (§10.1) | One entry per video **in the Library** | `GET /api/videos/library` |
+| **History** | One entry per video **with learning history**: a study session, a recorded answer/take, a completed round, or Listening progress. A video only added, or a round created but never practiced, is excluded. A video removed from the Library keeps its history and is labeled "Not in your Library"; reading History never re-adds it. | `GET /api/history/videos` (`fn_history_videos`) |
+| **Round details** | A video's rounds (expanded card), the selected round's whole-round report, and that round's sittings | `GET /api/history/videos/[videoId]/rounds`; `GET /api/session/[roundId]/report` (the existing report); `GET /api/history/videos/[videoId]/sessions?roundId=` |
+
+History card (one per video):
+- title, thumbnail, last practiced;
+- the number of study sessions and of rounds (all of them, not only loaded ones);
+- the **default round** — the active one, else the latest — with its status and **its own**
+  coverage (`fn_round_progress`, unique sentences, never a sum of per-session counts);
+- Listening coverage of the **current** revision;
+- estimated active time across **all** the video's sessions: the union of their wall-clock
+  intervals, overlaps counted once, labeled "(all sessions)";
+- actions: **View report** (`/results/[roundId]`) and **Continue** / **Open** (`?mode=listening`
+  for Listening-only).
+
+Expanding the card loads its rounds on demand:
+- **Round selector:** the selected round is always named ("Round N — status"). Choosing an older
+  round loads **that** round's report — same component and endpoint, its own pinned transcript
+  and metrics — without touching practice state or creating a round.
+- **Study sessions:** a collapsed section per selected round, paged on demand.
+- **Listening without a practice round:** round-less sittings in a separate collapsed section,
+  never attached to a round.
+- **Unattributed practice:** answers/takes that no session owns are counted per round and labeled.
+
+Pagination is by **video** on the server: keyset `(lastActivityAt desc, videoId asc)`, the video id
+breaking ties. A video never reappears on a later page, and its totals don't depend on what was
+loaded. `lastActivityAt` is the latest learning event (session activity, answer, take, completion,
+Listening), never a bare row update.
 
 `GET /api/history/sessions` response per entry:
 ```json
@@ -3630,7 +3662,7 @@ same `enabled: !!userId` gating.
 | Current round state | `["round", userId, videoId]` | `GET /api/session/resume` | Practice page, Continue Learning — always "the current round for this video" |
 | Historical round detail | `["round-detail", userId, roundId]` | `GET /api/session/resume?roundId=` | Round Details view (§10.4) — a specific, possibly non-current, round; kept as a **separate** key from `["round", ...]` so viewing history never evicts or races the live practice page's cache |
 | Listening progress | `["listening-progress", userId, videoId, transcriptId]` | `GET /api/listening/progress` | Practice page (Listening mode) — scoped by revision, not just video, so a regeneration doesn't serve stale coverage for the new transcript |
-| Study-session history | `["history-sessions", userId, filters]` | `GET /api/history/sessions` | History page (`useInfiniteQuery`, same `keepPreviousData` pattern as `historyMistakes.ts`) |
+| History (video-first, `042`) | `["history-sessions", userId, "videos"]`; `["history-sessions", userId, "rounds", videoId]`; `["history-sessions", userId, "sessions", videoId, roundId \| "none"]` | `GET /api/history/videos`, `…/[videoId]/rounds`, `…/[videoId]/sessions` | History page (`useInfiniteQuery` + `keepPreviousData` for the list; rounds/sessions on demand). All under the `["history-sessions", userId]` prefix, so the existing post-save/flush invalidation covers them. (`GET /api/history/sessions`, session-first, stays for already-open old tabs; no current page uses it.) |
 | Dashboard summary | `["dashboard-summary", userId]` | `GET /api/dashboard/summary` | Unchanged key, corrected formulas underneath |
 | Script Versions | `["transcript-versions", videoId]` | `GET /api/transcripts/[videoId]/versions` | Script Versions dialog — **not** userId-keyed, since transcripts are shared/global (§6.9); the dialog's per-viewer "used by your round" field is derived client-side from the already-fetched `["round", userId, videoId]` data, not baked into this shared query |
 

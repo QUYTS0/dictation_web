@@ -1,46 +1,96 @@
 "use client";
 
-import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
-import type { HistorySessionsPage } from "@/lib/types/learning";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import type { HistoryVideoRounds, HistoryVideoSessionsPage, HistoryVideosPage } from "@/lib/types/learning";
 
 export interface HistorySessionsFilters {
   videoId: string;
 }
 
-const PAGE_SIZE = 10;
+const VIDEO_PAGE_SIZE = 10;
+const SESSION_PAGE_SIZE = 10;
 
+/**
+ * Every History key lives under ["history-sessions", userId], so the
+ * existing account-scoped invalidation after a confirmed save or flush
+ * (invalidateLearningViews → allForUser) refreshes the video list, the
+ * rounds and the sessions alike.
+ */
 export const historySessionsKeys = {
-  list: (userId: string | undefined, filters: HistorySessionsFilters) => ["history-sessions", userId, filters] as const,
-  /** Prefix covering every filter combination of this user. */
+  /** Prefix covering every History query of this user. */
   allForUser: (userId: string | undefined) => ["history-sessions", userId] as const,
+  /** (Session-first list — kept for the key shape older code/tests use.) */
+  list: (userId: string | undefined, filters: HistorySessionsFilters) => ["history-sessions", userId, filters] as const,
+  videos: (userId: string | undefined) => ["history-sessions", userId, "videos"] as const,
+  rounds: (userId: string | undefined, videoId: string) => ["history-sessions", userId, "rounds", videoId] as const,
+  /** roundId null = the video's round-less (Listening-only) sittings. */
+  videoSessions: (userId: string | undefined, videoId: string, roundId: string | null) =>
+    ["history-sessions", userId, "sessions", videoId, roundId ?? "none"] as const,
 };
 
-type Cursor = { startedAt: string; id: string } | null;
-
-async function fetchSessionsPage(filters: HistorySessionsFilters, cursor: Cursor): Promise<HistorySessionsPage> {
-  const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
-  if (filters.videoId) params.set("videoId", filters.videoId);
-  if (cursor) {
-    params.set("beforeStartedAt", cursor.startedAt);
-    params.set("beforeId", cursor.id);
-  }
-  const res = await fetch(`/api/history/sessions?${params.toString()}`);
-  if (!res.ok) throw new Error("Failed to load study sessions");
+async function getJson<T>(url: string, failure: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(failure);
   return res.json();
 }
 
-/** Study sessions, newest first — same "Load more" shape as useHistoryMistakesQuery. */
-export function useHistorySessionsQuery(userId: string | undefined, filters: HistorySessionsFilters) {
+type VideoCursor = { lastActivityAt: string; videoId: string } | null;
+
+/** One card per studied video, newest learning activity first — grouped and paged on the server. */
+export function useHistoryVideosQuery(userId: string | undefined) {
   return useInfiniteQuery({
-    queryKey: historySessionsKeys.list(userId, filters),
-    queryFn: ({ pageParam }) => fetchSessionsPage(filters, pageParam),
-    initialPageParam: null as Cursor,
-    getNextPageParam: (last): Cursor => {
+    queryKey: historySessionsKeys.videos(userId),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(VIDEO_PAGE_SIZE) });
+      if (pageParam) {
+        params.set("beforeLastActivityAt", pageParam.lastActivityAt);
+        params.set("beforeVideoId", pageParam.videoId);
+      }
+      return getJson<HistoryVideosPage>(`/api/history/videos?${params.toString()}`, "Failed to load your history");
+    },
+    initialPageParam: null as VideoCursor,
+    getNextPageParam: (last): VideoCursor => {
+      if (!last.hasMore || last.items.length === 0) return null;
+      const tail = last.items[last.items.length - 1];
+      return { lastActivityAt: tail.lastActivityAt, videoId: tail.videoId };
+    },
+    enabled: !!userId,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** A video's rounds — loaded only when its card is expanded. */
+export function useHistoryVideoRoundsQuery(userId: string | undefined, videoId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: historySessionsKeys.rounds(userId, videoId),
+    queryFn: () => getJson<HistoryVideoRounds>(`/api/history/videos/${encodeURIComponent(videoId)}/rounds`, "Failed to load rounds"),
+    enabled: enabled && !!userId,
+  });
+}
+
+type SessionCursor = { startedAt: string; id: string } | null;
+
+/** Study sessions of one round (or the round-less ones) — loaded only when that section is opened. */
+export function useHistoryVideoSessionsQuery(userId: string | undefined, videoId: string, roundId: string | null, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: historySessionsKeys.videoSessions(userId, videoId, roundId),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ roundId: roundId ?? "none", limit: String(SESSION_PAGE_SIZE) });
+      if (pageParam) {
+        params.set("beforeStartedAt", pageParam.startedAt);
+        params.set("beforeId", pageParam.id);
+      }
+      return getJson<HistoryVideoSessionsPage>(
+        `/api/history/videos/${encodeURIComponent(videoId)}/sessions?${params.toString()}`,
+        "Failed to load study sessions"
+      );
+    },
+    initialPageParam: null as SessionCursor,
+    getNextPageParam: (last): SessionCursor => {
       if (!last.hasMore || last.items.length === 0) return null;
       const tail = last.items[last.items.length - 1];
       return { startedAt: tail.startedAt, id: tail.studySessionId };
     },
-    enabled: !!userId,
-    placeholderData: keepPreviousData,
+    enabled: enabled && !!userId,
   });
 }

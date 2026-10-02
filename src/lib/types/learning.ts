@@ -143,6 +143,75 @@ export interface HistorySession {
   dictationLatest: { correct: number; practiced: number };
 }
 
+// ---- History grouped by video (migration 042) ----
+
+/** One History card: a video with actual learning history. */
+export interface HistoryVideo {
+  videoId: string;
+  title: string | null;
+  /** Latest learning event (session activity, answer, take, completion, Listening). */
+  lastActivityAt: string;
+  /** Every study session of the video (not only the loaded ones). */
+  sessionCount: number;
+  roundCount: number;
+  /** False for a video removed from the Library — its history stays. */
+  inLibrary: boolean;
+  /** Union of the video's activity intervals across ALL its sessions (estimate). */
+  activeSec: number;
+  /** The default round: the active one, else the latest. Null for Listening-only history. */
+  round: {
+    roundId: string;
+    roundNumber: number;
+    status: "active" | "completed" | "abandoned";
+    provenance: "current" | "legacy_unverified";
+    startedAt: string;
+    completedAt: string | null;
+    /** That round's unique coverage (fn_round_progress) — never a per-session sum. */
+    progress: RoundProgress | null;
+  } | null;
+  /** Listening against the video's CURRENT revision. */
+  listening: { transcriptId: string | null; coverageRatio: number | null; listenedThrough: boolean; hasHistory: boolean };
+}
+
+export interface HistoryVideosPage {
+  items: HistoryVideo[];
+  hasMore: boolean;
+  /** Videos with learning history in total (all pages). */
+  total: number;
+}
+
+export interface HistoryRound {
+  roundId: string;
+  roundNumber: number;
+  status: "active" | "completed" | "abandoned";
+  provenance: "current" | "legacy_unverified";
+  transcriptId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  sessionCount: number;
+  /** Answers / takes of this round that no study session owns (labeled, not grouped). */
+  unattributedAnswers: number;
+  unattributedTakes: number;
+  progress: RoundProgress | null;
+}
+
+export interface HistoryVideoRounds {
+  videoId: string;
+  defaultRoundId: string | null;
+  rounds: HistoryRound[];
+  hasMore: boolean;
+  /** Listening-only sittings of the video, kept apart from every round. */
+  roundlessSessionCount: number;
+}
+
+/** One study session inside a round (or a round-less Listening sitting). */
+export type HistoryVideoSession = Omit<HistorySession, "title" | "roundNumber" | "roundStatus" | "roundProvenance">;
+
+export interface HistoryVideoSessionsPage {
+  items: HistoryVideoSession[];
+  hasMore: boolean;
+}
+
 export interface HistorySessionsPage {
   items: HistorySession[];
   hasMore: boolean;
