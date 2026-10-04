@@ -280,9 +280,13 @@ export interface CheckAnswerResponse extends CheckResult {
 }
 
 export interface AIExplainRequest {
-  expectedText: string;
-  userText: string;
-  attemptId?: string;
+  /** Required (Learning Reports P4): the owned attempt to explain. Its stored texts are used. */
+  attemptId: string;
+  /** Ignored since P4 — the attempt's own stored reference/answer are authoritative. */
+  expectedText?: string;
+  userText?: string;
+  /** "missing" (default): reuse a saved note when one exists. "reexplain": explicit replacement. */
+  intent?: "missing" | "reexplain";
 }
 
 export interface AIExplainResponse {
@@ -290,6 +294,10 @@ export interface AIExplainResponse {
   correctedText: string;
   example: string;
   tip?: string;
+  /** Learning Reports P4: true only when the note is stored (a reused note is stored). */
+  saved?: boolean;
+  /** True when a saved note was returned and no provider call was made. */
+  reused?: boolean;
 }
 
 export interface SaveProgressRequest {
@@ -361,8 +369,24 @@ export interface SessionReportMistake {
   attempts: number;
   /** The most recent wrong attempt for this segment — used to request/cache an AI explanation. */
   attemptId: string;
-  /** Pre-loaded from `ai_feedback` when this attempt was already explained before. */
-  aiFeedback: { explanation: string; correctedText: string; example: string } | null;
+  /**
+   * Learning Reports P4: the saved explanation shown for this sentence
+   * (attempt_explanations, incl. copies of legacy ai_feedback rows). See
+   * `ExplanationContext` for how it relates to this answer.
+   */
+  aiFeedback: ({ explanation: string; correctedText: string; example: string; tip?: string } & Partial<ExplanationContext>) | null;
+}
+
+/** Learning Reports P4: how a saved explanation relates to the answer it is shown for. */
+export interface ExplanationContext {
+  /** "attempt": this answer's own; "pattern": the same mistake in another sentence of the round; "earlier_answer": an earlier wrong answer to this sentence. */
+  via: "attempt" | "pattern" | "earlier_answer";
+  /** 0-based sentence carrying the note (for "pattern"). */
+  viaSegmentIndex?: number;
+  /** The explained answer is no longer the sentence's latest answer. */
+  historical: boolean;
+  /** Copied from the pre-P4 table: generation rules/version unknown ("earlier explanation"). */
+  legacy: boolean;
 }
 
 export interface SessionReportResponse {
@@ -394,6 +418,8 @@ export interface SessionReportResponse {
   dictationEvidence?: import("@/lib/practice/dictationAnalysis").DictationEvidence;
   /** Learning Reports P2: the video's active round when it isn't this one (continuation is then refused). */
   newerActiveRound?: { roundId: string; roundNumber: number } | null;
+  /** Learning Reports P4: saved explanations couldn't be loaded (the rest of the report is unaffected). */
+  explanationsUnavailable?: boolean;
   /** Learning Reports P3: the version number of the round's pinned script (null if unknown). */
   transcriptVersion?: number | null;
   /**
@@ -425,6 +451,10 @@ export interface SessionExplainAllItem {
   duplicateOfSegmentIndex?: number;
   /** Short note shown instead of the full card for "duplicate" / "minor". */
   note?: string;
+  /** Learning Reports P4: relation of a saved note to this answer (from the report). */
+  context?: ExplanationContext;
+  /** Learning Reports P4: generated this visit but NOT stored — gone after a reload. */
+  unsaved?: boolean;
 }
 
 export interface SessionAssessment {
@@ -448,6 +478,27 @@ export interface SessionExplainAllResponse {
   /** Whether the assessment was persisted (it is still returned for display
    *  when saving failed — it just won't be there after a reload). */
   assessmentSaved?: boolean;
+  /** Learning Reports P4: what happened to the per-mistake explanations. */
+  explanations?: ExplainAllExplanationsOutcome;
+}
+
+/**
+ * Learning Reports P4 — the explanation half of explain-all, reported apart
+ * from the (unchanged) overview:
+ *   saved       — new notes stored (`saved` of `requested`)
+ *   reused      — every target already had a saved note: no explanation was requested
+ *   not_saved   — generated but storing failed: shown this visit only
+ *   none_usable — the response had no usable note: nothing stored
+ *   no_targets  — no explainable mistakes (e.g. only spacing slips)
+ */
+export interface ExplainAllExplanationsOutcome {
+  status: "saved" | "reused" | "not_saved" | "none_usable" | "no_targets";
+  requested: number;
+  saved: number;
+  /** Targets skipped because a saved note already covers them. */
+  alreadySaved: number;
+  /** Missing targets left for a later request (past the per-request cap). */
+  remaining: number;
 }
 
 export interface VocabularyItem {

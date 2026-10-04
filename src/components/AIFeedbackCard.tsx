@@ -35,11 +35,40 @@ export default function AIFeedbackCard({ feedback, onJumpToDuplicate }: AIFeedba
     );
   }
 
+  const context = feedback.context;
+  const contextLabel = context
+    ? context.via === "pattern" && context.viaSegmentIndex !== undefined
+      ? `Same mistake as sentence ${context.viaSegmentIndex + 1}`
+      : context.via === "earlier_answer"
+        ? "Explanation of an earlier answer to this sentence"
+        : context.historical
+          ? "Earlier mistake (now corrected or answered again)"
+          : null
+    : null;
+
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-violet-300 bg-violet-50 p-4 text-sm text-violet-900">
       <span className="text-xs font-semibold uppercase tracking-wide text-violet-700">
         <span aria-hidden="true">🤖 </span>AI Tutor
+        {context?.legacy && <span className="ml-1.5 font-normal normal-case tracking-normal text-violet-500">· earlier explanation</span>}
       </span>
+      {contextLabel &&
+        (context?.via === "pattern" && context.viaSegmentIndex !== undefined && onJumpToDuplicate ? (
+          <button
+            type="button"
+            onClick={() => onJumpToDuplicate(context.viaSegmentIndex as number)}
+            className="self-start text-xs font-medium text-primary-600 underline-offset-2 hover:underline"
+          >
+            {contextLabel}
+          </button>
+        ) : (
+          <p className="text-xs font-medium text-violet-600">{contextLabel}</p>
+        ))}
+      {feedback.unsaved && (
+        <p role="note" className="text-xs font-medium text-amber-700">
+          Not saved — this explanation will disappear when you reload.
+        </p>
+      )}
       <p className="font-medium">{feedback.explanation}</p>
 
       <div className="flex flex-col gap-1 rounded-lg border border-violet-200 bg-white p-3">

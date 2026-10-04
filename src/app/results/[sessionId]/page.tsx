@@ -14,7 +14,7 @@ import { RoundActions } from "@/components/report/RoundActions";
 import { RoundSelector, roundOptionLabel } from "@/components/report/RoundSelector";
 import { useAuth } from "@/context/auth";
 import { errorTypeLabel } from "@/lib/constants/errorTypes";
-import { useRoundReportQuery } from "@/lib/queries/roundReport";
+import { roundReportKeys, useRoundReportQuery } from "@/lib/queries/roundReport";
 import type { SessionAssessment, SessionExplainAllItem, SessionExplainAllResponse, VocabularyItem } from "@/lib/types";
 import type { VideoRoundList, VideoRoundOption } from "@/lib/types/learning";
 
@@ -36,7 +36,10 @@ interface GeminiQuotaStatus {
  */
 export default function SessionResultsPage({ params }: PageProps) {
   const { sessionId } = use(params);
-  return <RoundResults key={sessionId} sessionId={sessionId} />;
+  const { user } = useAuth();
+  // Keyed by account AND round: explanations fetched this visit can never
+  // carry over to another signed-in account (Learning Reports P4).
+  return <RoundResults key={`${user?.id ?? "signed-out"}:${sessionId}`} sessionId={sessionId} />;
 }
 
 /** The round being opened, from the round list already in the cache (shown while its report loads). */
@@ -61,6 +64,7 @@ function RoundResults({ sessionId }: { sessionId: string }) {
   // The tab on screen — carried to another round so the same mode can be compared.
   const [section, setSection] = useState(initialSection);
   const { user, loading: authLoading, openAuthModal } = useAuth();
+  const queryClient = useQueryClient();
 
   // The whole-round report for THIS round id (never "the video's current
   // round"), user-scoped: the same query the practice page's completion view uses.
@@ -94,18 +98,28 @@ function RoundResults({ sessionId }: { sessionId: string }) {
     enabled: !!user && !!data?.session.videoId,
   });
 
-  // Explanations already cached (from the report load) merged with anything
-  // this page's "Explain all" call has fetched since — a single bulk request
-  // covers every mistake in the session instead of one AI call per row.
+  // Saved explanations (from the report load — authoritative, with their
+  // relation to each answer) first; this visit's "Explain all" results only
+  // fill sentences that have no saved note (minor/duplicate tags, or notes
+  // that couldn't be saved, which are flagged as such).
   const [bulkExplanations, setBulkExplanations] = useState<Record<string, SessionExplainAllItem>>({});
   const explanationByAttemptId = useMemo(() => {
     const map: Record<string, SessionExplainAllItem> = {};
     for (const mistake of data?.mistakes ?? []) {
       if (mistake.aiFeedback) {
-        map[mistake.attemptId] = { attemptId: mistake.attemptId, status: "explained", ...mistake.aiFeedback };
+        const { via, viaSegmentIndex, historical, legacy, ...note } = mistake.aiFeedback;
+        map[mistake.attemptId] = {
+          attemptId: mistake.attemptId,
+          status: "explained",
+          ...note,
+          ...(via ? { context: { via, viaSegmentIndex, historical: !!historical, legacy: !!legacy } } : {}),
+        };
       }
     }
-    return { ...map, ...bulkExplanations };
+    for (const [attemptId, item] of Object.entries(bulkExplanations)) {
+      if (!map[attemptId]) map[attemptId] = item;
+    }
+    return map;
   }, [data, bulkExplanations]);
 
   // Overrides the persisted assessment once a fresh "Explain all" call
@@ -155,11 +169,31 @@ function RoundResults({ sessionId }: { sessionId: string }) {
       });
       setAssessmentOverride(json.assessment);
       setMistakesReviewed(json.mistakesReviewed);
-      if (json.truncated) {
-        setExplainAllNotice(
-          `This session has more than ${json.uniquePatternsExplained} distinct kinds of mistakes — the first ${json.uniquePatternsExplained} got a full explanation (exact repeats and minor slips don't count against that).`
+      const outcome = json.explanations;
+      // A confirmed save: reload the report so the stored notes (with their
+      // labels) replace this visit's copies.
+      if (outcome?.status === "saved" && user) {
+        void queryClient.invalidateQueries({ queryKey: roundReportKeys.report(user.id, sessionId) });
+      }
+      const notices: string[] = [];
+      if (outcome?.status === "not_saved") {
+        notices.push("The new explanations couldn't be saved — they're shown now but will disappear when you reload.");
+      } else if (outcome?.status === "none_usable" && outcome.requested > 0) {
+        notices.push("The AI response had no usable explanations, so none were saved. Your earlier explanations are unchanged.");
+      } else if (outcome?.status === "reused") {
+        notices.push("Every mistake already has a saved explanation — no new explanations were requested.");
+      } else if (outcome?.status === "saved" && outcome.alreadySaved > 0) {
+        notices.push(
+          `${outcome.alreadySaved} mistake${outcome.alreadySaved === 1 ? "" : "s"} already had a saved explanation and ${outcome.alreadySaved === 1 ? "was" : "were"} not requested again.`
         );
       }
+      if (json.truncated) {
+        const left = outcome?.remaining ?? 0;
+        notices.push(
+          `${left} more distinct mistake${left === 1 ? "" : "s"} didn't fit in this request (up to ${json.uniquePatternsExplained} per request) and ${left === 1 ? "is" : "are"} still unexplained.`
+        );
+      }
+      if (notices.length > 0) setExplainAllNotice(notices.join(" "));
     } catch (err) {
       setExplainAllError(err instanceof Error ? err.message : "Failed to get AI explanations.");
     } finally {
@@ -282,6 +316,12 @@ function RoundResults({ sessionId }: { sessionId: string }) {
                   }}
                 />
               </section>
+
+              {data.explanationsUnavailable && (
+                <p role="status" className="text-sm text-amber-700">
+                  Saved AI explanations couldn&apos;t be loaded right now. The rest of this report is complete.
+                </p>
+              )}
 
               {data.mistakes.length > 0 && (
                 <section className="rounded-3xl border border-violet-200 bg-violet-50/60 p-5 shadow-xl backdrop-blur-md">

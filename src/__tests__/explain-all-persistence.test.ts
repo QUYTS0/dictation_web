@@ -21,6 +21,16 @@ jest.mock("@/lib/rateLimit", () => ({
 
 const tableWrites: string[] = [];
 const serviceRpc = jest.fn();
+// Learning Reports P4: the explanation RPCs answer like migration 043; only
+// fn_persist_session_assessment's result varies per test.
+let persistResult: { data: unknown; error: unknown } = { data: true, error: null };
+function dispatchRpc(name: string) {
+  if (name === "fn_explanations_begin")
+    return Promise.resolve({ data: { status: "started", operationId: "op-1", token: "tok-1", seq: 1, targets: ["a1"], covered: [] }, error: null });
+  if (name === "fn_explanations_abandon") return Promise.resolve({ data: { status: "abandoned" }, error: null });
+  if (name === "fn_explanations_finish") return Promise.resolve({ data: { status: "saved", count: 1 }, error: null });
+  return Promise.resolve(persistResult);
+}
 function chain(result: unknown, table: string) {
   const c: Record<string, unknown> = {};
   for (const m of ["select", "eq", "order", "in", "limit"]) c[m] = () => c;
@@ -40,7 +50,7 @@ const userClient = {
     if (table === "learning_sessions") return chain({ data: { id: "round-1", transcript_id: "t1", accuracy: 50, total_attempts: 2 }, error: null }, table);
     if (table === "attempt_logs")
       return chain(
-        { data: [{ id: "a1", segment_index: 0, expected_text: "Hello there friend", user_text: "hello their", created_at: "2026-01-01" }], error: null },
+        { data: [{ id: "a1", segment_index: 0, expected_text: "Hello there friend", user_text: "hello their", match_mode: "relaxed", created_at: "2026-01-01" }], error: null },
         table
       );
     return chain({ count: 3, error: null }, table);
@@ -67,6 +77,7 @@ function call() {
 beforeEach(() => {
   jest.clearAllMocks();
   tableWrites.length = 0;
+  serviceRpc.mockImplementation(dispatchRpc);
   process.env.GEMINI_API_KEY = "test";
   // The merged call fails validation twice; the assessment-only fallback succeeds.
   generateContent
@@ -76,7 +87,7 @@ beforeEach(() => {
 });
 
 it("persists the assessment only through fn_persist_session_assessment, scoped to the verified user", async () => {
-  serviceRpc.mockResolvedValue({ data: true, error: null });
+  persistResult = { data: true, error: null };
   const res = await call();
   expect(res.status).toBe(200);
   expect(serviceRpc).toHaveBeenCalledWith("fn_persist_session_assessment", {
@@ -91,7 +102,7 @@ it("persists the assessment only through fn_persist_session_assessment, scoped t
 });
 
 it("reports honestly when persisting failed (the assessment is still shown, but not claimed as saved)", async () => {
-  serviceRpc.mockResolvedValue({ data: null, error: { message: "permission denied", code: "42501" } });
+  persistResult = { data: null, error: { message: "permission denied", code: "42501" } };
   const json = await (await call()).json();
   expect(json.assessment).toEqual(ASSESSMENT);
   expect(json.assessmentSaved).toBe(false);

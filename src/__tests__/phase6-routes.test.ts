@@ -159,7 +159,7 @@ describe("GET /api/session/[sessionId]/report", () => {
     };
     tables.videos = { data: { title: "T" } };
     tables.transcript_segments = { data: null, count: 1 };
-    tables.ai_feedback = { data: [] };
+    tables.attempt_explanations = { data: [] };
     rpc.mockResolvedValue({ data: { round: { roundId: ROUND }, historyComplete: true, sentences: [] }, error: null });
     const res = await reportGET(req(`/api/session/${ROUND}/report`), params({ sessionId: ROUND }));
     const body = await res.json();

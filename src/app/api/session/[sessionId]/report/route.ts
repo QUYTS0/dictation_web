@@ -4,6 +4,7 @@ import { mapLearningReadError } from "@/lib/supabase/learningReadErrors";
 import type { ErrorType, SessionAssessment, SessionReportMistake, SessionReportResponse } from "@/lib/types";
 import type { RoundReport } from "@/lib/types/learning";
 import { buildDictationEvidence } from "@/lib/practice/dictationAnalysis";
+import { resolveExplanations, type ExplanationAttempt, type StoredExplanation } from "@/lib/practice/explanationIdentity";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -110,31 +111,39 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     }
     const mistakes = [...mistakesBySegment.values()].sort((a, b) => a.segmentIndex - b.segmentIndex);
 
-    // Preload any AI explanations already generated for these attempts (via
-    // a previous "Explain all" run on this report) so they show immediately
-    // instead of requiring another click.
+    // Learning Reports P4: saved explanations (attempt_explanations — new
+    // notes plus copies of every legacy ai_feedback row), read through the
+    // owner RLS policy. Read-only: no provider call, no write. Each sentence
+    // shows its answer's own note, else the same mistake's note from another
+    // sentence of THIS round (mode-aware key), else an earlier answer's note
+    // (historical). A failed read leaves the deterministic report intact.
+    let explanationsUnavailable = false;
     if (mistakes.length > 0) {
-      const { data: cachedFeedback, error: feedbackError } = await supabase
-        .from("ai_feedback")
-        .select("attempt_id, explanation, corrected_text, example_text")
-        .in(
-          "attempt_id",
-          mistakes.map((m) => m.attemptId)
-        );
-
-      if (feedbackError) {
-        console.error("[session/report] ai_feedback query error:", feedbackError);
-      } else {
-        const feedbackByAttemptId = new Map((cachedFeedback ?? []).map((f) => [f.attempt_id, f]));
+      const { data: savedNotes, error: notesError } = await supabase
+        .from("attempt_explanations")
+        .select("id, attempt_id, source, seq, explanation, corrected_text, example_text, tip, prompt_version, model, created_at")
+        .eq("round_id", sessionId);
+      if (notesError) {
+        console.error("[session/report] attempt_explanations query error:", notesError);
+        explanationsUnavailable = true;
+      } else if ((savedNotes ?? []).length > 0) {
+        const roundAttempts = (attempts ?? []) as ExplanationAttempt[];
+        const byId = new Map(roundAttempts.map((a) => [a.id, a]));
+        const shown = mistakes.map((m) => byId.get(m.attemptId)).filter((a): a is ExplanationAttempt => !!a);
+        const resolved = resolveExplanations(shown, roundAttempts, (savedNotes ?? []) as StoredExplanation[]);
         for (const mistake of mistakes) {
-          const feedback = feedbackByAttemptId.get(mistake.attemptId);
-          if (feedback) {
-            mistake.aiFeedback = {
-              explanation: feedback.explanation ?? "",
-              correctedText: feedback.corrected_text ?? mistake.expectedText,
-              example: feedback.example_text ?? "",
-            };
-          }
+          const r = resolved.get(mistake.attemptId);
+          if (!r) continue;
+          mistake.aiFeedback = {
+            explanation: r.explanation,
+            correctedText: r.correctedText,
+            example: r.example,
+            ...(r.tip ? { tip: r.tip } : {}),
+            via: r.via,
+            ...(r.viaSegmentIndex !== undefined ? { viaSegmentIndex: r.viaSegmentIndex } : {}),
+            historical: r.historical,
+            legacy: r.legacy,
+          };
         }
       }
     }
@@ -256,6 +265,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       // Read-only, derived from the rows already loaded above.
       dictationEvidence: buildDictationEvidence(attempts ?? []),
       newerActiveRound,
+      ...(explanationsUnavailable ? { explanationsUnavailable: true } : {}),
       transcriptVersion,
       listening,
     };

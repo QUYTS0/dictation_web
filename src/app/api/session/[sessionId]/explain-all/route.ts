@@ -4,7 +4,18 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import { normalizeText } from "@/lib/utils/text";
-import type { SessionExplainAllItem, SessionExplainAllResponse } from "@/lib/types";
+import { coveredAttemptIds, explanationPatternKey, type ExplanationAttempt, type StoredExplanation } from "@/lib/practice/explanationIdentity";
+import {
+  MAX_EXPLANATION_TARGETS,
+  abandonExplanations,
+  beginExplanations,
+  finishExplanations,
+  parseExplanationIntent,
+  usableNotes,
+  type AbandonReason,
+  type ExplanationNote,
+} from "@/lib/practice/explanationPersistence";
+import type { ExplainAllExplanationsOutcome, SessionExplainAllItem, SessionExplainAllResponse } from "@/lib/types";
 
 // Safety ceiling on DISTINCT mistake patterns sent for a full explanation —
 // not on raw mistake count. Exact repeats and spacing-only slips are
@@ -13,13 +24,19 @@ import type { SessionExplainAllItem, SessionExplainAllResponse } from "@/lib/typ
 // below the old 40 to leave output-token headroom for the assessment now
 // riding in the same response. The assessment itself has no such cap — it
 // reviews every mistake regardless of how many patterns get explained.
-const MAX_PATTERNS_PER_REQUEST = 35;
+const MAX_PATTERNS_PER_REQUEST = MAX_EXPLANATION_TARGETS;
+
+// Learning Reports P4: the content version stored with every note this
+// route saves. Raise it whenever the per-item prompt or schema changes.
+const EXPLAIN_ALL_PROMPT_VERSION = 1;
 
 interface Mistake {
   id: string;
   segment_index: number;
   expected_text: string;
   user_text: string;
+  match_mode: string | null;
+  created_at: string;
 }
 
 interface Pattern {
@@ -55,6 +72,35 @@ function buildPatterns(mistakes: Mistake[]): Pattern[] {
   // Segment order of each pattern's first occurrence — keeps the "first
   // explained, rest tagged duplicate" rule deterministic and matching the
   // order mistakes appear in the video.
+  return [...byKey.values()].sort((a, b) => a.occurrences[0].segment_index - b.occurrences[0].segment_index);
+}
+
+/**
+ * Learning Reports P4: explanation TARGETS use the saved-note reuse identity
+ * (mode-aware `explanationPatternKey`), not the legacy relaxed grouping
+ * above — which stays for the overview's pattern list only. An attempt with
+ * an unknown (legacy null) matching rule is a group of its own. The first
+ * occurrence (segment order) is the target the note is stored on.
+ */
+function buildExplanationGroups(mistakes: Mistake[]): Pattern[] {
+  const byKey = new Map<string, Pattern>();
+  for (const mistake of mistakes) {
+    const key = explanationPatternKey(mistake.expected_text, mistake.user_text, mistake.match_mode) ?? `attempt:${mistake.id}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.occurrences.push(mistake);
+      continue;
+    }
+    const normExpected = normalizeText(mistake.expected_text, "relaxed");
+    const normUser = normalizeText(mistake.user_text, "relaxed");
+    byKey.set(key, {
+      key,
+      expectedText: mistake.expected_text,
+      userText: mistake.user_text,
+      occurrences: [mistake],
+      isSpacingOnly: normExpected.replace(/\s+/g, "") === normUser.replace(/\s+/g, "") && normExpected !== normUser,
+    });
+  }
   return [...byKey.values()].sort((a, b) => a.occurrences[0].segment_index - b.occurrences[0].segment_index);
 }
 
@@ -208,6 +254,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
     }
 
+    // Optional body (Learning Reports P4): { intent?: "missing" | "reexplain" }.
+    // "missing" (default) explains only mistakes without a saved note;
+    // "reexplain" is the explicit, server-validated request to replace them.
+    let body: { intent?: unknown } | null = null;
+    const rawBody = await request.text().catch(() => "");
+    if (rawBody.trim()) {
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+      }
+    }
+    const intent = parseExplanationIntent(body && typeof body === "object" ? body.intent : undefined);
+    if (!intent) {
+      return NextResponse.json({ error: 'intent must be "missing" or "reexplain".' }, { status: 400 });
+    }
+
     const supabase = await createClient();
     const {
       data: { user },
@@ -235,7 +298,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       await Promise.all([
         supabase
           .from("attempt_logs")
-          .select("id, segment_index, expected_text, user_text, created_at")
+          .select("id, segment_index, expected_text, user_text, match_mode, created_at")
           .eq("session_id", sessionId)
           .eq("is_correct", false)
           .order("segment_index", { ascending: true })
@@ -259,8 +322,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     // One mistake per segment — keep the latest wrong attempt, matching the
     // dedupe logic in /api/session/[sessionId]/report.
+    const wrongAttempts = (attempts ?? []) as Mistake[];
     const latestBySegment = new Map<number, Mistake>();
-    for (const attempt of attempts ?? []) {
+    for (const attempt of wrongAttempts) {
       latestBySegment.set(attempt.segment_index, attempt);
     }
     const mistakes = [...latestBySegment.values()].sort((a, b) => a.segment_index - b.segment_index);
@@ -272,6 +336,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         mistakesReviewed: 0,
         uniquePatternsExplained: 0,
         truncated: false,
+        explanations: { status: "no_targets", requested: 0, saved: 0, alreadySaved: 0, remaining: 0 },
       });
     }
 
@@ -281,15 +346,81 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: "AI service not configured." }, { status: 503 });
     }
 
-    // Exact repeats and spacing-only slips are collapsed/filtered
-    // deterministically here — no AI judgment needed for either, and it
-    // shrinks what actually needs to go to Gemini for real explanation.
+    // The overview keeps its legacy (relaxed) pattern list, unchanged until
+    // P5. Explanation targets use the saved-note reuse identity instead.
     const allPatterns = buildPatterns(mistakes);
-    const spacingOnlyPatterns = allPatterns.filter((p) => p.isSpacingOnly);
-    const candidatePatterns = allPatterns.filter((p) => !p.isSpacingOnly);
-    const truncated = candidatePatterns.length > MAX_PATTERNS_PER_REQUEST;
-    const explainPatterns = candidatePatterns.slice(0, MAX_PATTERNS_PER_REQUEST);
-    const overflowPatterns = candidatePatterns.slice(MAX_PATTERNS_PER_REQUEST);
+    const groups = buildExplanationGroups(mistakes);
+    const spacingOnlyGroups = groups.filter((g) => g.isSpacingOnly);
+    const candidateGroups = groups.filter((g) => !g.isSpacingOnly);
+
+    const service = createServiceClient();
+
+    // Learning Reports P4: never pay again for a mistake that already has a
+    // saved note (own, or the same mistake elsewhere in this round). This
+    // read only picks which ≤35 targets to ask for; fn_explanations_begin
+    // repeats the decision under the per-round lock, so a save that finished
+    // in between is still honoured.
+    let covered = new Set<string>();
+    if (intent === "missing" && candidateGroups.length > 0) {
+      const { data: savedNotes, error: notesError } = await service
+        .from("attempt_explanations")
+        .select("id, attempt_id, source, seq, explanation, corrected_text, example_text, tip, prompt_version, model, created_at")
+        .eq("round_id", sessionId);
+      if (notesError) {
+        console.error("[session/explain-all] saved explanations query error:", notesError);
+        return NextResponse.json(
+          { error: "Saved explanations couldn't be checked. Nothing was requested or charged — try again later." },
+          { status: 503 }
+        );
+      }
+      const roundAttempts: ExplanationAttempt[] = wrongAttempts.map((a) => ({ ...a, is_correct: false }));
+      const targets = candidateGroups.map((g) => ({ ...g.occurrences[0], is_correct: false }));
+      covered = coveredAttemptIds(targets, roundAttempts, (savedNotes ?? []) as StoredExplanation[]);
+    }
+    const missingGroups = candidateGroups.filter((g) => !covered.has(g.occurrences[0].id));
+    let explainPatterns = missingGroups.slice(0, MAX_PATTERNS_PER_REQUEST);
+    const overflowPatterns = missingGroups.slice(MAX_PATTERNS_PER_REQUEST);
+    let alreadySaved = candidateGroups.length - missingGroups.length;
+
+    // Admit the explanation operation BEFORE any quota is spent.
+    let operation: { operationId: string; token: string } | null = null;
+    if (explainPatterns.length > 0) {
+      const begin = await beginExplanations(service, {
+        userId: user.id,
+        roundId: sessionId,
+        targetAttemptIds: explainPatterns.map((g) => g.occurrences[0].id),
+        kind: "batch",
+        intent,
+        promptVersion: EXPLAIN_ALL_PROMPT_VERSION,
+        model: GEMINI_MODEL_NAME,
+      });
+      if (begin.status === "started") {
+        operation = { operationId: begin.operationId, token: begin.token };
+        const admitted = new Set(begin.targets);
+        alreadySaved += explainPatterns.filter((g) => !admitted.has(g.occurrences[0].id)).length;
+        explainPatterns = explainPatterns.filter((g) => admitted.has(g.occurrences[0].id));
+      } else if (begin.status === "reuse") {
+        alreadySaved += explainPatterns.length;
+        explainPatterns = [];
+      } else if (begin.status === "in_progress" || begin.status === "busy") {
+        return NextResponse.json(
+          { error: "Explanations for this round are already being generated. Try again in a moment — nothing was charged." },
+          { status: 409 }
+        );
+      } else if (begin.status === "not_found") {
+        return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      } else {
+        console.error("[session/explain-all] begin failed:", begin);
+        return NextResponse.json(
+          { error: "Explanations couldn't be prepared for saving. Nothing was requested or charged — try again later." },
+          { status: 503 }
+        );
+      }
+    }
+    const abandon = (reason: AbandonReason) =>
+      operation
+        ? abandonExplanations(service, { userId: user.id, roundId: sessionId, ...operation, reason })
+        : Promise.resolve();
 
     const context: SessionContext = {
       accuracy: Math.round(Number(session.accuracy ?? 0)),
@@ -301,47 +432,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const genAI = new GoogleGenerativeAI(apiKey);
 
     let quota = await checkGeminiQuota();
-    if (!quota.allowed) return quotaErrorResponse(quota);
+    if (!quota.allowed) {
+      await abandon("quota_denied");
+      return quotaErrorResponse(quota);
+    }
 
-    const mergedModel = genAI.getGenerativeModel({
-      model: GEMINI_MODEL_NAME,
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: MERGED_SCHEMA,
-        // Both the assessment and every distinct mistake pattern's
-        // explanation ride in this one response — explicit headroom so it
-        // can't get silently truncated partway through.
-        maxOutputTokens: 8192,
-      },
-    });
-    console.log(
-      `[session/explain-all] merged call: ${mistakes.length} mistakes / ${allPatterns.length} patterns, ${explainPatterns.length} to explain (session=${sessionId})`
-    );
-
-    let assessment: ParsedAssessment;
-    let parsedItems: ParsedItem[];
-
-    const mergedResult = await callGeminiJson<{ assessment: ParsedAssessment; items: ParsedItem[] }>(
-      mergedModel,
-      buildMergedPrompt(context, allPatterns, explainPatterns),
-      (v) => !!v && typeof v === "object" && "assessment" in v && Array.isArray((v as { items?: unknown }).items),
-      // Generating up to MAX_PATTERNS_PER_REQUEST full explanations plus the
-      // assessment in one go can genuinely take longer than a short reply —
-      // seen in practice timing out at the old 30s default on a large batch.
-      55000
-    );
-
-    if (mergedResult.ok) {
-      assessment = mergedResult.value.assessment;
-      parsedItems = mergedResult.value.items;
-    } else {
-      // The merged call failed (e.g. truncated output) — fall back to a
-      // smaller, more reliable assessment-only request so a hiccup in the
-      // item-explanation half doesn't also cost the (cheap, safe) assessment.
-      quota = await checkGeminiQuota();
-      if (!quota.allowed) return mergedResult.response;
-
-      const assessmentOnlyModel = genAI.getGenerativeModel({
+    const assessmentOnlyModel = () =>
+      genAI.getGenerativeModel({
         model: GEMINI_MODEL_NAME,
         generationConfig: {
           responseMimeType: "application/json",
@@ -349,15 +446,70 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           maxOutputTokens: 2048,
         },
       });
-      const fallback = await callGeminiJson<{ assessment: ParsedAssessment }>(
-        assessmentOnlyModel,
+
+    let assessment: ParsedAssessment;
+    let parsedItems: ParsedItem[] = [];
+
+    if (explainPatterns.length > 0) {
+      const mergedModel = genAI.getGenerativeModel({
+        model: GEMINI_MODEL_NAME,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: MERGED_SCHEMA,
+          // Both the assessment and every distinct mistake pattern's
+          // explanation ride in this one response — explicit headroom so it
+          // can't get silently truncated partway through.
+          maxOutputTokens: 8192,
+        },
+      });
+      console.log(
+        `[session/explain-all] merged call: ${mistakes.length} mistakes / ${allPatterns.length} patterns, ${explainPatterns.length} to explain, ${alreadySaved} already saved (session=${sessionId})`
+      );
+
+      const mergedResult = await callGeminiJson<{ assessment: ParsedAssessment; items: ParsedItem[] }>(
+        mergedModel,
+        buildMergedPrompt(context, allPatterns, explainPatterns),
+        (v) => !!v && typeof v === "object" && "assessment" in v && Array.isArray((v as { items?: unknown }).items),
+        // Generating up to MAX_PATTERNS_PER_REQUEST full explanations plus the
+        // assessment in one go can genuinely take longer than a short reply —
+        // seen in practice timing out at the old 30s default on a large batch.
+        55000
+      );
+
+      if (mergedResult.ok) {
+        assessment = mergedResult.value.assessment;
+        parsedItems = mergedResult.value.items;
+      } else {
+        // The merged call failed (e.g. truncated output): no explanation can
+        // be saved from it, so the operation is abandoned (saved notes stay).
+        // Then fall back to a smaller, more reliable assessment-only request
+        // so a hiccup in the item half doesn't also cost the assessment.
+        await abandon("unparseable");
+        quota = await checkGeminiQuota();
+        if (!quota.allowed) return mergedResult.response;
+        const fallback = await callGeminiJson<{ assessment: ParsedAssessment }>(
+          assessmentOnlyModel(),
+          buildAssessmentOnlyPrompt(context, allPatterns),
+          (v) => !!v && typeof v === "object" && "assessment" in v
+        );
+        if (!fallback.ok) return mergedResult.response;
+        assessment = fallback.value.assessment;
+        parsedItems = [];
+      }
+    } else {
+      // No explanation is needed (all saved, or nothing explainable), but the
+      // overview flow is unchanged and still generates the assessment — one
+      // assessment-only request, no explanation items.
+      console.log(
+        `[session/explain-all] assessment-only call: ${mistakes.length} mistakes / ${allPatterns.length} patterns, ${alreadySaved} explanation targets already saved (session=${sessionId})`
+      );
+      const overviewOnly = await callGeminiJson<{ assessment: ParsedAssessment }>(
+        assessmentOnlyModel(),
         buildAssessmentOnlyPrompt(context, allPatterns),
         (v) => !!v && typeof v === "object" && "assessment" in v
       );
-      if (!fallback.ok) return mergedResult.response;
-
-      assessment = fallback.value.assessment;
-      parsedItems = [];
+      if (!overviewOnly.ok) return overviewOnly.response;
+      assessment = overviewOnly.value.assessment;
     }
 
     // Persist right away — so the assessment survives a page reload or a
@@ -373,7 +525,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // assessment itself comes from the AI call above, never from the client.
     let assessmentSaved = false;
     if (assessment) {
-      const { data: saved, error: assessmentSaveError } = await createServiceClient().rpc(
+      const { data: saved, error: assessmentSaveError } = await service.rpc(
         "fn_persist_session_assessment",
         { p_session_id: sessionId, p_user_id: user.id, p_assessment: assessment }
       );
@@ -383,43 +535,59 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // parsedItems is empty specifically in the assessment-only fallback
-    // path — there's no item data to map in that case (buildItemsFromResult
-    // would otherwise treat every pattern as "explained" with blank text).
-    // Those mistakes simply get no AI feedback this round; the user can
-    // retry "Explain all" for another attempt at the per-mistake half.
-    const { items, feedbackRowsToInsert } =
+    // parsedItems is empty when no explanation was requested, or in the
+    // assessment-only fallback path — there's no item data to map then.
+    const { items, notes } =
       parsedItems.length > 0
         ? buildItemsFromResult(parsedItems, explainPatterns)
-        : { items: [] as SessionExplainAllItem[], feedbackRowsToInsert: [] as ReturnType<typeof buildItemsFromResult>["feedbackRowsToInsert"] };
+        : { items: [] as SessionExplainAllItem[], notes: [] as ExplanationNote[] };
 
-    if (feedbackRowsToInsert.length > 0) {
-      // ai_feedback writes require the service-role client (RLS only grants
-      // owners SELECT); ownership was already verified above via the
-      // cookie-scoped client. Clear previous rows for these attempts first —
-      // re-running should replace last time's cache, not accumulate
-      // duplicate rows.
-      const serviceClient = createServiceClient();
-      const attemptIds = feedbackRowsToInsert.map((r) => r.attempt_id);
-      const { error: deleteError } = await serviceClient.from("ai_feedback").delete().in("attempt_id", attemptIds);
-      if (deleteError) {
-        console.error("[session/explain-all] failed to clear old cached feedback:", deleteError);
-      }
-      const { error: insertError } = await serviceClient.from("ai_feedback").insert(feedbackRowsToInsert);
-      if (insertError) {
-        console.error("[session/explain-all] failed to cache AI feedback:", insertError);
+    // Learning Reports P4: store the notes through the operation (all or
+    // nothing, token-checked, never deleting an existing note).
+    const requested = parsedItems.length > 0 ? explainPatterns.length : 0;
+    let explanations: ExplainAllExplanationsOutcome;
+    const base = { requested, alreadySaved, remaining: overflowPatterns.length };
+    if (!operation) {
+      explanations = { ...base, status: candidateGroups.length === 0 ? "no_targets" : "reused", saved: 0 };
+    } else if (parsedItems.length === 0) {
+      explanations = { ...base, status: "none_usable", saved: 0 };
+    } else {
+      const valid = usableNotes(notes, new Set(explainPatterns.map((g) => g.occurrences[0].id)));
+      if (valid.length === 0) {
+        await abandon("no_usable_notes");
+        explanations = { ...base, status: "none_usable", saved: 0 };
+      } else {
+        const finish = await finishExplanations(service, {
+          userId: user.id,
+          roundId: sessionId,
+          operationId: operation.operationId,
+          token: operation.token,
+          notes: valid,
+        });
+        if (finish.status === "saved" || finish.status === "already_saved") {
+          explanations = { ...base, status: "saved", saved: finish.count };
+        } else {
+          console.error("[session/explain-all] failed to save explanations:", finish);
+          // A rejected payload can never be saved: release the lease. A
+          // transport/DB error leaves the operation started (its lease
+          // expires on its own) so a later recovery could still finish it.
+          if (finish.status === "invalid_payload") await abandon("invalid_output");
+          explanations = { ...base, status: "not_saved", saved: 0 };
+          for (const item of items) if (item.status === "explained") item.unsaved = true;
+        }
       }
     }
 
-    items.push(...buildFallbackItems(spacingOnlyPatterns, overflowPatterns));
+    items.push(...buildFallbackItems(spacingOnlyGroups, overflowPatterns));
 
     return NextResponse.json<SessionExplainAllResponse>({
       items,
       assessment,
       mistakesReviewed: mistakes.length,
-      uniquePatternsExplained: parsedItems.length > 0 ? explainPatterns.length : 0,
-      truncated,
+      uniquePatternsExplained: requested,
+      truncated: overflowPatterns.length > 0,
       assessmentSaved,
+      explanations,
     });
   } catch (err) {
     console.error("[session/explain-all] unexpected error:", err);
@@ -432,15 +600,10 @@ function buildItemsFromResult(
   explainPatterns: Pattern[]
 ): {
   items: SessionExplainAllItem[];
-  feedbackRowsToInsert: Array<{ attempt_id: string; explanation: string; corrected_text: string; example_text: string }>;
+  notes: ExplanationNote[];
 } {
   const items: SessionExplainAllItem[] = [];
-  const feedbackRowsToInsert: Array<{
-    attempt_id: string;
-    explanation: string;
-    corrected_text: string;
-    example_text: string;
-  }> = [];
+  const notes: ExplanationNote[] = [];
   const byIndex = new Map(parsedItems.map((p) => [p.index, p]));
 
   explainPatterns.forEach((pattern, i) => {
@@ -468,18 +631,22 @@ function buildItemsFromResult(
 
     // "explained" — first occurrence gets the full card; any exact repeats
     // of this same pattern are tagged as duplicates of it.
-    const explanation = result?.explanation ?? "";
-    const correctedText = result?.correctedText ?? pattern.expectedText;
-    const example = result?.example ?? "";
-    const tip = result?.tip;
+    const explanation = typeof result?.explanation === "string" ? result.explanation : "";
+    const correctedText = typeof result?.correctedText === "string" ? result.correctedText : pattern.expectedText;
+    const example = typeof result?.example === "string" ? result.example : "";
+    const tip = typeof result?.tip === "string" ? result.tip : undefined;
+
+    if (explanation.trim() === "") {
+      // Learning Reports P4: a missing/empty explanation is reported as
+      // missing — never shown (or saved) as an explained mistake.
+      for (const occurrence of pattern.occurrences) {
+        items.push(minorItem(occurrence.id, "No explanation was returned for this mistake."));
+      }
+      return;
+    }
 
     items.push({ attemptId: firstOccurrence.id, status: "explained", explanation, correctedText, example, tip });
-    feedbackRowsToInsert.push({
-      attempt_id: firstOccurrence.id,
-      explanation,
-      corrected_text: correctedText,
-      example_text: example,
-    });
+    notes.push({ attemptId: firstOccurrence.id, explanation, correctedText, example, tip: tip ?? null });
     for (const repeat of repeats) {
       items.push(
         duplicateItem(
@@ -491,7 +658,7 @@ function buildItemsFromResult(
     }
   });
 
-  return { items, feedbackRowsToInsert };
+  return { items, notes };
 }
 
 function minorItem(attemptId: string, note: string): SessionExplainAllItem {
