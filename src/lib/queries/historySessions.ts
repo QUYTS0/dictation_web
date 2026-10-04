@@ -1,7 +1,7 @@
 "use client";
 
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import type { HistoryVideoRounds, HistoryVideoSessionsPage, HistoryVideosPage } from "@/lib/types/learning";
+import type { HistoryVideoRounds, HistoryVideoSessionsPage, HistoryVideosPage, VideoRoundList } from "@/lib/types/learning";
 
 export interface HistorySessionsFilters {
   videoId: string;
@@ -23,6 +23,8 @@ export const historySessionsKeys = {
   list: (userId: string | undefined, filters: HistorySessionsFilters) => ["history-sessions", userId, filters] as const,
   videos: (userId: string | undefined) => ["history-sessions", userId, "videos"] as const,
   rounds: (userId: string | undefined, videoId: string) => ["history-sessions", userId, "rounds", videoId] as const,
+  /** The report page's round selector (all rounds, paged). */
+  roundList: (userId: string | undefined, videoId: string) => ["history-sessions", userId, "round-list", videoId] as const,
   /** roundId null = the video's round-less (Listening-only) sittings. */
   videoSessions: (userId: string | undefined, videoId: string, roundId: string | null) =>
     ["history-sessions", userId, "sessions", videoId, roundId ?? "none"] as const,
@@ -94,3 +96,25 @@ export function useHistoryVideoSessionsQuery(userId: string | undefined, videoId
     enabled: enabled && !!userId,
   });
 }
+
+const ROUND_LIST_PAGE_SIZE = 50;
+
+/**
+ * Every round of one video (report page selector): pages of 50, newest
+ * first, with the exact total — "Show older rounds" loads the next page, so
+ * no round is silently hidden behind the first page.
+ */
+export function useVideoRoundListQuery(userId: string | undefined, videoId: string | null | undefined) {
+  return useInfiniteQuery({
+    queryKey: historySessionsKeys.roundList(userId, videoId ?? ""),
+    queryFn: ({ pageParam }) =>
+      getJson<VideoRoundList>(
+        `/api/history/videos/${encodeURIComponent(videoId as string)}/round-list?offset=${pageParam}&limit=${ROUND_LIST_PAGE_SIZE}`,
+        "Failed to load rounds"
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (last): number | null => (last.hasMore ? last.offset + last.items.length : null),
+    enabled: !!userId && !!videoId,
+  });
+}
+

@@ -278,6 +278,43 @@ export function useShadowingRecordings(deps: ShadowingRecordingsDeps) {
     [version]
   );
 
+  /**
+   * Takes and scores not yet stored (the new-round confirmation shows them;
+   * a new round never drops them silently). Each still saves into the round
+   * it was made in.
+   */
+  const pendingWork = useCallback(
+    () => {
+      let saving = 0;
+      let failed = 0;
+      for (const rec of recordsRef.current.values()) {
+        if (rec.status === "saving") saving += 1;
+        else if (rec.status === "failed") failed += 1;
+      }
+      return { saving, failed, scoresUnsaved: recoveryRef.current.size };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [version]
+  );
+
+  /** Retry every failed take save and every unsaved score (same ids, same rounds). */
+  const retryUnsaved = useCallback(() => {
+    for (const rec of recordsRef.current.values()) {
+      if (rec.status === "failed" && !rec.inFlight) void send(rec);
+    }
+    for (const attemptId of recoveryRef.current.keys()) void retryScoreSave(attemptId);
+  }, [send, retryScoreSave]);
+
+  /** The learner explicitly chose to give up the unsaved takes and scores. */
+  const discardUnsaved = useCallback(() => {
+    for (const [clipUrl, rec] of recordsRef.current) {
+      if (rec.status === "failed") recordsRef.current.delete(clipUrl);
+    }
+    recoveryRef.current = new Map();
+    setRecoveryErrors({});
+    bump();
+  }, [bump]);
+
   /** Forget everything (sign-out / account switch). In-flight saves still
    *  complete server-side but can no longer touch this page. */
   const reset = useCallback(() => {
@@ -297,6 +334,9 @@ export function useShadowingRecordings(deps: ShadowingRecordingsDeps) {
     retryScoreSave,
     canRetryScoreSave,
     recoveryErrors,
+    pendingWork,
+    retryUnsaved,
+    discardUnsaved,
     reset,
   };
 }

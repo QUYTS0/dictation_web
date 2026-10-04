@@ -2,11 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { ResumeSessionResponse, RoundProgress } from "@/lib/types";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ROUND_COLUMNS =
+  "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status, transcript_id, round_number, provenance, required_sentence_count";
+
 export async function GET(request: NextRequest) {
   try {
     const videoId = request.nextUrl.searchParams.get("videoId");
     if (!videoId) {
       return NextResponse.json({ error: "videoId is required" }, { status: 400 });
+    }
+    // Learning Reports P2: an explicit continuation names its round. Without
+    // it, the round to resume is the ACTIVE one, else the most recently
+    // started — never "whatever was written last" (a late write to an old
+    // round bumps its updated_at and must not make it win).
+    const requestedRoundId = request.nextUrl.searchParams.get("roundId");
+    if (requestedRoundId !== null && !UUID.test(requestedRoundId)) {
+      return NextResponse.json({ error: "Invalid roundId." }, { status: 400 });
     }
 
     const supabase = await createClient();
@@ -26,17 +38,15 @@ export async function GET(request: NextRequest) {
     //
     // Phase 6: Listening and the last explicit mode are resolved alongside,
     // INDEPENDENTLY of the round (a Listening-only video has no round).
+    const rounds = () => supabase.from("learning_sessions").select(ROUND_COLUMNS).eq("user_id", user.id).eq("youtube_video_id", videoId);
+    const loadRound = async () => {
+      if (requestedRoundId) return rounds().eq("id", requestedRoundId).maybeSingle();
+      const active = await rounds().eq("status", "active").limit(1).maybeSingle();
+      if (active.error || active.data) return active;
+      return rounds().order("started_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle();
+    };
     const [{ data, error }, membership, currentTranscript, historyCount] = await Promise.all([
-      supabase
-        .from("learning_sessions")
-        .select(
-          "id, current_segment_index, video_current_time, accuracy, total_attempts, updated_at, status, transcript_id, round_number, provenance, required_sentence_count"
-        )
-        .eq("user_id", user.id)
-        .eq("youtube_video_id", videoId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+      loadRound(),
       // The membership's mode, or — for a video the user removed from the
       // Library — the mode kept on its removal marker (040).
       supabase.rpc("fn_video_last_mode", { p_youtube_video_id: videoId }),
@@ -67,6 +77,22 @@ export async function GET(request: NextRequest) {
     // The round's server-side progress (coverage per mode) — so a reopened
     // page shows the round's real coverage before any new submission.
     let progress: RoundProgress | null = null;
+    // A round other than the active one: name the active round, so a
+    // continuation of the old round can be refused (plan §5.3).
+    let newerActiveRound: { roundId: string; roundNumber: number } | null = null;
+    if (data && data.status !== "active") {
+      const { data: act, error: activeError } = await supabase
+        .from("learning_sessions")
+        .select("id, round_number")
+        .eq("user_id", user.id)
+        .eq("youtube_video_id", videoId)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle();
+      if (activeError) console.error("[session/resume] active round query error:", activeError);
+      const a = act as { id: string; round_number: number | null } | null;
+      if (a && a.id !== data.id) newerActiveRound = { roundId: a.id, roundNumber: a.round_number ?? 0 };
+    }
     if (data) {
       const { data: p, error: progressError } = await supabase.rpc("fn_my_round_progress", { p_round_id: data.id });
       if (progressError) console.error("[session/resume] progress error:", progressError);
@@ -138,6 +164,7 @@ export async function GET(request: NextRequest) {
             provenance: data.provenance ?? undefined,
             requiredSentenceCount: data.required_sentence_count ?? null,
             latestDictationResults,
+            newerActiveRound,
             progress,
           }
         : null,

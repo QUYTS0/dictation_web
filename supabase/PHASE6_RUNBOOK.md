@@ -418,6 +418,23 @@ grant. `040`'s `fn_history_sessions` stays for already-open old tabs.
    - [ ] iPhone (Safari, portrait): the report is the only content under the header, with no horizontal scroll; "Back to practice", "Open script", "Continue in …", "Practice again" and every "Review sentence N" can be reached and tapped; "Open script" shows the panel below the report and the page still scrolls as one area.
    - [ ] "Review sentence N" selects that sentence (no autoplay, no new round); "Continue in Listening/Shadowing" switches visibly; "Practice again (new round)" asks first.
    - [ ] Open a completed round from the Library → "View round results", "Review sentences" or "Practice again" — nothing restarts on its own.
+3b. **Round menu** (Learning Reports P2 follow-up — rules in `.claude/learning-reports-review-plan.md` §12.2; no SQL)
+   - Rules:
+     - the top bar shows "Round N ▾" (desktop) or "Round ▾" (phone); Zen has the same menu next to
+       "Exit Zen Mode";
+     - "View round report" is read-only and pauses playback; "Back to practice" restores
+       everything;
+     - every "new round" button opens the same dialog;
+     - a running recording or a save in flight blocks it; unsaved takes/scores need "Retry saving"
+       or an explicit discard; an unsent answer is disclosed;
+     - one request, never retried automatically.
+   - [ ] Desktop, active round mid-video (Dictation): type part of an answer while a sentence plays → Round ▾ → View round report → "Round in progress", audio stops, no confetti → Back to practice: same sentence, same typed text, panel as before, nothing plays, focus on the Round button.
+   - [ ] Shadowing: while recording, the menu shows "Stop recording to view report"; after stopping, open and close the report → the take, its save status and any running score are unchanged (Network: no second `POST /api/practice/attempt` or `/evaluate`).
+   - [ ] Inside a completed round after "Review sentences": Round ▾ → "Practice again — new round" → "Start a new round? …" → Cancel (no request) → again → Start new round (Network: exactly one `POST /api/session/restart`) → Round N+1, sentence 1, same mode; History shows both rounds.
+   - [ ] Active round with an unsent answer: the dialog says "End this round and start a new one?" and that the unsent answer will be discarded.
+   - [ ] Listening-only video: Round ▾ explains there is no practice round; nothing is created; Listening % unchanged after a new round from Listening.
+   - [ ] Keyboard: Tab to Round ▾, ↓ opens on the first item, ↑/↓ move, Escape closes and returns focus; Space inside the menu never plays/pauses the video; Escape in the Zen menu doesn't leave Zen.
+   - [ ] iPhone (Safari, portrait, narrowest width): the header has no horizontal scroll; Round ▾ opens a menu fully on screen; the dialog fits and its buttons are tappable.
 4. **History** (video-first, `042`)
    - [ ] A video practiced over several days and rounds is **one** card: last practiced, "N study sessions · M rounds", the current round's coverage, "View report" and "Continue".
    - [ ] "Rounds and sessions" → the selected round is named; choosing an older round shows **its** report (its own sentences and numbers); practicing from the card still continues the current round.
@@ -427,6 +444,19 @@ grant. `040`'s `fn_history_sessions` stays for already-open old tabs.
    - [ ] Practice a sentence on an older video, come back → that video is now first, with the new counts.
    - [ ] "Load more" never repeats a video.
    - [ ] Mistakes still filter and load more.
+   - [ ] **After starting round 2, open round 1 through both History and its direct report URL.**
+     1. Complete round 1 of a video, then start round 2 (Round ▾ → "Practice again — new round" → Start new round) and answer one sentence.
+     2. Library/Dashboard card → **Review report** (the only report label; no "Past report") → the report of the card's round (round 2, in progress). The header shows "2 rounds" and **Viewing round: Round 2 · In progress · started …**.
+     3. Choose **Round 1 · Completed** in "Viewing round" → the URL becomes `/results/<round 1 id>`; round 1's own numbers and script version show; "Go to current round (Round 2)" is offered, "Continue Shadowing in this round" is not.
+     4. History → the same card → "Rounds and sessions" → Round 1 → the card's **View report** now opens `/results/<round 1 id>` (there is no separate earlier-report button).
+     5. Paste `/results/<round 1 id>` into a new tab → round 1, selected in the dropdown.
+     6. DevTools → Network during 2–5: only GET requests (no `restart`, `save-progress`, `attempt`, `evaluate`, `explain-all`, `/mode`); back on the practice page the Round menu still says Round 2.
+   - [ ] **Report page round selector — desktop**
+     - Open the Shadowing tab of round 2's report, switch to round 1 → still on the Shadowing tab (`?section=shadowing` kept).
+     - Back → round 2, Forward → round 1, Reload → the same round stays selected; while a round loads, the header names it ("Loading Round N's report…") and no other round's figures show.
+     - Keyboard: Tab to "Viewing round", ↑/↓ choose a round; focus stays on the dropdown after the page changes round.
+     - A video with one round: "1 round" with a disabled dropdown. A video with more than 50 rounds (if you have one): the total is exact and "Show older rounds (N more)" loads the rest.
+   - [ ] **Report page round selector — iPhone (Safari, portrait, narrowest width)**: the count and the dropdown sit under the title without horizontal scroll; tapping the dropdown opens the native picker; long option text is cut off, not overflowing.
 5. **Accounts**
    - [ ] Sign out and in as another account → no previous Library, filters or reports appear.
 6. **Learning streak (local days)**

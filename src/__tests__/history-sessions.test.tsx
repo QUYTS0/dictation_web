@@ -256,7 +256,7 @@ it("one card per video: last practiced, session and round counts, the default ro
   expect(within(card).getByTestId("history-round-coverage")).toHaveTextContent("Round 2 coverage: 3/10 sentences practiced");
   expect(card).toHaveTextContent("Est. active 1h (all sessions)");
   expect(within(card).getByRole("link", { name: /View report/ })).toHaveAttribute("href", "/results/r2");
-  expect(within(card).getByRole("link", { name: /Continue/ })).toHaveAttribute("href", "/dictation/vidA");
+  expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidA");
   // Nothing per round/session is fetched until the card is expanded.
   expect(calls.some((c) => c.url.includes("/rounds") || c.url.includes("/sessions?") || c.url.includes("/report"))).toBe(false);
 });
@@ -268,7 +268,7 @@ it("Listening-only history: no round, no report link, revision-scoped Listening,
   expect(card).toHaveTextContent("Listening (current script): 42%");
   expect(card).toHaveTextContent("Not in your Library");
   expect(within(card).queryByRole("link", { name: /View report/ })).toBeNull();
-  expect(within(card).getByRole("link", { name: /Continue/ })).toHaveAttribute("href", "/dictation/vidL?mode=listening");
+  expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidL?mode=listening");
 });
 
 it("expanding shows the selected round explicitly with its own report; choosing an older round loads THAT round's report", async () => {
@@ -287,7 +287,7 @@ it("expanding shows the selected round explicitly with its own report; choosing 
   expect(within(oldReport).getByTestId("report-accuracy")).toHaveTextContent("90%"); // its own metrics
   expect(within(oldReport).getByRole("link", { name: /Open full report/ })).toHaveAttribute("href", "/results/r1");
   // Practice from the card still opens the video normally — the selection never changes practice state.
-  expect(within(card).getByRole("link", { name: /Continue/ })).toHaveAttribute("href", "/dictation/vidA");
+  expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidA");
   expect(within(card).getByTestId("history-unattributed")).toHaveTextContent("Not grouped into a study session: 14 answers");
 });
 
@@ -393,6 +393,8 @@ it("Shadowing in an older round: its report names the round, its feedback stays 
   const oldReport = await within(card).findByTestId("history-round-report-r1");
   expect(within(oldReport).getByTestId("report-shadowing-azure")).toHaveTextContent("84.5");
   expect(within(oldReport).getByTestId("report-shadowing-azure")).toHaveTextContent("2 of 10 sentences scored by Azure");
+  // The Shadowing tab: switching to it downloads nothing by itself.
+  fireEvent.click(within(oldReport).getByRole("tab", { name: "Shadowing" }));
   const toggle = within(oldReport).getByRole("button", { name: /Shadowing summary · Round 1/ });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   expect(calls.some((c) => c.url.startsWith("/api/practice/attempts"))).toBe(false);
@@ -401,3 +403,60 @@ it("Shadowing in an older round: its report names the round, its feedback stays 
   expect(calls.some((c) => c.url.includes("roundId=r2") && c.url.startsWith("/api/practice/attempts"))).toBe(false);
   expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
 });
+
+// ---------------------------------------------------------------- earlier rounds after a new round
+
+describe("round 1 stays readable after round 2 starts", () => {
+  const withNewer = (url: string, round1: unknown) => {
+    const base = global.fetch as jest.Mock;
+    global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/session/r1/report") {
+        calls.push({ url: String(input), method: init?.method ?? "GET" });
+        return round1 as Response;
+      }
+      return base(input, init);
+    }) as typeof fetch;
+  };
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("no separate earlier-report button; choosing round 1 makes the card's normal 'View report' open round 1, whose report is its own", async () => {
+    withNewer("", json({ round: report("r1", 1, "Revision A sentence"), newerActiveRound: { roundId: "r2", roundNumber: 2 } }));
+    renderPage();
+    const card = await screen.findByTestId("history-video-vidA");
+    expect(within(card).queryByRole("button", { name: /Earlier round report/i })).toBeNull();
+    const viewReport = within(card).getByRole("link", { name: /View report/ });
+    expect(viewReport).toHaveAttribute("href", "/results/r2"); // the default round (active)
+    fireEvent.click(within(card).getByRole("button", { name: "Rounds and sessions" }));
+    fireEvent.click(await within(card).findByRole("button", { name: /Round 1 · Completed/ }));
+    expect(viewReport).toHaveAttribute("href", "/results/r1"); // follows the explicit choice
+    const oldReport = await within(card).findByTestId("history-round-report-r1");
+    expect(oldReport).toHaveTextContent("Revision A sentence"); // its pinned transcript
+    expect(within(oldReport).getByTestId("report-accuracy")).toHaveTextContent("90%"); // its own metrics
+    expect(within(oldReport).queryByTestId("round-action-continue_shadowing")).toBeNull();
+    expect(within(oldReport).getByRole("link", { name: "Go to current round (Round 2)" })).toHaveAttribute("href", "/dictation/vidA");
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
+
+  it("switching rounds with responses arriving out of order never shows one round's report under the other", async () => {
+    let releaseR1: () => void = () => {};
+    const base = global.fetch as jest.Mock;
+    global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/session/r1/report")
+        return new Promise<Response>((resolve) => (releaseR1 = () => resolve(json({ round: report("r1", 1, "Revision A sentence") }))));
+      return base(input, init);
+    }) as typeof fetch;
+    renderPage();
+    const card = await expandVideo("vidA");
+    await within(card).findByTestId("history-round-report-r2");
+    fireEvent.click(within(card).getByRole("button", { name: /Round 1 · Completed/ })); // r1 request pending
+    expect(within(card).queryByTestId("history-round-report-r2")).toBeNull(); // round 2's report is not shown as round 1
+    fireEvent.click(within(card).getByRole("button", { name: /Round 2 · In progress/ }));
+    expect(await within(card).findByTestId("history-round-report-r2")).toHaveTextContent("Revision B sentence");
+    await act(async () => releaseR1()); // the late round-1 answer lands now
+    expect(within(card).getByTestId("history-round-report-r2")).toHaveTextContent("Revision B sentence");
+    expect(within(card).queryByText("Revision A sentence")).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: /Round 1 · Completed/ }));
+    expect(await within(card).findByTestId("history-round-report-r1")).toHaveTextContent("Revision A sentence");
+  });
+});
+

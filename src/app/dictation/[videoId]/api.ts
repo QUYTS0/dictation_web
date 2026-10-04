@@ -155,8 +155,9 @@ export async function saveProgress(
   return res.json();
 }
 
-export async function fetchResumeSession(videoId: string): Promise<ResumeSessionResponse> {
-  const res = await fetch(`/api/session/resume?videoId=${encodeURIComponent(videoId)}`);
+export async function fetchResumeSession(videoId: string, roundId?: string | null): Promise<ResumeSessionResponse> {
+  const round = roundId ? `&roundId=${encodeURIComponent(roundId)}` : "";
+  const res = await fetch(`/api/session/resume?videoId=${encodeURIComponent(videoId)}${round}`);
   if (!res.ok) throw new Error("Failed to fetch resume session");
   return res.json();
 }
@@ -196,6 +197,10 @@ export async function fetchVocabHighlights(
 export interface RestartSessionResult {
   sessionId?: string;
   transcriptId?: string;
+  /** false: the server already had a different active round and returned
+   *  it unchanged (retry-safe restart); absent from older servers. */
+  created?: boolean;
+  roundNumber?: number;
 }
 
 export async function restartSession(videoId: string, sessionId?: string): Promise<RestartSessionResult> {
@@ -207,7 +212,12 @@ export async function restartSession(videoId: string, sessionId?: string): Promi
   if (!res.ok) throw await toPracticeWriteError(res, "Failed to restart session");
   try {
     const body = await res.json();
-    return { sessionId: body?.sessionId, transcriptId: body?.transcriptId };
+    return {
+      sessionId: body?.sessionId,
+      transcriptId: body?.transcriptId,
+      created: typeof body?.created === "boolean" ? body.created : undefined,
+      roundNumber: typeof body?.roundNumber === "number" ? body.roundNumber : undefined,
+    };
   } catch {
     return {};
   }

@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { clsx } from "clsx";
-import { FileText, Headphones, Keyboard, Library, Mic, PanelRightOpen, RotateCcw, Undo2 } from "lucide-react";
-import { RoundReportPanel } from "@/components/report/RoundReportPanel";
+import { FileText, Headphones, Keyboard, Library, PanelRightOpen, Undo2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { RoundReportPanel, type ReportSection } from "@/components/report/RoundReportPanel";
+import { RoundActions } from "@/components/report/RoundActions";
+import type { ContinuationStart } from "@/lib/practice/roundActions";
 import { useRoundReportQuery } from "@/lib/queries/roundReport";
 import type { InputMode } from "../types";
 
+// Shadowing's next step comes from the shared round-action table (same
+// round, first sentence still to record or score) — not a plain mode switch.
 const MODE_ACTIONS: Array<{ mode: InputMode; label: string; icon: typeof Keyboard }> = [
   { mode: "dictation", label: "Dictation", icon: Keyboard },
   { mode: "listening", label: "Listening", icon: Headphones },
-  { mode: "shadowing", label: "Shadowing", icon: Mic },
 ];
 
 const buttonClass =
@@ -26,9 +29,13 @@ export interface PracticeReportViewProps {
   onBackToPractice: () => void;
   onOpenScript: () => void;
   onPracticeAgain: () => void;
+  /** Same-round Shadowing continuation (Learning Reports P2). */
+  onContinueShadowing: (start: ContinuationStart) => void;
   restartError?: string | null;
   /** Guest / no round: the local summary shown instead of a server report. */
   guestFallback?: React.ReactNode;
+  /** Move focus to the report when it opens (opened from the Round menu). */
+  autoFocus?: boolean;
 }
 
 /**
@@ -49,18 +56,34 @@ export function PracticeReportView({
   onBackToPractice,
   onOpenScript,
   onPracticeAgain,
+  onContinueShadowing,
   restartError,
   guestFallback,
+  autoFocus = false,
 }: PracticeReportViewProps) {
   const reportQuery = useRoundReportQuery(userId, roundId);
   const report = reportQuery.data?.round;
+  // The section of the mode the learner was practising when the report
+  // opened (e.g. Dictation after finishing in Dictation) — an explicit tab
+  // choice then wins. Never the stored "last mode".
+  const [section, setSection] = useState<ReportSection>(() => inputMode);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (autoFocus) headingRef.current?.focus({ preventScroll: true });
+    // Once, when the view opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex flex-col gap-4" data-testid="practice-report-view">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-faint)]">Round results</p>
-          <h2 className="truncate text-base font-semibold text-[var(--text)]">{videoTitle}</h2>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-faint)]">
+            {report?.round.status === "active" ? "Round report" : "Round results"}
+          </p>
+          <h2 ref={headingRef} tabIndex={-1} className="truncate text-base font-semibold text-[var(--text)] focus:outline-none">
+            {videoTitle}
+          </h2>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={onBackToPractice} className={buttonClass}>
@@ -86,11 +109,25 @@ export function PracticeReportView({
       ) : (
         <RoundReportPanel
           report={report}
+          dictationEvidence={reportQuery.data?.dictationEvidence}
+          transcriptVersion={reportQuery.data?.transcriptVersion ?? null}
+          listening={reportQuery.data?.listening ?? null}
+          section={section}
+          onSectionChange={setSection}
           userId={userId}
           shadowingFeedback="open"
           onReviewSentence={onReviewSentence}
           actions={
             <>
+              <RoundActions
+                report={report}
+                newerActiveRound={reportQuery.data?.newerActiveRound ?? null}
+                onContinue={onContinueShadowing}
+                onContinuePractice={onBackToPractice}
+                onShowShadowingSummary={() => setSection("shadowing")}
+                onPracticeAgain={onPracticeAgain}
+                hideViewReport
+              />
               {MODE_ACTIONS.filter((m) => m.mode !== inputMode).map(({ mode, label, icon: Icon }) => (
                 <button key={mode} type="button" onClick={() => onSwitchMode(mode)} className={buttonClass}>
                   <Icon size={14} /> Continue in {label}
@@ -102,14 +139,6 @@ export function PracticeReportView({
               <Link href="/dashboard" className={buttonClass}>
                 <Library size={14} /> Library
               </Link>
-              <button
-                type="button"
-                onClick={onPracticeAgain}
-                className={clsx(buttonClass, "border-[var(--accent-border)] text-[var(--accent)]")}
-                title="Starts a new round; this round's results stay in your history"
-              >
-                <RotateCcw size={14} /> Practice again (new round)
-              </button>
               {restartError && (
                 <p className="w-full text-xs text-[var(--red)]" role="alert">
                   {restartError}

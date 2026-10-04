@@ -4,21 +4,27 @@ type QueryResult = { data?: unknown; error?: unknown; count?: number | null };
 
 // Table-aware Supabase mock: each table answers with its own queued result,
 // and every filter is recorded so revision scoping can be asserted.
-const tables: Record<string, QueryResult> = {};
+// A table may also answer per query, from that query's own filters.
+const tables: Record<string, QueryResult | ((filters: Record<string, unknown>) => QueryResult)> = {};
 const filters: Array<[string, string, unknown]> = [];
 const rpcMock = jest.fn(async (...args: [string, unknown?]): Promise<QueryResult> => (void args, { data: null, error: null }));
 
 function makeBuilder(table: string) {
   const builder: Record<string, unknown> = {};
+  const own: Record<string, unknown> = {};
   const chain = () => builder;
   for (const method of ["select", "order", "limit"]) builder[method] = jest.fn(chain);
   for (const method of ["eq", "is"]) {
     builder[method] = jest.fn((col: string, val: unknown) => {
       filters.push([table, `${method}:${col}`, val]);
+      own[`${method}:${col}`] = val;
       return builder;
     });
   }
-  const result = () => tables[table] ?? { data: null, error: null };
+  const result = () => {
+    const t = tables[table];
+    return (typeof t === "function" ? t(own) : t) ?? { data: null, error: null };
+  };
   builder.maybeSingle = jest.fn(() => Promise.resolve(result()));
   builder.then = (res: (v: unknown) => unknown) => Promise.resolve(result()).then(res);
   return builder;
@@ -126,3 +132,39 @@ describe("GET /api/session/resume — Phase 6 (Listening, last mode, progress)",
     expect(json.lastMode).toBeNull();
   });
 });
+
+describe("GET /api/session/resume — Learning Reports P2 round selection", () => {
+  const ROUND = "11111111-1111-4111-8111-111111111111";
+  const req = (q: string) => new NextRequest(`http://localhost/api/session/resume?videoId=vid1${q}`);
+
+  it("an explicit roundId loads THAT round, and names the video's active round when it isn't it", async () => {
+    tables.learning_sessions = (f) =>
+      f["eq:id"] === ROUND
+        ? { data: { ...ROUND_ROW, id: ROUND, status: "completed" }, error: null }
+        : f["eq:status"] === "active"
+          ? { data: { id: "round-2", round_number: 2 }, error: null }
+          : { data: null, error: null };
+    const json = await (await GET(req(`&roundId=${ROUND}`))).json();
+    expect(json.session).toMatchObject({ sessionId: ROUND, status: "completed", newerActiveRound: { roundId: "round-2", roundNumber: 2 } });
+  });
+
+  it("an invalid roundId is refused before any query", async () => {
+    const res = await GET(req("&roundId=not-a-uuid"));
+    expect(res.status).toBe(400);
+    expect(filters).toEqual([]);
+  });
+
+  it("without roundId, the ACTIVE round wins over a more recently written old round", async () => {
+    tables.learning_sessions = (f) =>
+      f["eq:status"] === "active" ? { data: { ...ROUND_ROW, id: "active-round", status: "active" }, error: null } : { data: { ...ROUND_ROW, id: "old-round", status: "abandoned" }, error: null };
+    const json = await (await GET(req(""))).json();
+    expect(json.session).toMatchObject({ sessionId: "active-round", newerActiveRound: null });
+  });
+
+  it("with no active round, the most recently STARTED round is resumed (not the last written)", async () => {
+    tables.learning_sessions = (f) => (f["eq:status"] === "active" ? { data: null, error: null } : { data: { ...ROUND_ROW, id: "latest-started", status: "completed" }, error: null });
+    const json = await (await GET(req(""))).json();
+    expect(json.session.sessionId).toBe("latest-started");
+  });
+});
+

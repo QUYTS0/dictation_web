@@ -241,6 +241,33 @@ describe("restart and autosave", () => {
     expect(result.current.sentenceAccuracy.practiced).toBe(0);
   });
 
+  it("P2 follow-up: restart requests made at the same time send ONE request; a server that already has another active round changes nothing", async () => {
+    const { result } = await renderResumed();
+    let resolve: (v: { sessionId?: string; transcriptId?: string; created?: boolean; roundNumber?: number }) => void = () => {};
+    apiMock.restartSession.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    act(() => {
+      first = result.current.restartRound();
+      second = result.current.restartRound();
+    });
+    await expect(second).resolves.toEqual({ kind: "ignored" });
+    await act(async () => resolve({ sessionId: "round-2", transcriptId: "rev-A", created: true, roundNumber: 2 }));
+    await expect(first).resolves.toEqual({ kind: "started", roundId: "round-2", roundNumber: 2 });
+    expect(apiMock.restartSession).toHaveBeenCalledTimes(1);
+    expect(result.current.roundState).toMatchObject({ status: "active", roundNumber: 2 });
+    expect(result.current.uxState).toBe("transcript_ready"); // the new round starts at its first sentence
+    expect(result.current.currentSegIdx).toBe(0);
+
+    apiMock.restartSession.mockResolvedValueOnce({ sessionId: "round-7", transcriptId: "rev-A", created: false, roundNumber: 7 });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.restartRound();
+    });
+    expect(outcome).toEqual({ kind: "already_active", roundId: "round-7", roundNumber: 7 });
+    expect(useSessionStore.getState().sessionId).toBe("round-2"); // not adopted as a fresh round
+  });
+
   it("a failed restart leaves the lesson untouched and says why", async () => {
     const { result } = await renderResumed();
     apiMock.restartSession.mockRejectedValueOnce(maintenance());

@@ -85,8 +85,14 @@ import { useActivityPulse } from "./useActivityPulse";
 import { usePracticeActivitySources } from "./usePracticeActivitySources";
 import { ListeningCoverageLine } from "./components/ListeningCoverageLine";
 import { PracticeReportView } from "./components/PracticeReportView";
+import { RoundMenu } from "./components/RoundMenu";
+import { NewRoundDialog } from "./components/NewRoundDialog";
+import { useNewRoundFlow } from "./useNewRoundFlow";
+import { roundMenuModel, type PendingLocalWork } from "@/lib/practice/roundMenu";
 import { ScriptVersionsDialog } from "./components/ScriptVersionsDialog";
 import { useReportViewLayout } from "./useReportViewLayout";
+import { parseContinuationRequest, resolveContinuationStart, type ContinuationStart } from "@/lib/practice/roundActions";
+import { fetchRoundReport, roundReportKeys } from "@/lib/queries/roundReport";
 import { useListeningResume } from "./useListeningResume";
 import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import { persistLastMode, videoLibraryKeys } from "@/lib/queries/videoLibrary";
@@ -132,6 +138,17 @@ export default function DictationPage({ params }: PageProps) {
   } | null>(null);
   const { inputMode, setInputMode, applyServerMode } = useInputModePreference(videoId);
   const queryClient = useQueryClient();
+  // Learning Reports P2: an explicit same-round Shadowing continuation
+  // (/dictation/<id>?round=<roundId>&mode=shadowing&start=…), read once.
+  // It names the round to load and outranks the video's saved last mode.
+  const [continuation] = useState(() => (typeof window === "undefined" ? null : parseContinuationRequest(window.location.search)));
+  const [continuationIssue, setContinuationIssue] = useState<null | "newer_round" | "unavailable">(null);
+  const continuationAppliedRef = useRef(false);
+  useEffect(() => {
+    if (continuation && inputMode !== "shadowing") setInputMode("shadowing");
+    // Once, for the request this page was opened with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [continuation]);
 
   const { videoSizeMode, setVideoSizeMode } = useVideoSizeMode();
   const { soundEnabled, setSoundEnabled } = useSoundPreference();
@@ -165,6 +182,8 @@ export default function DictationPage({ params }: PageProps) {
     nextAutoRetryAt,
     checkAnswerError,
     restartError,
+    restartPending,
+    resumeLookupFailed,
     sentenceAccuracy,
     roundState,
     currentRoundId,
@@ -185,7 +204,7 @@ export default function DictationPage({ params }: PageProps) {
     handleSkip,
     handlePrevious,
     handleResume,
-    handleRestart,
+    restartRound,
     handleManualTranscriptSaved,
     handleRegenerateTranscript,
     jumpToSegment,
@@ -193,12 +212,15 @@ export default function DictationPage({ params }: PageProps) {
     restoreListeningPosition,
     reviewSegment,
     exitCompletedView,
+    newerActiveRound,
+    resumeChecked,
   } = useDictationSession({
     videoId,
     user,
     autoEnterPaused: inputMode !== "dictation",
     inputMode,
-    onServerLastMode: applyServerMode,
+    onServerLastMode: continuation ? undefined : applyServerMode,
+    requestedRoundId: continuation?.roundId ?? null,
   });
 
   // Round results as the page's main content (plan Phase 6 §9).
@@ -206,6 +228,13 @@ export default function DictationPage({ params }: PageProps) {
     showPanel: showLearningPanel,
     setShowPanel: setShowLearningPanel,
   });
+  // How the report was opened: from the Round menu it is a look at the round
+  // (in progress or not) — never a completion celebration.
+  const [reportOpenedFromMenu, setReportOpenedFromMenu] = useState(false);
+  // Where focus returns when the learner goes back to practice.
+  const reportReturnFocusRef = useRef<HTMLElement | null>(null);
+  // The last answer text actually submitted (an unsent draft is anything else).
+  const [lastSubmittedAnswer, setLastSubmittedAnswer] = useState<string | null>(null);
 
   const currentSegment = segments[currentSegIdx];
 
@@ -286,6 +315,7 @@ export default function DictationPage({ params }: PageProps) {
   const previousUxStateRef = useRef(uxState);
   useEffect(() => {
     if (uxState === "session_completed" && previousUxStateRef.current !== "session_completed") {
+      setReportOpenedFromMenu(false);
       openReport();
     }
     previousUxStateRef.current = uxState;
@@ -859,6 +889,7 @@ export default function DictationPage({ params }: PageProps) {
     const trimmed = workspaceInputValue.trim();
     if (!trimmed) return;
     noteInteraction();
+    setLastSubmittedAnswer(trimmed);
     void handleAnswerSubmit(trimmed);
   }, [handleAnswerSubmit, workspaceInputValue, noteInteraction]);
 
@@ -870,19 +901,128 @@ export default function DictationPage({ params }: PageProps) {
     },
     [closeReport, reviewSegment]
   );
+  /**
+   * Same-round Shadowing continuation (plan §5.3): Shadowing mode, paused at
+   * the first sentence of the pinned script that still needs this step —
+   * re-derived from the round's saved results each time (not a stored
+   * playhead). The round stays as it is: no new round, completion untouched;
+   * new takes save into this round.
+   */
+  const handleContinueShadowing = useCallback(
+    async (start: ContinuationStart, roundId: string | null = currentRoundId) => {
+      if (!user || !roundId) return;
+      let startIdx = 0;
+      try {
+        const data = await queryClient.fetchQuery({
+          queryKey: roundReportKeys.report(user.id, roundId),
+          queryFn: () => fetchRoundReport(roundId),
+        });
+        startIdx = resolveContinuationStart(start, segments, data.round.sentences);
+      } catch {
+        // The report couldn't be read: start at the round's first sentence.
+        startIdx = resolveContinuationStart("first", segments, []);
+      }
+      handleSelectInputMode("shadowing");
+      reviewSegment(startIdx);
+    },
+    [user, currentRoundId, queryClient, segments, handleSelectInputMode, reviewSegment]
+  );
+  // Apply a continuation request once its round is known.
+  useEffect(() => {
+    if (!continuation || continuationAppliedRef.current || !user || !resumeChecked || segments.length === 0) return;
+    continuationAppliedRef.current = true;
+    if (newerActiveRound) {
+      setContinuationIssue("newer_round");
+      return;
+    }
+    const roundId = resumeState?.sessionId ?? currentRoundId;
+    if (roundId !== continuation.roundId || resumeState?.status === "abandoned" || !transcriptId) {
+      setContinuationIssue("unavailable");
+      return;
+    }
+    void handleContinueShadowing(continuation.start, roundId);
+  }, [continuation, user, resumeChecked, segments.length, newerActiveRound, resumeState, currentRoundId, transcriptId, handleContinueShadowing]);
   const handleBackToPractice = useCallback(() => {
     closeReport();
     exitCompletedView();
+    // Back where the learner opened the report from (the Round menu), when
+    // it is still on the page.
+    const returnTo = reportReturnFocusRef.current;
+    reportReturnFocusRef.current = null;
+    if (returnTo) requestAnimationFrame(() => returnTo.isConnected && returnTo.focus({ preventScroll: true }));
   }, [closeReport, exitCompletedView]);
   const handleOpenScript = useCallback(() => {
+    // Focus follows the explicit action: the panel mounts on the next frame.
+    requestAnimationFrame(() => rightPanelRef.current?.focus({ preventScroll: true }));
     setRightPanelTab("script");
     openScript();
   }, [openScript]);
-  const handlePracticeAgain = useCallback(() => {
-    if (!window.confirm("Start a new round of this video? This round's results stay in your history.")) return;
+
+  // ---- The one "new round" flow (Learning Reports P2 follow-up) ----
+  // Every entry point (Round menu, completed/resume cards, report actions)
+  // opens the same confirmation; only its confirm button restarts.
+  const recordingsPending = recordings.pendingWork();
+  const pendingWork: PendingLocalWork = {
+    recording: recorder.status === "recording",
+    answerSaving: uxState === "checking_answer",
+    recordingsSaving: recordingsPending.saving,
+    recordingsFailed: recordingsPending.failed,
+    scoresUnsaved: recordingsPending.scoresUnsaved,
+    evaluationRunning: practiceEval.busySegmentIndex !== null,
+    draft: inputMode === "dictation" && workspaceInputValue.trim().length > 0 && workspaceInputValue.trim() !== lastSubmittedAnswer,
+  };
+  const { discardUnsaved: discardUnsavedRecordings, retryUnsaved: retryUnsavedRecordings } = recordings;
+  const { discard: discardClip } = recorder;
+  const { reset: resetSpeech } = speech;
+  const handleNewRoundStarted = useCallback(() => {
+    // The server confirmed the new round (the session hook already moved to
+    // it): leave the report and clear what belonged to the old round's
+    // sentence on screen. Saved takes, pending scores and buffered activity
+    // keep the round they were made in.
     closeReport();
-    handleRestart();
-  }, [closeReport, handleRestart]);
+    setWorkspaceInputValue("");
+    setLastSubmittedAnswer(null);
+    setShowHintPanel(false);
+    setResetSignal((v) => v + 1);
+    discardClip();
+    resetSpeech();
+  }, [closeReport, discardClip, resetSpeech]);
+  const newRoundFlow = useNewRoundFlow({
+    status: roundState.status ?? resumeState?.status ?? null,
+    newerActiveRound,
+    pendingWork,
+    restart: restartRound,
+    restartPending,
+    discardUnsaved: discardUnsavedRecordings,
+    onStarted: handleNewRoundStarted,
+  });
+  const handlePracticeAgain = newRoundFlow.request;
+
+  // ---- Round menu ----
+  const roundMenu = roundMenuModel({
+    signedIn: !!user,
+    loading: !!user && !resumeChecked,
+    lookupFailed: resumeLookupFailed,
+    roundId: user ? currentRoundId : null,
+    roundNumber: roundState.roundNumber ?? null,
+    status: roundState.status ?? resumeState?.status ?? null,
+    newerActiveRound,
+    inputMode,
+    recording: recorder.status === "recording",
+    restartPending,
+  });
+  const currentRoundHref = `/dictation/${encodeURIComponent(videoId)}`;
+  const handleViewRoundReport = useCallback(() => {
+    // Read-only: pauses playback (the report effect), keeps the practice
+    // view mounted with its answer, sentence, clip and pending requests.
+    reportReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setReportOpenedFromMenu(true);
+    openReport();
+  }, [openReport]);
+  const handleOpenResultsFromPage = useCallback(() => {
+    setReportOpenedFromMenu(false);
+    openReport();
+  }, [openReport]);
 
   // Listening Mode's Play/Pause control — toggles the actual player state
   // directly (no seeking), so pausing always preserves the current timestamp.
@@ -909,6 +1049,9 @@ export default function DictationPage({ params }: PageProps) {
     onToggleMyRecordingPlayback: toggleMyRecordingPlayback,
     onEvaluate: handleTriggerTrueEvaluation,
     onOpenEvaluationDetails: handleOpenEvaluationDetails,
+    // Nothing may act on the hidden practice view behind the report, or
+    // behind the new-round confirmation.
+    suspended: reportOpen || newRoundFlow.open,
   });
 
   // ---- Manual transcript paste fallback (used when captions aren't available) ----
@@ -987,6 +1130,7 @@ export default function DictationPage({ params }: PageProps) {
       const trimmed = value.trim();
       if (!trimmed) return;
       if (evaluateAutoAdvanceAnswer(currentSegment.text, trimmed, "relaxed").isCorrect) {
+        setLastSubmittedAnswer(trimmed);
         void handleAnswerSubmit(trimmed);
       }
     },
@@ -1195,6 +1339,14 @@ export default function DictationPage({ params }: PageProps) {
         onChange={handleSrtFileInputChange}
         className="hidden"
       />
+      {newRoundFlow.open && (
+        <NewRoundDialog
+          flow={newRoundFlow}
+          newerActiveRound={newerActiveRound}
+          currentRoundHref={currentRoundHref}
+          onRetryUnsaved={retryUnsavedRecordings}
+        />
+      )}
       <AnimatePresence>
         {isZenMode && (
           <motion.div
@@ -1259,6 +1411,12 @@ export default function DictationPage({ params }: PageProps) {
                 <div className="hidden md:block">
                   <KeyboardShortcutsButton />
                 </div>
+                <RoundMenu
+                  model={roundMenu}
+                  onViewReport={handleViewRoundReport}
+                  onNewRound={handlePracticeAgain}
+                  currentRoundHref={currentRoundHref}
+                />
                 <button
                   onClick={() => setShowSettingsDrawer(true)}
                   className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] transition-colors hover:bg-white/10"
@@ -1277,8 +1435,10 @@ export default function DictationPage({ params }: PageProps) {
                 </button>
                 <button
                   onClick={() => setShowLearningPanel((prev) => !prev)}
+                  aria-expanded={showLearningPanel}
+                  aria-controls="lesson-panel"
                   className={clsx(
-                    "hidden h-8 w-8 items-center justify-center rounded-lg border transition-colors md:flex",
+                    "flex h-8 w-8 items-center justify-center rounded-lg border transition-colors",
                     showLearningPanel
                       ? "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--accent)]"
                       : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10"
@@ -1296,6 +1456,32 @@ export default function DictationPage({ params }: PageProps) {
       </AnimatePresence>
 
       <main className="mx-auto flex w-full flex-col gap-4 px-4 pb-[calc(16px+env(safe-area-inset-bottom))] md:flex-1 md:min-h-0 md:overflow-hidden lg:flex-row">
+        {continuationIssue && (
+          <section
+            role="alert"
+            data-testid="continuation-blocked"
+            className="flex w-full flex-col gap-3 rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-4 text-[var(--text)] lg:max-w-2xl"
+          >
+            <h2 className="text-base font-semibold">
+              {continuationIssue === "newer_round" ? "This isn't your current round" : "This round can't be continued"}
+            </h2>
+            <p className="text-sm text-[var(--text-muted)]">
+              {continuationIssue === "newer_round"
+                ? `A newer round${newerActiveRound ? ` (Round ${newerActiveRound.roundNumber})` : ""} is in progress, so practising in this older round is turned off. Its results stay in its report.`
+                : "It ended, isn't available for this account, or has no saved script version. Its results stay in its report."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <a href={`/dictation/${encodeURIComponent(videoId)}`} className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#1a1206]">
+                {continuationIssue === "newer_round" ? "Go to current round" : "Open this video"}
+              </a>
+              {continuation && (
+                <Link href={`/results/${encodeURIComponent(continuation.roundId)}`} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-semibold">
+                  View report
+                </Link>
+              )}
+            </div>
+          </section>
+        )}
         <motion.div
           layout
           transition={{ type: "tween", ease: "easeInOut", duration: 0.3 }}
@@ -1363,9 +1549,13 @@ export default function DictationPage({ params }: PageProps) {
           {/* The practice area stays MOUNTED while the results are shown (no
               second player instance, no lost playhead) — only hidden. */}
           <div
-            className={clsx("flex flex-col gap-2 pt-2 lg:pt-3", isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0", reportOpen && "hidden")}
+            className={clsx(
+              "flex flex-col gap-2 pt-2 lg:pt-3",
+              isPracticing ? "lg:min-h-0 lg:flex-1" : "flex-shrink-0",
+              (reportOpen || continuationIssue) && "hidden"
+            )}
             data-testid="practice-area"
-            aria-hidden={reportOpen || undefined}
+            aria-hidden={reportOpen || !!continuationIssue || undefined}
           >
           <DefaultLayout
             isZenMode={isZenMode}
@@ -1450,8 +1640,9 @@ export default function DictationPage({ params }: PageProps) {
 
             {reportOpen && (
               <>
-                {roundState.completedByThisPage && <ConfettiBurst />}
+                {roundState.completedByThisPage && !reportOpenedFromMenu && <ConfettiBurst />}
                 <PracticeReportView
+                  autoFocus={reportOpenedFromMenu}
                   userId={user?.id}
                   roundId={user ? currentRoundId : null}
                   videoTitle={workspaceTitle}
@@ -1461,6 +1652,7 @@ export default function DictationPage({ params }: PageProps) {
                   onBackToPractice={handleBackToPractice}
                   onOpenScript={handleOpenScript}
                   onPracticeAgain={handlePracticeAgain}
+                  onContinueShadowing={(start) => void handleContinueShadowing(start)}
                   restartError={restartError}
                   guestFallback={
                     <div className="flex flex-col gap-2 text-sm text-[var(--text-muted)]">
@@ -1597,12 +1789,12 @@ export default function DictationPage({ params }: PageProps) {
                   <>
                     <p className="text-sm text-[var(--text-muted)]">
                       {resumeState.provenance === "legacy_unverified"
-                        ? "You finished this video before completion tracking was verified."
+                        ? "You completed this round (it started before detailed tracking). Reopening it never restarts it — review it, practise more in it, or start a new round."
                         : "You completed this round. Reopening it never restarts it — review it, practice more in it, or start a new round."}
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-3">
                       <button
-                        onClick={openReport}
+                        onClick={handleOpenResultsFromPage}
                         className="px-6 py-2 rounded-xl bg-[var(--accent)] text-[#1a1206] font-semibold text-sm hover:brightness-110 transition-colors"
                       >
                         View round results
@@ -1614,7 +1806,7 @@ export default function DictationPage({ params }: PageProps) {
                         Review sentences
                       </button>
                       <button onClick={handlePracticeAgain} className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors">
-                        Practice again (new round)
+                        Practice again — new round
                       </button>
                     </div>
                   </>
@@ -1627,8 +1819,8 @@ export default function DictationPage({ params }: PageProps) {
                           <button onClick={handleResume} className="px-6 py-2 rounded-xl bg-[var(--accent)] text-[#1a1206] font-semibold text-sm hover:brightness-110 transition-colors">
                             Resume at sentence {resumeState.currentSegmentIndex + 1}
                           </button>
-                          <button onClick={handleRestart} className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors">
-                            Restart
+                          <button onClick={handlePracticeAgain} className="px-4 py-2 rounded-xl border border-[var(--border)] text-[var(--text)] font-semibold text-sm hover:bg-white/10 transition-colors">
+                            Start new round
                           </button>
                         </>
                       ) : (
@@ -1651,8 +1843,15 @@ export default function DictationPage({ params }: PageProps) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
                   transition={{ duration: 0.3, delay: 0.15, ease: "easeOut" }}
-                  className="mt-8 flex justify-center"
+                  className="mt-8 flex flex-wrap items-start justify-center gap-6"
                 >
+                  <RoundMenu
+                    variant="zen"
+                    model={roundMenu}
+                    onViewReport={handleViewRoundReport}
+                    onNewRound={handlePracticeAgain}
+                    currentRoundHref={currentRoundHref}
+                  />
                   <button onClick={() => setIsZenMode(false)} className="group flex flex-col items-center gap-2">
                     <div className="w-12 h-12 rounded-full bg-white/10 border border-white/20 backdrop-blur-md flex items-center justify-center text-white/50 group-hover:text-white group-hover:bg-white/20 transition-all group-hover:scale-110">
                       <X size={24} />
@@ -1670,7 +1869,7 @@ export default function DictationPage({ params }: PageProps) {
                 </p>
                 <button
                   type="button"
-                  onClick={openReport}
+                  onClick={handleOpenResultsFromPage}
                   className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#1a1206] hover:brightness-110"
                 >
                   View round results
@@ -1689,6 +1888,10 @@ export default function DictationPage({ params }: PageProps) {
             <motion.div
               key="learning-panel"
               ref={rightPanelRef}
+              id="lesson-panel"
+              role="region"
+              aria-label="Lesson panel"
+              tabIndex={-1}
               initial={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
               exit={isZenMode ? { opacity: 0, x: 24 } : { opacity: 0, x: 16 }}
@@ -1756,22 +1959,16 @@ export default function DictationPage({ params }: PageProps) {
             )}
           </AnimatePresence>
 
-        {!showLearningPanel && (
-          <div
-            className={clsx(
-              isZenMode
-                ? "fixed inset-x-0 bottom-4 z-[60] flex justify-center md:inset-x-auto md:top-4 md:right-4 md:bottom-auto"
-                : "flex w-full justify-end lg:w-auto lg:justify-start lg:self-start lg:pt-3"
-            )}
-          >
+        {/* Outside Zen mode the top bar's toggle is the only panel control —
+            no second button competes for space when the panel is closed. Zen
+            mode hides the top bar, so it keeps this one. */}
+        {!showLearningPanel && isZenMode && (
+          <div className="fixed inset-x-0 bottom-4 z-[60] flex justify-center md:inset-x-auto md:top-4 md:right-4 md:bottom-auto">
             <button
               onClick={() => setShowLearningPanel(true)}
-              className={clsx(
-                "inline-flex h-10 w-10 items-center justify-center rounded-xl border shadow-sm backdrop-blur-md transition-colors",
-                isZenMode
-                  ? "border-white/20 bg-white/10 text-white/60 hover:bg-white/20 hover:text-white"
-                  : "border-[var(--border)] bg-[var(--surface-glass)] text-[var(--text-muted)] hover:bg-white/10"
-              )}
+              aria-expanded={false}
+              aria-controls="lesson-panel"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white/60 shadow-sm backdrop-blur-md transition-colors hover:bg-white/20 hover:text-white"
               aria-label="Show lesson panel"
               title="Show lesson panel"
             >

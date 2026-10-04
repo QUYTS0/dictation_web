@@ -5,6 +5,7 @@ import Link from "next/link";
 import { clsx } from "clsx";
 import { Calendar, ChevronDown, Clock, FileText, Headphones, PlayCircle } from "lucide-react";
 import { RoundReportPanel } from "@/components/report/RoundReportPanel";
+import { RoundActions } from "@/components/report/RoundActions";
 import { useRoundReportQuery } from "@/lib/queries/roundReport";
 import { useHistoryVideoRoundsQuery, useHistoryVideoSessionsQuery } from "@/lib/queries/historySessions";
 import type { HistoryRound, HistoryVideo, HistoryVideoSession } from "@/lib/types/learning";
@@ -16,7 +17,9 @@ const MODE_LABEL: Record<string, string> = { dictation: "Dictation", listening: 
 type RoundLike = Pick<HistoryRound, "status" | "provenance">;
 
 export function roundStatusLabel(r: RoundLike): string {
-  if (r.status === "completed") return r.provenance === "legacy_unverified" ? "Completed earlier (unverified)" : "Completed";
+  // Provenance says when the round STARTED relative to detailed tracking —
+  // never how or when it was completed.
+  if (r.status === "completed") return r.provenance === "legacy_unverified" ? "Completed · started before detailed tracking" : "Completed";
   if (r.status === "abandoned") return "Replaced by a newer round";
   return "In progress";
 }
@@ -143,21 +146,38 @@ function SelectedRoundReport({ userId, roundId }: { userId: string; roundId: str
     <div className="report-light-theme rounded-2xl border border-white/60 bg-white/60 p-4" data-testid={`history-round-report-${roundId}`}>
       <RoundReportPanel
         report={report.data.round}
+        dictationEvidence={report.data.dictationEvidence}
+        transcriptVersion={report.data.transcriptVersion ?? null}
+        listening={report.data.listening ?? null}
         userId={userId}
         shadowingFeedback="collapsed"
         actions={
-          <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-white">
-            <FileText size={14} /> Open full report
-          </Link>
+          <>
+            {/* The same next-step table as the completion view (links here: no writes from History). */}
+            <RoundActions report={report.data.round} newerActiveRound={report.data.newerActiveRound ?? null} hideViewReport />
+            <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-white">
+              <FileText size={14} /> Open full report
+            </Link>
+          </>
         }
       />
     </div>
   );
 }
 
-function VideoDetails({ userId, video }: { userId: string; video: HistoryVideo }) {
+function VideoDetails({
+  userId,
+  video,
+  picked,
+  onPick,
+}: {
+  userId: string;
+  video: HistoryVideo;
+  /** The round the learner chose on this card (the card's report link follows it). */
+  picked: string | null;
+  onPick: (roundId: string) => void;
+}) {
   const roundsQuery = useHistoryVideoRoundsQuery(userId, video.videoId, true);
-  const [picked, setPicked] = useState<string | null>(null);
   const data = roundsQuery.data;
   const selectedId = picked ?? data?.defaultRoundId ?? video.round?.roundId ?? null;
   const selected = data?.rounds.find((r) => r.roundId === selectedId) ?? null;
@@ -185,7 +205,7 @@ function VideoDetails({ userId, video }: { userId: string; video: HistoryVideo }
                 key={r.roundId}
                 type="button"
                 aria-pressed={r.roundId === selectedId}
-                onClick={() => setPicked(r.roundId)}
+                onClick={() => onPick(r.roundId)}
                 className={clsx(
                   "rounded-xl border px-3 py-1.5 text-left text-xs",
                   r.roundId === selectedId ? "border-primary-400 bg-primary-50 text-primary-700" : "border-white/60 bg-white/50 text-slate-600 hover:bg-white/80"
@@ -247,6 +267,9 @@ function VideoDetails({ userId, video }: { userId: string; video: HistoryVideo }
  */
 export function HistoryVideoCard({ userId, video }: { userId: string; video: HistoryVideo }) {
   const [expanded, setExpanded] = useState(false);
+  // A round chosen under "Rounds and sessions": the card's own "View report"
+  // then opens THAT round (otherwise the default round — active, else latest).
+  const [picked, setPicked] = useState<string | null>(null);
   const r = video.round;
   const title = video.title ?? `Video ${video.videoId}`;
   const listeningOnly = !r;
@@ -319,7 +342,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
           <div className="mt-1 flex flex-wrap gap-2">
             {r && (
               <Link
-                href={`/results/${r.roundId}`}
+                href={`/results/${picked ?? r.roundId}`}
                 className="inline-flex items-center gap-1 rounded-xl border border-white/60 bg-white/60 px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-white/80"
               >
                 <FileText size={13} /> View report
@@ -343,7 +366,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
           </div>
         </div>
       </div>
-      {expanded && <VideoDetails userId={userId} video={video} />}
+      {expanded && <VideoDetails userId={userId} video={video} picked={picked} onPick={setPicked} />}
     </article>
   );
 }

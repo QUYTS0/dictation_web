@@ -22,7 +22,15 @@ interface UseKeyboardShortcutsOptions {
   onToggleMyRecordingPlayback?: () => void;
   onEvaluate?: () => void;
   onOpenEvaluationDetails?: () => void;
+  /** The practice view is hidden (round report open) or a confirmation is
+   *  showing: no practice shortcut may act on the hidden player/recorder.
+   *  Escape still leaves Zen mode. */
+  suspended?: boolean;
 }
+
+/** Keys pressed inside a menu or dialog belong to it, not to the practice shortcuts. */
+const inMenuOrDialog = (target: EventTarget | null) =>
+  target instanceof Element && !!target.closest('[role="menu"],[role="dialog"],[role="alertdialog"]');
 
 /**
  * Wires the dictation page's global keyboard shortcuts (Space play/pause in
@@ -45,6 +53,7 @@ export function useKeyboardShortcuts({
   onToggleMyRecordingPlayback,
   onEvaluate,
   onOpenEvaluationDetails,
+  suspended = false,
 }: UseKeyboardShortcutsOptions) {
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
 
@@ -56,11 +65,15 @@ export function useKeyboardShortcuts({
         target instanceof HTMLTextAreaElement ||
         (target instanceof HTMLElement && target.isContentEditable);
 
+      if (inMenuOrDialog(target)) return;
+
       if (e.key === "Escape" && isZenMode) {
         e.preventDefault();
         onZenModeChange(false);
         return;
       }
+
+      if (suspended) return;
 
       // Shift+Space (replay) takes priority over the answer input's own plain-Space
       // word-advance handler. Handled once here on keydown; stopping propagation keeps
@@ -171,6 +184,7 @@ export function useKeyboardShortcuts({
     onToggleMyRecordingPlayback,
     onEvaluate,
     onOpenEvaluationDetails,
+    suspended,
   ]);
 
   return { inputFocusSignal };

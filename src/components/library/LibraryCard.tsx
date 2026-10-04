@@ -57,9 +57,15 @@ export function LibraryCard({
   const ratio = progress?.coverage.overall ?? null;
   const badge =
     item.state === "completed" && !item.hasCompletedRound && item.hasLegacyCompletion
-      ? { label: "Completed earlier (unverified)", className: "bg-amber-50 text-amber-700" }
+      ? { label: "Completed · started before detailed tracking", className: "bg-amber-50 text-amber-700" }
       : STATE_BADGE[item.state];
-  const reviewRoundId = item.round?.status === "completed" ? item.round.roundId : null;
+  // "Review report" opens the card's round — the shared default (the active
+  // round, else the latest; fn_video_library) — whenever there is something
+  // to review: that round is completed, or an earlier round was. The report
+  // page's round selector reaches every other round of the video, so a new
+  // active round never hides the earlier reports.
+  const hasCompletedReport = item.round?.status === "completed" || item.completedRoundCount > 0 || item.hasLegacyCompletion;
+  const reviewRoundId = item.round && hasCompletedReport ? item.round.roundId : null;
   const accuracy = progress?.sentenceAccuracy;
 
   return (

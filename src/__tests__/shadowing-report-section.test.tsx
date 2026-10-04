@@ -100,7 +100,8 @@ function renderPanel(props: Partial<React.ComponentProps<typeof RoundReportPanel
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <RoundReportPanel report={r} userId="user-1" {...props} />
+      {/* The Shadowing section, as opened by its tab or by "View Shadowing summary" (?section=shadowing). */}
+      <RoundReportPanel report={r} userId="user-1" defaultSection="shadowing" {...props} />
     </QueryClientProvider>
   );
 }

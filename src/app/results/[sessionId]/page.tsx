@@ -2,17 +2,21 @@
 
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, BookOpen, Lightbulb, Sparkles, ThumbsUp } from "lucide-react";
 import { clsx } from "clsx";
 import AppHeader from "@/components/AppHeader";
 import VocabularySaveButton from "@/components/VocabularySaveButton";
 import AIFeedbackCard from "@/components/AIFeedbackCard";
-import { RoundReportPanel } from "@/components/report/RoundReportPanel";
+import { RoundReportPanel, parseReportSection } from "@/components/report/RoundReportPanel";
+import { RoundActions } from "@/components/report/RoundActions";
+import { RoundSelector, roundOptionLabel } from "@/components/report/RoundSelector";
 import { useAuth } from "@/context/auth";
 import { errorTypeLabel } from "@/lib/constants/errorTypes";
 import { useRoundReportQuery } from "@/lib/queries/roundReport";
 import type { SessionAssessment, SessionExplainAllItem, SessionExplainAllResponse, VocabularyItem } from "@/lib/types";
+import type { VideoRoundList, VideoRoundOption } from "@/lib/types/learning";
 
 interface PageProps {
   params: Promise<{ sessionId: string }>;
@@ -24,13 +28,60 @@ interface GeminiQuotaStatus {
   rpdLimit: number;
 }
 
+/**
+ * One report per round URL (/results/<roundId>). Everything round-specific
+ * below (AI explanations fetched this visit, the assessment override) lives
+ * in a component keyed by the round, so switching rounds — selector,
+ * Back/Forward — can never carry one round's state into another.
+ */
 export default function SessionResultsPage({ params }: PageProps) {
   const { sessionId } = use(params);
+  return <RoundResults key={sessionId} sessionId={sessionId} />;
+}
+
+/** The round being opened, from the round list already in the cache (shown while its report loads). */
+function useCachedRoundOption(userId: string | undefined, roundId: string): { videoId: string; option: VideoRoundOption } | null {
+  const queryClient = useQueryClient();
+  if (!userId) return null;
+  const lists = queryClient.getQueriesData<InfiniteData<VideoRoundList>>({ queryKey: ["history-sessions", userId, "round-list"] });
+  for (const [, list] of lists) {
+    for (const page of list?.pages ?? []) {
+      const option = (Array.isArray(page?.items) ? page.items : []).find((r) => r.roundId === roundId);
+      if (option) return { videoId: page.videoId, option };
+    }
+  }
+  return null;
+}
+
+function RoundResults({ sessionId }: { sessionId: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // ?section= (e.g. "View Shadowing summary" links, or kept when switching rounds).
+  const [initialSection] = useState(() => parseReportSection(searchParams?.get("section") ?? null));
+  // The tab on screen — carried to another round so the same mode can be compared.
+  const [section, setSection] = useState(initialSection);
   const { user, loading: authLoading, openAuthModal } = useAuth();
 
   // The whole-round report for THIS round id (never "the video's current
   // round"), user-scoped: the same query the practice page's completion view uses.
-  const { data, isLoading, isError } = useRoundReportQuery(user?.id, sessionId);
+  const { data, isLoading, isError, refetch } = useRoundReportQuery(user?.id, sessionId);
+  const cached = useCachedRoundOption(user?.id, sessionId);
+  const videoId = data?.session.videoId ?? cached?.videoId ?? null;
+  const selectedRound: VideoRoundOption | { roundId: string } = data
+    ? {
+        roundId: data.round.round.roundId,
+        roundNumber: data.round.round.roundNumber,
+        status: data.round.round.status,
+        provenance: data.round.round.provenance,
+        startedAt: data.round.round.startedAt,
+        transcriptId: data.round.round.transcriptId,
+      }
+    : (cached?.option ?? { roundId: sessionId });
+  // Read-only navigation to another round's canonical URL (keeps the tab).
+  const goToRound = (roundId: string) => {
+    const qs = section ? `?section=${section}` : "";
+    router.push(`/results/${encodeURIComponent(roundId)}${qs}`);
+  };
 
   const { data: vocabulary } = useQuery({
     queryKey: ["session-report-vocabulary", user?.id, data?.session.videoId],
@@ -148,51 +199,76 @@ export default function SessionResultsPage({ params }: PageProps) {
                 Sign in
               </button>
             </section>
-          ) : isLoading ? (
-            <p className="text-sm text-slate-500">Loading report…</p>
-          ) : isError || !data ? (
-            <p className="text-sm text-red-600">Failed to load this round&apos;s report.</p>
           ) : (
             <>
               <section className="flex flex-col items-start justify-between gap-4 border-b border-white/40 pb-6 md:flex-row md:items-end">
-                <div>
+                <div className="min-w-0">
                   <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-primary-600">Round report</p>
                   <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                    {data.session.videoTitle ?? `Video ${data.session.videoId}`}
+                    {data ? (data.session.videoTitle ?? `Video ${data.session.videoId}`) : isError ? "Round report" : "Loading report…"}
                   </h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Round {data.round.round.roundNumber} · last practiced {new Date(data.session.updatedAt).toLocaleString()}
+                  <p className="mt-1 text-sm text-slate-500" data-testid="results-round-line">
+                    {data
+                      ? `Round ${data.round.round.roundNumber} · last practiced ${new Date(data.session.updatedAt).toLocaleString()}`
+                      : "startedAt" in selectedRound
+                        ? roundOptionLabel(selectedRound)
+                        : null}
                   </p>
+                  {data && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Link
+                        href={`/dictation/${data.session.videoId}`}
+                        className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+                      >
+                        Open video
+                      </Link>
+                      <Link
+                        href="/dashboard"
+                        className="rounded-xl border border-white/60 bg-white/60 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-white"
+                      >
+                        Library
+                      </Link>
+                    </div>
+                  )}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Link
-                    href={`/dictation/${data.session.videoId}`}
-                    className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
-                  >
-                    Open video
-                  </Link>
-                  <Link
-                    href="/dashboard"
-                    className="rounded-xl border border-white/60 bg-white/60 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-white"
-                  >
-                    Library
-                  </Link>
-                </div>
+                {videoId && <RoundSelector userId={user.id} videoId={videoId} selected={selectedRound} onSelect={goToRound} />}
               </section>
 
+              {isLoading ? (
+                <p className="text-sm text-slate-500">
+                  {"startedAt" in selectedRound ? `Loading Round ${selectedRound.roundNumber}'s report…` : "Loading report…"}
+                </p>
+              ) : isError || !data ? (
+                <p className="text-sm text-red-600" role="alert">
+                  Failed to load this round&apos;s report.{" "}
+                  <button type="button" onClick={() => refetch()} className="font-semibold underline">
+                    Retry
+                  </button>
+                </p>
+              ) : (
+            <>
               <section className="rounded-3xl border border-white/60 bg-white/50 p-5 shadow-xl backdrop-blur-md">
                 <RoundReportPanel
                   report={data.round}
+                  dictationEvidence={data.dictationEvidence}
+                  transcriptVersion={data.transcriptVersion ?? null}
+                  listening={data.listening ?? null}
+                  defaultSection={initialSection ?? undefined}
+                  onSectionChange={(next) => {
+                    setSection(next);
+                    // Shareable/back-safe section without a navigation (?section=).
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("section", next);
+                    window.history.replaceState(window.history.state, "", url);
+                  }}
                   userId={user.id}
                   shadowingFeedback="open"
+                  actions={<RoundActions report={data.round} newerActiveRound={data.newerActiveRound ?? null} hideViewReport />}
                   renderSentenceExtra={(sentence) => {
                     const mistake = mistakeBySegment.get(sentence.segmentIndex);
                     const feedback = mistake ? explanationByAttemptId[mistake.attemptId] : undefined;
                     return (
                       <>
-                        {mistake?.errorType && sentence.category === "corrected" && (
-                          <p className="text-[11px] text-slate-500">Earlier mistake: {errorTypeLabel(mistake.errorType)}</p>
-                        )}
                         {feedback && <AIFeedbackCard feedback={feedback} onJumpToDuplicate={handleJumpToDuplicate} />}
                         {sentence.text && (
                           <VocabularySaveButton
@@ -365,6 +441,8 @@ export default function SessionResultsPage({ params }: PageProps) {
                     ))}
                   </ul>
                 </section>
+              )}
+            </>
               )}
             </>
           )}

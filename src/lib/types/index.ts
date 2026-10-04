@@ -346,6 +346,8 @@ export interface ResumeSessionResponse {
     latestDictationResults?: Array<{ segmentIndex: number; isCorrect: boolean }>;
     /** Phase 6: the round's server-side progress (null if unavailable). */
     progress?: RoundProgress | null;
+    /** Learning Reports P2: the video's active round when this one isn't it (null otherwise). */
+    newerActiveRound?: { roundId: string; roundNumber: number } | null;
   } | null;
 }
 
@@ -384,6 +386,29 @@ export interface SessionReportResponse {
   mistakes: SessionReportMistake[];
   /** Phase 6: the whole-round report (every metric, all study sessions of this round). */
   round: import("./learning").RoundReport;
+  /**
+   * Learning Reports P1: the stored, practice-valid Dictation answers each
+   * sentence's deterministic analysis needs (latest answer, last mistake,
+   * matching rule). Optional: absent from older responses.
+   */
+  dictationEvidence?: import("@/lib/practice/dictationAnalysis").DictationEvidence;
+  /** Learning Reports P2: the video's active round when it isn't this one (continuation is then refused). */
+  newerActiveRound?: { roundId: string; roundNumber: number } | null;
+  /** Learning Reports P3: the version number of the round's pinned script (null if unknown). */
+  transcriptVersion?: number | null;
+  /**
+   * Learning Reports P3: Listening is stored per video + SCRIPT VERSION, not
+   * per round — `coverageRatio`/`listenedThrough`/`lastPositionSec` cover every
+   * sitting on this script version. Only the two `roundSittings…` figures come
+   * from this round's own study sessions. Media time, never attention.
+   */
+  listening?: {
+    coverageRatio: number | null;
+    listenedThrough: boolean;
+    lastPositionSec: number | null;
+    roundSittingsNewlyCoveredSec: number;
+    roundSittingsObservedSec: number;
+  } | null;
 }
 
 export type SessionExplainAllItemStatus = "explained" | "duplicate" | "minor";

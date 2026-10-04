@@ -148,6 +148,28 @@ d("authoritative functions (activated, real PostgreSQL)", () => {
     expect((await owner.query("select status from learning_sessions where id = $1", [first.roundId])).rows[0].status).toBe("active");
   });
 
+  it("restart from a COMPLETED round (Round menu): creates the next round once — a retried request returns it — and leaves the completed round as it was", async () => {
+    const { roundId } = await create();
+    for (const [i, t] of [[0, "hello there"], [1, "how are you"], [3, "i am fine"]] as const) await record(roundId, i, t);
+    const before = (await owner.query("select status, completed_at from learning_sessions where id = $1", [roundId])).rows[0];
+    expect(before.status).toBe("completed");
+    const first = await rpcAs<{ roundId: string; created: boolean; roundNumber: number; abandonedRoundId: string | null }>(
+      owner, userA, "select fn_restart_round($1, $2)", [video, roundId]
+    );
+    expect(first).toMatchObject({ created: true, roundNumber: 2, abandonedRoundId: null });
+    // The client's answer was lost and the learner confirmed again: same round back, nothing new.
+    const retry = await rpcAs<{ roundId: string; created: boolean; roundNumber: number }>(owner, userA, "select fn_restart_round($1, $2)", [video, roundId]);
+    expect(retry).toMatchObject({ roundId: first.roundId, created: false, roundNumber: 2 });
+    const rows = (await owner.query("select id, status from learning_sessions where youtube_video_id = $1 order by round_number", [video])).rows;
+    expect(rows).toEqual([{ id: roundId, status: "completed" }, { id: first.roundId, status: "active" }]);
+    const after = (await owner.query("select status, completed_at from learning_sessions where id = $1", [roundId])).rows[0];
+    expect(after).toEqual(before); // its completion is untouched
+    const kept = (await owner.query("select count(*)::int n from attempt_logs where session_id = $1", [roundId])).rows[0].n;
+    expect(kept).toBe(3);
+    const fresh = (await owner.query("select count(*)::int n from attempt_logs where session_id = $1", [first.roundId])).rows[0].n;
+    expect(fresh).toBe(0); // fresh progress, no credit copied
+  });
+
   it("restart: two concurrent restarts of the same round create exactly one new round", async () => {
     const { roundId } = await create();
     await beginAs(c2, "authenticated", userA);

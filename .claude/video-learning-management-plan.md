@@ -4879,6 +4879,25 @@ Phase 1.)
 - **Not implemented:** the retention plan's snapshot/compaction stages and an explicit "Finish
   Shadowing" action.
 
+### Follow-up — Learning Reports & Review
+
+**Plan:** `.claude/learning-reports-review-plan.md`.
+- **P0–P3** (side panel, deterministic Dictation report and honest labels, same-round Shadowing
+  continuation, report shell and sections) are **approved, app-only, no migration**. They are
+  **implemented and verified locally**: not committed, not deployed, and browser/iPhone checks are
+  pending. Status and tests are in that plan's §12.1.
+- **P2 follow-up — Round menu** (implemented locally, app-only, no migration, not committed or
+  deployed):
+  - a Round menu in the top bar and the Zen controls opens the current round's report at any time
+    (read-only, including an active round);
+  - every "new round" entry point uses one confirmation with explicit handling of pending
+    recordings, saves and drafts;
+  - see that plan's §12.2.
+- **P4–P5** (saved-explanation reuse, AI assessment v2: generations, recovery, quota) are **not
+  approved**. Their review findings are recorded as prerequisites, and P5 would need a forward
+  migration with the next available number.
+- **Round model unchanged:** mixed-mode round completion and provenance are kept as they are.
+
 ## 13. Tests, runtime verification, and acceptance criteria
 
 All automated tests mock Azure/Gemini and consume no quota, per existing convention

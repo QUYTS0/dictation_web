@@ -145,6 +145,59 @@ describe("GET /api/session/[sessionId]/report", () => {
     expect(rpc).toHaveBeenCalledWith("fn_round_report", { p_round_id: ROUND });
     expect((await res.json()).round).toEqual(round);
   });
+
+  it("Learning Reports P1: derives the Dictation evidence from the rows it reads — valid answers only — and writes nothing", async () => {
+    tables.learning_sessions = {
+      data: { id: ROUND, youtube_video_id: "vid", transcript_id: "tr", status: "completed", accuracy: 50, total_attempts: 3, current_segment_index: 0, started_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-02T00:00:00Z" },
+    };
+    tables.attempt_logs = {
+      data: [
+        { id: "a1", segment_index: 0, expected_text: "Hi.", user_text: "hey", is_correct: false, error_type: "wrong_form", created_at: "2026-09-01T00:00:01Z", is_practice_valid: true, match_mode: "relaxed" },
+        { id: "a2", segment_index: 0, expected_text: "Hi.", user_text: "", is_correct: false, error_type: "missing_word", created_at: "2026-09-01T00:00:02Z", is_practice_valid: false, match_mode: "relaxed" },
+        { id: "a3", segment_index: 0, expected_text: "Hi.", user_text: "hi", is_correct: true, error_type: "none", created_at: "2026-09-01T00:00:03Z", is_practice_valid: true, match_mode: null },
+      ],
+    };
+    tables.videos = { data: { title: "T" } };
+    tables.transcript_segments = { data: null, count: 1 };
+    tables.ai_feedback = { data: [] };
+    rpc.mockResolvedValue({ data: { round: { roundId: ROUND }, historyComplete: true, sentences: [] }, error: null });
+    const res = await reportGET(req(`/api/session/${ROUND}/report`), params({ sessionId: ROUND }));
+    const body = await res.json();
+    expect(body.dictationEvidence).toEqual({
+      validSubmissions: 2,
+      validCorrect: 1,
+      invalidSubmissions: 1,
+      sentences: [
+        {
+          segmentIndex: 0,
+          validSubmissions: 2,
+          validIncorrect: 1,
+          latest: { attemptId: "a3", userText: "hi", matchMode: null, isCorrect: true, createdAt: "2026-09-01T00:00:03Z" },
+          lastWrong: { attemptId: "a1", userText: "hey", matchMode: "relaxed", isCorrect: false, createdAt: "2026-09-01T00:00:01Z" },
+        },
+      ],
+    });
+    // Read-only: the only RPC is the report itself (the mocked builder has no write methods at all).
+    expect(rpc.mock.calls.map(([fn]) => fn)).toEqual(["fn_round_report"]);
+  });
+
+  it("Learning Reports P3: names the pinned script version and reports Listening at its real scope (script version + this round's sittings)", async () => {
+    tables.learning_sessions = {
+      data: { id: ROUND, youtube_video_id: "vid", transcript_id: "tr", status: "active", accuracy: 0, total_attempts: 0, current_segment_index: 0, started_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-02T00:00:00Z" },
+    };
+    tables.attempt_logs = { data: [] };
+    tables.videos = { data: { title: "T" } };
+    tables.transcript_segments = { data: null, count: 1 };
+    tables.transcripts = { data: { version: 3 } };
+    tables.listening_progress = { data: { coverage_ratio: "0.5", listened_through: false, last_position_sec: "12.5" } };
+    tables.study_sessions = { data: [{ listening_newly_covered_sec: "10", listening_observed_sec: "15" }, { listening_newly_covered_sec: 5, listening_observed_sec: 5 }] };
+    rpc.mockResolvedValue({ data: { round: { roundId: ROUND }, historyComplete: true, sentences: [] }, error: null });
+    const body = await (await reportGET(req(`/api/session/${ROUND}/report`), params({ sessionId: ROUND }))).json();
+    expect(body.transcriptVersion).toBe(3);
+    expect(body.listening).toEqual({ coverageRatio: 0.5, listenedThrough: false, lastPositionSec: 12.5, roundSittingsNewlyCoveredSec: 15, roundSittingsObservedSec: 20 });
+    expect(body.newerActiveRound).toBeNull(); // an active round is the current one
+    expect(rpc.mock.calls.map(([fn]) => fn)).toEqual(["fn_round_report"]);
+  });
 });
 
 describe("Library membership writes", () => {

@@ -204,6 +204,24 @@ export interface HistoryVideoRounds {
   roundlessSessionCount: number;
 }
 
+/** The report page's round selector: ALL of one video's rounds, paged (newest first). */
+export interface VideoRoundOption {
+  roundId: string;
+  roundNumber: number;
+  status: "active" | "completed" | "abandoned";
+  provenance: "current" | "legacy_unverified";
+  startedAt: string;
+  transcriptId: string | null;
+}
+export interface VideoRoundList {
+  videoId: string;
+  /** Every round of this video for this user (not just this page). */
+  total: number;
+  offset: number;
+  items: VideoRoundOption[];
+  hasMore: boolean;
+}
+
 /** One study session inside a round (or a round-less Listening sitting). */
 export type HistoryVideoSession = Omit<HistorySession, "title" | "roundNumber" | "roundStatus" | "roundProvenance">;
 

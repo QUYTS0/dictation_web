@@ -72,8 +72,20 @@ export interface RoundState {
    *  round — the only trigger for the completion celebration, so a retry,
    *  a reload or an already-completed round never celebrates again. */
   completedByThisPage: boolean;
+  /** The round's number when the server has said it (resume, restart). */
+  roundNumber?: number | null;
 }
 const EMPTY_ROUND_STATE: RoundState = { status: null, progress: null, completedByThisPage: false };
+
+/** What a confirmed "new round" request ended in (Learning Reports P2 follow-up). */
+export type RestartOutcome =
+  | { kind: "started"; roundId: string | null; roundNumber: number | null }
+  /** The server already had another active round (another tab, or an earlier
+   *  attempt of this request whose answer was lost): nothing was changed. */
+  | { kind: "already_active"; roundId: string; roundNumber: number | null }
+  | { kind: "failed"; message: string }
+  /** A request is already in flight, or there is nothing to restart. */
+  | { kind: "ignored" };
 
 interface UseDictationSessionOptions {
   videoId: string;
@@ -90,6 +102,11 @@ interface UseDictationSessionOptions {
   /** Called with the server's saved last mode as soon as the resume check
    *  answers — before the lesson auto-enters (see useInputModePreference). */
   onServerLastMode?: (mode: "dictation" | "listening" | "shadowing") => void;
+  /**
+   * Learning Reports P2: an explicit continuation names the round to load
+   * (any status) instead of the video's default round.
+   */
+  requestedRoundId?: string | null;
 }
 
 /**
@@ -106,6 +123,7 @@ export function useDictationSession({
   autoEnterPaused = false,
   inputMode = "dictation",
   onServerLastMode,
+  requestedRoundId = null,
 }: UseDictationSessionOptions) {
   const playerStore = usePlayerStore();
   const sessionStore = useSessionStore();
@@ -119,6 +137,8 @@ export function useDictationSession({
   // In-memory mistake tracking for the session-review panel at completion
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [resumeState, setResumeState] = useState<ResumeState | null>(null);
+  /** The video's active round when the loaded round isn't it (continuation is then refused). */
+  const [newerActiveRound, setNewerActiveRound] = useState<{ roundId: string; roundNumber: number } | null>(null);
   // Read by getRoundContext() from async callbacks without re-creating it.
   const resumeStateRef = useRef<ResumeState | null>(null);
   useEffect(() => {
@@ -140,6 +160,12 @@ export function useDictationSession({
   // resumeLoading, which starts false and is indistinguishable from "not
   // started yet". autoEnterPaused waits on this to avoid racing the fetch.
   const [resumeChecked, setResumeChecked] = useState(false);
+  // The resume lookup failed: the page doesn't know this video's round (the
+  // Round menu says so instead of guessing one).
+  const [resumeLookupFailed, setResumeLookupFailed] = useState(false);
+  // One confirmed restart at a time — a repeated click can't send a second.
+  const restartInFlightRef = useRef(false);
+  const [restartPending, setRestartPending] = useState(false);
   const [previousReview, setPreviousReview] = useState<CompletedSentenceReview | null>(null);
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
@@ -285,6 +311,7 @@ export function useDictationSession({
     resumeTargetRef.current = null;
     passiveSaveAllowedRef.current = false;
     resumeCheckFailedRef.current = false;
+    setResumeLookupFailed(false);
     autoEnterAttemptedRef.current = false;
     // The selected sentence belongs to the previous video/user — it must not
     // carry over (the new context's own restore sets it, or it stays at 1).
@@ -299,6 +326,7 @@ export function useDictationSession({
     setRegenerating(false);
     setRegenerateError(null);
     setResumeState(null);
+    setNewerActiveRound(null);
     // Phase 0: the transcript query is gated on pinnedRevisionId being
     // resolved, so it never fetches "current" before the new video's own
     // resume state is known — reset both flags alongside resumeLoadedRef so
@@ -581,6 +609,13 @@ export function useDictationSession({
       // and coverage of the two stay independent (plan Phase 6).
       if (inputModeRef.current === "listening") return;
       const state = useSessionStore.getState();
+      // A round the page already knows about (resume found it but the user
+      // hasn't entered it yet) is the round this checkpoint belongs to.
+      // Sending no round id would make the server get-or-create an ACTIVE
+      // round — for a completed round that is a brand-new round, created
+      // implicitly (Learning Reports P2). The server keeps a completed
+      // round's checkpoint as it is.
+      const roundId = state.sessionId ?? resumeStateRef.current?.sessionId ?? undefined;
       // Read every field of this save's context at the same instant,
       // directly from its owning store, rather than closing over a
       // `playerStore.currentTimeSec` prop value from whatever render last
@@ -590,7 +625,7 @@ export function useDictationSession({
       // listeners below, re-register on every tick). Navigation saves pass
       // the target sentence's start explicitly, since the player hasn't
       // moved there yet at the moment they're issued.
-      void saveProgress(videoId, segmentIndex, timeSecOverride ?? getPersistablePositionSec(), state.sessionId ?? undefined, transcriptId)
+      void saveProgress(videoId, segmentIndex, timeSecOverride ?? getPersistablePositionSec(), roundId, transcriptId)
         .then((r) => {
           if (!state.sessionId) sessionStore.setSessionId(r.sessionId);
           // Every confirmed save changes what Continue Learning / Library
@@ -606,7 +641,7 @@ export function useDictationSession({
           // this user (the next save then creates/gets the active round). A
           // maintenance pause or network error leaves the round untouched —
           // the next save retries the same checkpoint.
-          if (state.sessionId && err instanceof PracticeWriteError && err.status === 404) {
+          if (state.sessionId && roundId === state.sessionId && err instanceof PracticeWriteError && err.status === 404) {
             sessionStore.setSessionId(null);
           }
         });
@@ -693,6 +728,7 @@ export function useDictationSession({
         if (user && result.recorded) invalidateLearningViews(queryClient, user.id, { roundIds: [roundId], mistakes: true });
         if (result.roundStatus) {
           setRoundState((prev) => ({
+            ...prev,
             status: result.roundStatus ?? null,
             progress: result.progress ?? prev.progress,
             completedByThisPage: prev.completedByThisPage || result.roundCompletedByThisRequest === true,
@@ -1079,7 +1115,7 @@ export function useDictationSession({
     }
     const requestEpoch = contextEpochRef.current;
     setResumeLoading(true);
-    fetchResumeSession(videoId)
+    fetchResumeSession(videoId, requestedRoundId)
       .then((data) => {
         // The video/user changed (or an explicit restart ran) while this
         // was in flight — applying it now would restore a session/revision
@@ -1095,6 +1131,7 @@ export function useDictationSession({
               totalAttempts: data.session.totalAttempts,
             });
           }
+          setNewerActiveRound(data.session.newerActiveRound ?? null);
           setResumeState({
             sessionId: data.session.sessionId,
             currentSegmentIndex: data.session.currentSegmentIndex,
@@ -1111,7 +1148,12 @@ export function useDictationSession({
           setLatestResults(
             Object.fromEntries((data.session.latestDictationResults ?? []).map((r) => [r.segmentIndex, r.isCorrect]))
           );
-          setRoundState({ status: data.session.status, progress: data.session.progress ?? null, completedByThisPage: false });
+          setRoundState({
+            status: data.session.status,
+            progress: data.session.progress ?? null,
+            completedByThisPage: false,
+            ...(data.session.roundNumber != null ? { roundNumber: data.session.roundNumber } : {}),
+          });
           // null (no pinned revision on a legacy/pre-Phase-0 row) falls back
           // to fetching current, same as "no session at all".
           setPinnedRevisionId(data.session.transcriptId ?? null);
@@ -1124,6 +1166,7 @@ export function useDictationSession({
       .catch(() => {
         if (contextEpochRef.current !== requestEpoch) return;
         resumeCheckFailedRef.current = true;
+        setResumeLookupFailed(true);
         // Resume check failed (network error, etc.) — fetch current rather
         // than leaving the transcript query blocked indefinitely.
         setPinnedRevisionId(null);
@@ -1134,7 +1177,8 @@ export function useDictationSession({
         setResumeLoading(false);
         setResumeChecked(true);
       });
-  }, [user, videoId]);
+    // requestedRoundId is fixed for the page's lifetime (read once from its URL).
+  }, [user, videoId, requestedRoundId]);
 
   // ---- Pause playback and autosave when the tab is hidden / page is being
   // closed. This must ONLY pause and persist — it must never call setUxState
@@ -1346,62 +1390,111 @@ export function useDictationSession({
     setCurrentSegIdx(segIdx);
   }, []);
 
-  const handleRestart = useCallback(() => {
-    if (!user) return;
+  /**
+   * The ONE restart request (every "new round" entry point reaches it through
+   * the page's confirmation flow). Nothing local changes until the server
+   * confirms; one request at a time; never retried automatically — the
+   * server is retry-safe through the expected round id, so a repeated
+   * confirmation after a lost answer returns the round the first attempt
+   * created instead of creating another.
+   */
+  const restartRound = useCallback(async (): Promise<RestartOutcome> => {
+    if (!user || restartInFlightRef.current) return { kind: "ignored" };
+    restartInFlightRef.current = true;
+    setRestartPending(true);
     setRestartError(null);
     const previousRoundId = resumeState?.sessionId ?? sessionStore.sessionId ?? null;
-    void restartSession(videoId, previousRoundId ?? undefined)
-      .then((restarted) => {
-        // An explicit restart establishes a new context — invalidate any
-        // regenerate/resume-fetch still in flight for the abandoned
-        // session so its late result can't restore stale state into what
-        // comes next, and cancel any pending delayed transition (e.g. an
-        // answer's auto-advance) tied to the session being abandoned.
-        contextEpochRef.current += 1;
-        clearAllPendingTimeouts();
-        clearResumeTarget();
-        passiveSaveAllowedRef.current = true;
-        setPendingRevisionNotice(null);
-        setRegenerating(false);
-        setRegenerateError(null);
-        // An explicit restart is the one thing allowed to discard the
-        // sessionStorage snapshot — everything else (tab switches, minimizing,
-        // remounts) must leave it intact.
-        clearDictationSessionSnapshot(videoId);
-        firstAttemptBySegmentRef.current = {};
-        pendingSubmissionRef.current = null;
-        setLatestResults({});
-        setRoundState(restarted.sessionId ? { status: "active", progress: null, completedByThisPage: false } : EMPTY_ROUND_STATE);
-        setResumeState(null);
-        // Phase 0: the abandoned round's pin no longer applies. A Phase 3
-        // server creates the next round in the same transaction and returns
-        // its id and pinned revision — adopt both directly. A preparation-
-        // release server only abandons; the next save-progress then creates
-        // the round pinned to whatever is current, so target current.
-        setPinnedRevisionId(restarted.transcriptId ?? null);
-        setCombo(0);
-        setBestCombo(0);
-        setCleanSolveCount(0);
-        setIsLastResultClean(false);
-        sessionStore.reset();
-        if (restarted.sessionId) sessionStore.setSessionId(restarted.sessionId);
-        // Restart marks the session "abandoned" server-side (see
-        // /api/session/restart) — that changes resumableSessions on
-        // Dashboard/History. It never touches attempt_logs, so
-        // error-patterns/history-mistakes are unaffected and deliberately
-        // left alone.
+    try {
+      const restarted = await restartSession(videoId, previousRoundId ?? undefined);
+      if (restarted.created === false && restarted.sessionId && restarted.sessionId !== previousRoundId) {
+        // Another active round already exists: adopting it here as "fresh"
+        // would show its progress as zero. Change nothing; the caller offers
+        // to go to it.
         if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [previousRoundId, restarted.sessionId] });
-      })
-      .catch((err: unknown) => {
-        // Nothing was reset locally (that only happens after the server
-        // confirmed), so the current lesson is untouched — just say why.
-        setRestartError(
-          err instanceof PracticeWriteError && err.retryable
-            ? "Restarting is paused for maintenance. Please try again in a moment."
-            : "Couldn't restart the lesson. Please try again."
-        );
-      });
+        return { kind: "already_active", roundId: restarted.sessionId, roundNumber: restarted.roundNumber ?? null };
+      }
+      // An explicit restart establishes a new context — invalidate any
+      // regenerate/resume-fetch still in flight for the abandoned
+      // session so its late result can't restore stale state into what
+      // comes next, and cancel any pending delayed transition (e.g. an
+      // answer's auto-advance) tied to the session being abandoned.
+      contextEpochRef.current += 1;
+      clearAllPendingTimeouts();
+      clearResumeTarget();
+      passiveSaveAllowedRef.current = true;
+      setPendingRevisionNotice(null);
+      setRegenerating(false);
+      setRegenerateError(null);
+      // An explicit restart is the one thing allowed to discard the
+      // sessionStorage snapshot — everything else (tab switches, minimizing,
+      // remounts) must leave it intact.
+      clearDictationSessionSnapshot(videoId);
+      firstAttemptBySegmentRef.current = {};
+      pendingSubmissionRef.current = null;
+      setLatestResults({});
+      setRoundState(
+        restarted.sessionId
+          ? {
+              status: "active",
+              progress: null,
+              completedByThisPage: false,
+              ...(restarted.roundNumber != null ? { roundNumber: restarted.roundNumber } : {}),
+            }
+          : EMPTY_ROUND_STATE
+      );
+      setResumeState(null);
+      // Phase 0: the abandoned round's pin no longer applies. A Phase 3
+      // server creates the next round in the same transaction and returns
+      // its id and pinned revision — adopt both directly. A preparation-
+      // release server only abandons; the next save-progress then creates
+      // the round pinned to whatever is current, so target current.
+      setPinnedRevisionId(restarted.transcriptId ?? null);
+      setCombo(0);
+      setBestCombo(0);
+      setCleanSolveCount(0);
+      setIsLastResultClean(false);
+      sessionStore.reset();
+      if (restarted.sessionId) sessionStore.setSessionId(restarted.sessionId);
+      setNewerActiveRound(null);
+      // The new round starts from its first sentence (Dictation/Shadowing),
+      // paused — the same pre-start state a fresh visit gets. Listening has
+      // no round position: its playhead and checkpoint stay as they are.
+      if (inputModeRef.current !== "listening") {
+        ytPlayerRef.current?.pauseVideo();
+        currentSegIdxRef.current = 0;
+        setCurrentSegIdx(0);
+        setCheckResult(null);
+        setWrongAttempts(0);
+        setHintLevel(0);
+        autoEnterAttemptedRef.current = false;
+        uxStateRef.current = "transcript_ready";
+        setUxState("transcript_ready");
+      }
+      // Restart marks the session "abandoned" server-side (see
+      // /api/session/restart) — that changes resumableSessions on
+      // Dashboard/History. It never touches attempt_logs, so
+      // error-patterns/history-mistakes are unaffected and deliberately
+      // left alone.
+      if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [previousRoundId, restarted.sessionId] });
+      return { kind: "started", roundId: restarted.sessionId ?? null, roundNumber: restarted.roundNumber ?? null };
+    } catch (err: unknown) {
+      // Nothing was reset locally (that only happens after the server
+      // confirmed), so the current lesson is untouched — just say why.
+      const message =
+        err instanceof PracticeWriteError && err.retryable
+          ? "Restarting is paused for maintenance. Please try again in a moment."
+          : "Couldn't restart the lesson. Please try again.";
+      setRestartError(message);
+      return { kind: "failed", message };
+    } finally {
+      restartInFlightRef.current = false;
+      setRestartPending(false);
+    }
   }, [queryClient, resumeState?.sessionId, sessionStore, user, videoId, clearAllPendingTimeouts, clearResumeTarget]);
+  /** Fire-and-forget form of restartRound (the outcome is in restartError). */
+  const handleRestart = useCallback(() => {
+    void restartRound();
+  }, [restartRound]);
 
   // ---- Shared round for other practice modes (Phase 4 Shadowing) ----
   // The round the page is showing: the one this page practices in, or —
@@ -1442,6 +1535,7 @@ export function useDictationSession({
         return false;
       }
       setRoundState((prev) => ({
+        ...prev,
         status: r.roundStatus,
         progress: r.progress ?? prev.progress,
         completedByThisPage: prev.completedByThisPage || r.roundCompletedByThisRequest,
@@ -1526,6 +1620,8 @@ export function useDictationSession({
   }, [latestResults]);
 
   return {
+    newerActiveRound,
+    resumeChecked,
     currentSegIdx,
     uxState,
     checkResult,
@@ -1546,6 +1642,8 @@ export function useDictationSession({
     nextAutoRetryAt,
     checkAnswerError,
     restartError,
+    restartPending,
+    resumeLookupFailed,
     sentenceAccuracy,
     roundState,
     currentRoundId,
@@ -1569,6 +1667,7 @@ export function useDictationSession({
     handlePrevious,
     handleResume,
     handleRestart,
+    restartRound,
     jumpToSegment,
     handleActiveSegmentChange,
     handleManualTranscriptSaved,

@@ -218,7 +218,7 @@ function DashboardContent() {
                     title="Completed videos"
                     value={String(summary.completedVideos)}
                     icon={<PlayCircle size={20} />}
-                    trend={summary.legacyCompletedVideos > 0 ? `+${summary.legacyCompletedVideos} earlier (unverified)` : undefined}
+                    trend={summary.legacyCompletedVideos > 0 ? `+${summary.legacyCompletedVideos} in rounds started before detailed tracking` : undefined}
                   />
                   <MetricCard title="In progress" value={String(summary.inProgressVideos)} icon={<Target size={20} />} />
                   <MetricCard title="Listened through" value={String(summary.listenedThroughVideos)} icon={<Headphones size={20} />} />

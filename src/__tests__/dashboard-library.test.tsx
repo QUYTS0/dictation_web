@@ -4,7 +4,7 @@
  *   - practice coverage is the only progress bar; accuracy is never drawn as
  *     progress;
  *   - Listening-only and prior-revision states are distinct from "not started";
- *   - earlier (unverified) completions are labeled separately;
+ *   - completions in rounds started before detailed tracking are labeled separately;
  *   - removal is explicit, explains what is kept, and refreshes the Library;
  *   - Add Video has no mode choice and opens the practice page;
  *   - background refresh keeps the current cards on screen;
@@ -188,7 +188,7 @@ describe("Library cards", () => {
     expect(old).toHaveTextContent("Previously listened (script updated)");
     expect(old).not.toHaveTextContent("Not started");
 
-    expect(within(grid).getByTestId("library-card-vLegacy")).toHaveTextContent("Completed earlier (unverified)");
+    expect(within(grid).getByTestId("library-card-vLegacy")).toHaveTextContent("Completed · started before detailed tracking");
     const done = within(grid).getByTestId("library-card-vDone");
     expect(done).toHaveTextContent("Practice complete");
     expect(within(done).getByTestId("library-accuracy")).toHaveTextContent("Sentence accuracy 80% (8/10 latest answers)");
@@ -203,10 +203,10 @@ describe("Library cards", () => {
     expect(calls).toContain("GET /api/videos/library?filter=continue&offset=0&limit=3");
   });
 
-  it("metrics stay separate: verified completions with a separate 'earlier (unverified)' note; missing metrics show '—'", async () => {
+  it("metrics stay separate: verified completions with a separate 'started before detailed tracking' note; missing metrics show '—'", async () => {
     renderDashboard();
     await screen.findByText("Completed videos");
-    expect(screen.getByText("+2 earlier (unverified)")).toBeInTheDocument();
+    expect(screen.getByText("+2 in rounds started before detailed tracking")).toBeInTheDocument();
     expect(screen.getByText("3/4 latest answers")).toBeInTheDocument();
     const pron = screen.getByText("Pronunciation").closest("div")!.parentElement!;
     expect(pron).toHaveTextContent("—");
@@ -265,5 +265,34 @@ describe("cache behavior", () => {
     renderDashboard(client);
     await screen.findByTestId("library-card-vOther");
     expect(screen.queryByTestId("library-card-vDone")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- earlier rounds' reports
+
+import { LibraryCard } from "@/components/library/LibraryCard";
+
+describe("one report link on every card: Review report", () => {
+  it("round 1 completed, round 2 in progress: 'Review report' (never 'Past report') opens the card's default round, where the round selector reaches round 1", () => {
+    render(
+      <LibraryCard
+        item={item("vidA", { state: "in_progress", hasCompletedRound: true, completedRoundCount: 1, round: round({ roundId: "round-2", roundNumber: 2 }) })}
+      />
+    );
+    expect(screen.getByRole("link", { name: "Review report" })).toHaveAttribute("href", "/results/round-2");
+    expect(screen.queryByText(/Past report/i)).toBeNull();
+  });
+
+  it("a completed current round keeps its own target; a legacy completion also offers it; nothing completed → no report link", () => {
+    const { unmount } = render(
+      <LibraryCard item={item("vidA", { state: "completed", hasCompletedRound: true, completedRoundCount: 1, round: round({ status: "completed" }) })} />
+    );
+    expect(screen.getByRole("link", { name: "Review report" })).toHaveAttribute("href", "/results/round-1");
+    unmount();
+    const legacy = render(<LibraryCard item={item("vidL", { state: "in_progress", hasLegacyCompletion: true, round: round({ roundId: "round-7" }) })} />);
+    expect(screen.getByRole("link", { name: "Review report" })).toHaveAttribute("href", "/results/round-7");
+    legacy.unmount();
+    render(<LibraryCard item={item("vidB", { state: "in_progress", round: round({}) })} />);
+    expect(screen.queryByRole("link", { name: /report/i })).toBeNull();
   });
 });

@@ -181,6 +181,31 @@ d("Phase 4 Shadowing persistence (real PostgreSQL, activated)", () => {
     expect(retry.roundCompletedByThisRequest).toBe(false);
   });
 
+  it("Learning Reports P2: same-round Shadowing continuation after Dictation completed the round — counted, never re-completed, no new round", async () => {
+    const roundId = await round();
+    for (const [seg, text] of [[0, "hello there"], [1, "how are you"], [3, "i am fine"]] as const) {
+      await rpcAs(owner, userA, DICTATE, [roundId, video, seg, randomUUID(), text, transcriptId]);
+    }
+    const before = (await owner.query("select status, completed_at, provenance from learning_sessions where id = $1", [roundId])).rows[0];
+    expect(before.status).toBe("completed");
+
+    const take = await shadow(roundId, 1, 2);
+    expect(take).toMatchObject({ roundCompletedByThisRequest: false, roundStatus: "completed" });
+    expect(take.progress.coveredSentences).toMatchObject({ dictation: 3, shadowing: 1, overall: 3 });
+    expect((await owner.query("select round_id from shadowing_attempts where id = $1", [take.attemptId])).rows[0].round_id).toBe(roundId);
+
+    // The checkpoint of a completed round is kept as it is (no write, no new round).
+    const pos = await rpcAs<{ applied: boolean; roundStatus: string; roundId: string }>(
+      owner, userA, "select fn_update_resume_position($1, $2, $3, $4, $5)", [roundId, video, 3, 6, transcriptId]
+    );
+    expect(pos).toMatchObject({ applied: false, roundStatus: "completed", roundId });
+
+    const after = (await owner.query("select status, completed_at, provenance from learning_sessions where id = $1", [roundId])).rows[0];
+    expect(after).toEqual(before); // completion time and provenance untouched
+    const rounds = await owner.query("select count(*)::int as n from learning_sessions where user_id = $1 and youtube_video_id = $2", [userA, video]);
+    expect(rounds.rows[0].n).toBe(1);
+  });
+
   it("7. concurrent final-sentence submissions (Dictation + Shadowing) complete the round exactly once", async () => {
     const roundId = await round();
     await shadow(roundId, 0, 2);
