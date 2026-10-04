@@ -174,7 +174,10 @@ describe("RoundReportPanel — one contract, whole-round scope", () => {
     const sh = screen.getByTestId("report-shadowing");
     expect(within(sh).getByText("Pronunciation (Azure)").parentElement).toHaveTextContent("—");
     expect(within(sh).getByText("Pronunciation (Azure)").parentElement).toHaveTextContent("No saved pronunciation scores");
-    expect(within(sh).getByText("Word Match").parentElement).toHaveTextContent("88%");
+    // One display rule for round averages (one decimal, like the server); out of the ELIGIBLE sentences.
+    expect(within(sh).getByText("Word Match").parentElement).toHaveTextContent("88.0%");
+    expect(within(sh).getByText("Word Match").parentElement).toHaveTextContent("2 of 4 sentences");
+    expect(within(sh).getByText("Shadowing recordings").parentElement).toHaveTextContent("2/4");
   });
 });
 

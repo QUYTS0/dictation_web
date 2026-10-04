@@ -86,6 +86,8 @@ export function PracticeReportView({
       ) : (
         <RoundReportPanel
           report={report}
+          userId={userId}
+          shadowingFeedback="open"
           onReviewSentence={onReviewSentence}
           actions={
             <>

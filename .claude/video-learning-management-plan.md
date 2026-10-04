@@ -1152,6 +1152,18 @@ never presented as describing the new recording.
 gap: the text Azure is asked to score against is looked up from the attempt's own pinned
 `segment_id`, never trusted from the evaluate request's payload.
 
+> **Accepted change (post-042, implemented, not deployed): the displayed coverage denominator is
+> the round's ELIGIBLE sentences, and one shared summary builder serves every surface.** The
+> `÷ count(segments with ≥1 shadowing attempt)` coverage above is a stored fact, never a displayed
+> ratio: every round surface shows "N of M sentences scored by Azure", where M is
+> `requiredSentenceCount` of the pinned revision. Recording coverage (`coveredSentences.shadowing`,
+> practice-valid only) and Word Match are shown separately. Weak-word feedback, sounds, rhythm,
+> "not recognized" words and comparable-only improvement come from
+> `src/lib/practice/shadowingSummary.ts`. It is fed by the saved round results (reports) or the
+> practice page's saved state, with identical input. One display rule applies to round averages
+> (`formatAggregateScore`, one decimal, like the SQL). See `.claude/shadowing-summary-audit.md`
+> §0 and `supabase/PHASE6_RUNBOOK.md` ("Shadowing summary").
+
 ### 6.8 Dashboard-level formulas
 
 | Stat | Formula | Scope |
@@ -4851,6 +4863,21 @@ Phase 0 (transcript revision identity + atomic publish + pinned-revision reader,
 Phase 1.)
 
 ---
+
+### Follow-up — Shadowing summary corrections and shared round report (post-042)
+
+**Status: code implemented and locally verified; not deployed; browser/iPhone checks pending.**
+- **Fixes:** the audit's D1–D8 and R1 (`.claude/shadowing-summary-audit.md` §0).
+- **No SQL:** no migration and no change to `001`–`042`.
+- **Shared builder:** a pure builder in `src/lib/practice/`, used by the practice page and the
+  round report through two adapters with a parity test. A lazily loaded "Shadowing summary ·
+  Round N" section sits in the completion view, `/results` and History (collapsed there, nothing
+  fetched until opened).
+- **Refresh and ordering:** the round results share one query key; a confirmed save, including a
+  recovery, refreshes the round report, Dashboard and History and re-reads the round in server
+  order.
+- **Not implemented:** the retention plan's snapshot/compaction stages and an explicit "Finish
+  Shadowing" action.
 
 ## 13. Tests, runtime verification, and acceptance criteria
 

@@ -1,4 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { mergeServerResults, entryFromServer } from "@/app/dictation/[videoId]/shadowingServerMerge";
 import {
   acceptsOrigin,
@@ -11,6 +13,15 @@ import { useShadowingEvaluations } from "@/app/dictation/[videoId]/useShadowingE
 import { useShadowingRecordings } from "@/app/dictation/[videoId]/useShadowingRecordings";
 import type { ShadowingAttemptDto, ShadowingRoundResults } from "@/lib/practice/shadowingTypes";
 import type { SentenceEvaluation } from "@/app/dictation/[videoId]/types";
+
+
+/** useShadowingEvaluations shares its server reads with the report cache. */
+function queryWrapper() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  };
+}
 
 // ---------------------------------------------------------------- fixtures
 
@@ -181,22 +192,23 @@ describe("14–15. useShadowingEvaluations", () => {
     transcriptId: "tr-1",
     userId: "user-a",
     roundId: "round-1",
-    totalCount: 2,
+    eligibleSentences: 2 as number | null,
+    recordedSentences: null as number | null,
     referenceTextFor: TEXT,
     ...over,
   });
 
   it("14. restores saved results from the server with an EMPTY local cache, without any local attempt id", async () => {
     fetchMock.mockResolvedValue(jsonResponse(SERVER));
-    const { result } = renderHook(() => useShadowingEvaluations(opts()));
+    const { result } = renderHook(() => useShadowingEvaluations(opts()), { wrapper: queryWrapper() });
     await waitFor(() => expect(result.current.evaluations[0]?.lastSuccessfulTrueEvaluation?.pronunciationScore).toBe(64));
     expect(fetchMock).toHaveBeenCalledWith("/api/practice/attempts?roundId=round-1", { method: "GET" });
-    expect(result.current.summary.evaluatedCount).toBe(1);
+    expect(result.current.summary.coverage.scoredSentences).toBe(1);
   });
 
   it("a round pinned to another revision is never merged into the displayed one", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ...SERVER, transcriptId: "tr-OTHER" }));
-    const { result } = renderHook(() => useShadowingEvaluations(opts()));
+    const { result } = renderHook(() => useShadowingEvaluations(opts()), { wrapper: queryWrapper() });
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await act(async () => {});
     expect(result.current.evaluations).toEqual({});
@@ -204,7 +216,7 @@ describe("14–15. useShadowingEvaluations", () => {
 
   it("15. a result started in another round/account is ignored instead of landing on the visible one", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ...SERVER, segments: [] }));
-    const { result, rerender } = renderHook((p) => useShadowingEvaluations(p), { initialProps: opts() });
+    const { result, rerender } = renderHook((p) => useShadowingEvaluations(p), { initialProps: opts(), wrapper: queryWrapper() });
     const originRound1 = result.current.scopeKey;
     rerender(opts({ roundId: "round-2" })); // restart into round 2
     await act(async () => {});
@@ -217,17 +229,28 @@ describe("14–15. useShadowingEvaluations", () => {
     expect(result.current.evaluations[1]?.wordMatch?.status).toBe("completed");
   });
 
-  it("an unsaved score is shown for its take but never becomes the saved score; saving it later promotes it", async () => {
+  it("an unsaved score is shown for its take but never becomes the saved score; saving it later lets the server place it", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ...SERVER, segments: [] }));
-    const { result } = renderHook(() => useShadowingEvaluations(opts()));
+    const { result } = renderHook(() => useShadowingEvaluations(opts()), { wrapper: queryWrapper() });
     await act(async () => {});
     const origin = result.current.scopeKey;
     act(() => result.current.completeTrueEvaluation(origin, 1, { pronunciationScore: 77, attemptId: "att-x", seq: 1, persistence: "unsaved", clipId: "blob:1" }));
     expect(result.current.evaluations[1].trueEvaluation?.persistence).toBe("unsaved");
     expect(result.current.evaluations[1].lastSuccessfulTrueEvaluation).toBeUndefined();
-    expect(result.current.summary.evaluatedCount).toBe(0);
+    expect(result.current.summary.coverage.scoredSentences).toBe(0);
+    const saved = dto("att-x", 1, { azure: { status: "completed", seq: 1, pronunciationScore: 77, evaluatedAt: "2026-09-01T10:01:00Z", detail: { recognizedText: "how are you", words: [] } } });
+    fetchMock.mockResolvedValue(
+      jsonResponse({ ...SERVER, segments: [{ segmentIndex: 1, attemptCount: 1, latestAttempt: saved, latestSuccessfulAzureAttempt: saved, latestWordMatchAttempt: null, azureHistory: [] }] })
+    );
     act(() => result.current.setTrueEvaluationPersistence(origin, 1, "att-x", "saved"));
-    expect(result.current.evaluations[1].lastSuccessfulTrueEvaluation).toMatchObject({ pronunciationScore: 77, persistence: "saved" });
+    // Saved (not "unsaved") — but the recovery answer carries no recording
+    // time, so the server places it: the summary waits for that read (R1).
+    expect(result.current.evaluations[1].trueEvaluation?.persistence).toBe("saved");
+    expect(result.current.evaluations[1].selectionPending).toEqual(["att-x"]);
+    expect(result.current.summaryRefresh).toBe("pending");
+    await waitFor(() => expect(result.current.evaluations[1].lastSuccessfulTrueEvaluation).toMatchObject({ pronunciationScore: 77, persistence: "saved" }));
+    expect(result.current.summaryRefresh).toBeNull();
+    expect(result.current.summary.coverage.scoredSentences).toBe(1);
   });
 });
 

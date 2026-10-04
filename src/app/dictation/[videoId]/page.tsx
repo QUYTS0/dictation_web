@@ -326,10 +326,13 @@ export default function DictationPage({ params }: PageProps) {
   });
   //  5. Submissions — see handleWorkspaceCheck below.
   const referenceTextFor = useCallback((segmentIndex: number) => segments[segmentIndex]?.text ?? "", [segments]);
+  const guestEligibleSentences = useMemo(() => segments.filter((s) => (s.text ?? "").trim().length > 0).length, [segments]);
   const {
     scopeKey: evaluationScopeKey,
     evaluations,
     summary: evaluationSummary,
+    summaryRefresh: shadowingSummaryRefresh,
+    reloadFromServer: reloadShadowingResults,
     serverLoadError: shadowingLoadError,
     startWordMatch,
     completeWordMatch,
@@ -346,17 +349,22 @@ export default function DictationPage({ params }: PageProps) {
     userId: user?.id ?? null,
     roundId: currentRoundId,
     // The round's eligible sentences of its pinned revision (server, Phase 3
-    // rule: non-empty normalized text) — the same number as "N of M sentences
-    // practiced"; the displayed sentence count until the round is known.
-    totalCount: roundState.progress?.requiredSentenceCount ?? segments.length,
+    // rule: non-empty normalized text) — the same denominator as every round
+    // report. Unknown while the round loads: the summary shows counts only
+    // instead of briefly dividing by another number. A visitor has no round:
+    // the displayed non-empty sentences are their only denominator.
+    eligibleSentences: user ? (roundState.progress?.requiredSentenceCount ?? null) : guestEligibleSentences,
+    // Eligible sentences with a practice-valid recording (server coverage).
+    recordedSentences: user ? (roundState.progress?.coveredSentences.shadowing ?? null) : null,
     referenceTextFor,
   });
 
   // Phase 4: every finished take is saved as practice right away, then its
   // Word Match; Pronunciation needs the saved attempt's id.
   const [shadowingRoundCompleted, setShadowingRoundCompleted] = useState(false);
-  // A saved Azure / Word Match result changes the round report and the
-  // Dashboard's Shadowing aggregates.
+  // A saved Word Match result changes the round report and the Dashboard's
+  // Shadowing aggregates. (A saved Azure result — direct, polling or
+  // recovery — is handled by useShadowingEvaluations itself.)
   const refreshShadowingAggregates = useCallback(() => {
     if (user) invalidateLearningViews(queryClient, user.id, { roundIds: [getRoundContext().roundId] });
   }, [user, queryClient, getRoundContext]);
@@ -602,6 +610,8 @@ export default function DictationPage({ params }: PageProps) {
       },
       roundCompleted: shadowingRoundCompleted && roundState.status === "completed",
       loadError: shadowingLoadError,
+      summaryRefresh: shadowingSummaryRefresh,
+      onRetrySummaryRefresh: reloadShadowingResults,
     }),
     [
       user,
@@ -615,6 +625,8 @@ export default function DictationPage({ params }: PageProps) {
       shadowingRoundCompleted,
       roundState.status,
       shadowingLoadError,
+      shadowingSummaryRefresh,
+      reloadShadowingResults,
     ]
   );
   const evaluationUiState = useMemo(
@@ -627,7 +639,17 @@ export default function DictationPage({ params }: PageProps) {
       }),
     [recorder.clip, currentEvaluationEntry]
   );
-  const latestScore = currentEvaluationEntry?.lastSuccessfulTrueEvaluation?.pronunciationScore ?? null;
+  // The badge shows the CURRENT take's saved score (even while the round
+  // summary waits for the server to place it), else the sentence's
+  // representative score.
+  const currentTakeResult = currentEvaluationEntry?.trueEvaluation;
+  const latestScore =
+    (currentTakeResult?.status === "completed" &&
+    currentTakeResult.persistence === "saved" &&
+    !!recorder.clip &&
+    currentTakeResult.clipId === recorder.clip.url
+      ? currentTakeResult.pronunciationScore
+      : currentEvaluationEntry?.lastSuccessfulTrueEvaluation?.pronunciationScore) ?? null;
 
   // Manual, quota-limited True Evaluation trigger — captures the current
   // segment/clip by value so the eventual result always lands on the right
@@ -686,7 +708,6 @@ export default function DictationPage({ params }: PageProps) {
         if (persistence === "unsaved" && d.recoveryToken) {
           recordings.rememberRecovery(d.attemptId, d.recoveryToken, origin, segmentIndex);
         }
-        if (persistence === "saved") refreshShadowingAggregates();
         if (!wasViewingEvaluationTab) {
           const isMobileViewport = typeof window !== "undefined" && !window.matchMedia("(min-width: 768px)").matches;
           if (isMobileViewport) {
@@ -714,7 +735,6 @@ export default function DictationPage({ params }: PageProps) {
         applyStoredEvaluationWait(waited, outcome.attemptId, {
           complete: (dto) => {
             completeTrueEvaluation(origin, segmentIndex, { ...azureResultFrom(dto), clipId, persistence: "saved" });
-            refreshShadowingAggregates();
           },
           fail: (message) => failTrueEvaluation(origin, segmentIndex, message),
           updated: () => {
@@ -738,7 +758,6 @@ export default function DictationPage({ params }: PageProps) {
     startTrueEvaluation,
     completeTrueEvaluation,
     failTrueEvaluation,
-    refreshShadowingAggregates,
   ]);
 
   // Score badge / mobile "View details" — opens the Evaluation tab without

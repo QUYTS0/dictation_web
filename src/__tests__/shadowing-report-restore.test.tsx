@@ -6,7 +6,9 @@ import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@te
 // speech-recognition call; partial/legacy records are shown honestly.
 import { EvaluationTab } from "@/app/dictation/[videoId]/components/EvaluationTab";
 import { azureResultFrom, wordMatchFrom } from "@/app/dictation/[videoId]/shadowingServerMerge";
-import { buildShadowingEvaluationSummary } from "@/app/dictation/[videoId]/videoPracticeSummary";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { buildShadowingRoundSummary } from "@/lib/practice/shadowingSummary";
 import { useShadowingEvaluations } from "@/app/dictation/[videoId]/useShadowingEvaluations";
 import { computeWordMatch } from "@/lib/practice/wordMatch";
 import type { SentenceEvaluation, TrueEvaluationWord, WordMatchResult } from "@/app/dictation/[videoId]/types";
@@ -20,6 +22,15 @@ const HEARD = "the cat saw the hat really today";
 
 const quota = { engineConfigured: true, usedSec: 0, limitSec: 18_000, usedCount: 0, limitReached: false };
 const clip: RecordedClip = { blob: new Blob(["x"]), url: "blob:take-1", mimeType: "audio/webm", durationSec: 3 } as RecordedClip;
+
+
+/** useShadowingEvaluations shares its server reads with the report cache. */
+function queryWrapper() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  };
+}
 
 function dto(over: {
   attemptId?: string;
@@ -100,7 +111,7 @@ function renderTab(e: SentenceEvaluation | undefined, withClip = false) {
     autoWordMatchEnabled: true,
     onRetryWordMatch: jest.fn(),
     quota,
-    evaluationSummary: buildShadowingEvaluationSummary({}, 3),
+    evaluationSummary: buildShadowingRoundSummary({ eligibleSentences: 3, recordedSentences: null, sentences: [] }),
     onJumpToSegment: jest.fn(),
   };
   const view = render(<EvaluationTab entry={e} recordingClip={withClip ? clip : null} {...props} />);
@@ -274,8 +285,12 @@ describe("pinned revision", () => {
   });
   const respond = (body: unknown) => fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => body } as Response);
   const hook = (transcriptId: string) =>
-    renderHook(() =>
-      useShadowingEvaluations({ videoId: "vid", transcriptId, userId: "user-1", roundId: "round-1", totalCount: 3, referenceTextFor: () => PINNED })
+    renderHook(
+      () =>
+        useShadowingEvaluations({
+          videoId: "vid", transcriptId, userId: "user-1", roundId: "round-1", eligibleSentences: 3, recordedSentences: null, referenceTextFor: () => PINNED,
+        }),
+      { wrapper: queryWrapper() }
     );
 
   beforeEach(() => sessionStorage.clear());

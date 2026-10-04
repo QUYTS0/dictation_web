@@ -361,3 +361,43 @@ it("after a confirmed save/flush (account-scoped History invalidation) the list 
   );
   expect(screen.getByTestId("history-video-vidL")).toHaveTextContent("2 study sessions · 1 round");
 });
+
+it("Shadowing in an older round: its report names the round, its feedback stays collapsed (no detail download) until opened", async () => {
+  const withShadowing = (r: RoundReport): RoundReport => ({
+    ...r,
+    progress: { ...r.progress, coveredSentences: { ...r.progress.coveredSentences, shadowing: 4 } },
+    shadowing: {
+      takes: 5,
+      practicedSentences: 4,
+      attemptedSentences: 4,
+      azure: { evaluatedSentences: 2, pronunciation: 84.5, accuracy: 80, completeness: 90, fluency: 70, prosody: null },
+      wordMatch: { evaluatedSentences: 0, accuracy: null, completeness: null },
+    },
+  });
+  const inner = global.fetch;
+  global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/session/r1/report") {
+      calls.push({ url, method: init?.method ?? "GET" });
+      return json({ round: withShadowing(report("r1", 1, "Revision A sentence")) });
+    }
+    if (url.startsWith("/api/practice/attempts?roundId=r1")) {
+      calls.push({ url, method: init?.method ?? "GET" });
+      return json({ roundId: "r1", youtubeVideoId: "vidA", transcriptId: "tr-A", roundStatus: "completed", evaluationTimeoutSec: 120, segments: [] });
+    }
+    return inner(input, init);
+  }) as typeof fetch;
+  renderPage();
+  const card = await expandVideo("vidA");
+  fireEvent.click(await within(card).findByRole("button", { name: /Round 1 · Completed/ }));
+  const oldReport = await within(card).findByTestId("history-round-report-r1");
+  expect(within(oldReport).getByTestId("report-shadowing-azure")).toHaveTextContent("84.5");
+  expect(within(oldReport).getByTestId("report-shadowing-azure")).toHaveTextContent("2 of 10 sentences scored by Azure");
+  const toggle = within(oldReport).getByRole("button", { name: /Shadowing summary · Round 1/ });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(calls.some((c) => c.url.startsWith("/api/practice/attempts"))).toBe(false);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(calls.map((c) => c.url)).toContain("/api/practice/attempts?roundId=r1"));
+  expect(calls.some((c) => c.url.includes("roundId=r2") && c.url.startsWith("/api/practice/attempts"))).toBe(false);
+  expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+});

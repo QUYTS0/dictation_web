@@ -143,6 +143,8 @@ function SelectedRoundReport({ userId, roundId }: { userId: string; roundId: str
     <div className="report-light-theme rounded-2xl border border-white/60 bg-white/60 p-4" data-testid={`history-round-report-${roundId}`}>
       <RoundReportPanel
         report={report.data.round}
+        userId={userId}
+        shadowingFeedback="collapsed"
         actions={
           <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-white">
             <FileText size={14} /> Open full report

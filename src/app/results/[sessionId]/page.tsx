@@ -183,6 +183,8 @@ export default function SessionResultsPage({ params }: PageProps) {
               <section className="rounded-3xl border border-white/60 bg-white/50 p-5 shadow-xl backdrop-blur-md">
                 <RoundReportPanel
                   report={data.round}
+                  userId={user.id}
+                  shadowingFeedback="open"
                   renderSentenceExtra={(sentence) => {
                     const mistake = mistakeBySegment.get(sentence.segmentIndex);
                     const feedback = mistake ? explanationByAttemptId[mistake.attemptId] : undefined;

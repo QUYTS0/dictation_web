@@ -2,88 +2,49 @@
 
 import { useState } from "react";
 import { BarChart3, ChevronDown, ChevronRight, Sparkles, TrendingUp } from "lucide-react";
-import type { ImprovementEvent, ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import type { ShadowingRoundSummary } from "@/lib/practice/shadowingSummary";
+import { formatAggregateScore } from "@/lib/practice/scoreFormat";
+import { PriorityList, detailStatement } from "@/components/report/ShadowingSummaryView";
 import { useEvaluationSummaryCollapsedPreference } from "../useEvaluationSummaryCollapsedPreference";
 import { MetricGrid } from "./MetricGrid";
 import { VideoPracticeSummaryModal } from "./VideoPracticeSummaryModal";
 
-const WORDS_TO_PRACTICE_INITIAL_LIMIT = 5;
 const WEAKEST_SENTENCE_INITIAL_LIMIT = 2;
-const IMPROVEMENTS_SHOWN_IN_SESSION = 2;
+const IMPROVEMENTS_SHOWN = 2;
 
-const IMPROVEMENT_LEVEL_LABEL: Record<ImprovementEvent["level"], string> = {
-  great: "Great improvement",
-  nice: "Nice improvement",
-  improving: "Improving",
-};
-
-function ImprovementCard({ event, onJumpToSegment }: { event: ImprovementEvent; onJumpToSegment: (segmentIndex: number) => void }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onJumpToSegment(event.segmentIndex)}
-      className="flex min-h-[36px] flex-col gap-0.5 rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--green)]/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-    >
-      <span className="flex items-center gap-1 font-semibold text-[var(--green)]">
-        <TrendingUp size={12} /> {IMPROVEMENT_LEVEL_LABEL[event.level]}
-      </span>
-      <span className="truncate text-[var(--text)]">
-        {event.label} <span className="text-[var(--text-muted)]">{Math.round(event.fromScore)} → {Math.round(event.toScore)}</span>
-      </span>
-      {event.mastered && <span className="text-[var(--text-faint)]">Mastered after practice</span>}
-    </button>
-  );
-}
+const LEVEL_LABEL = { great: "Great improvement", nice: "Nice improvement", improving: "Improving" } as const;
 
 /**
- * Session-scoped summary over every SentenceEvaluation recorded so far this
- * video — updates live as more sentences are evaluated, not a separate
- * "end of session" event. No blended "Overall Score" — each category that
- * has data shows its own grid cell; a category no evaluation produced is
- * simply omitted, never shown as 0. Collapsed by default (both desktop and
- * mobile — see useEvaluationSummaryCollapsedPreference) so the current
- * sentence stays the primary content; the coverage fraction is shown
- * exactly once, in this header, whether collapsed or expanded.
- *
- * Words to practice / Sounds to practice / Improvement all come from
- * ShadowingEvaluationSummary (see videoPracticeSummary.ts) — this panel
- * only ever shows a compact slice; the full picture lives in the Video
- * summary modal opened from here.
+ * Compact summary of the CURRENT ROUND's Shadowing evidence — every saved
+ * result of the round across all its study sessions (restored from the
+ * server), not just this visit. Built by the shared summary builder
+ * (src/lib/practice/shadowingSummary.ts) that every round report also uses.
+ * No blended "overall" score: each Azure metric with data shows its own
+ * round average (one decimal, the shared display rule); a metric no
+ * evaluation produced is omitted, never 0. Collapsed by default so the
+ * current sentence stays the primary content; the full view opens in the
+ * "Round summary" dialog.
  */
 export function EvaluationSessionSummary({
   summary,
   onJumpToSegment,
 }: {
-  summary: ShadowingEvaluationSummary;
+  summary: ShadowingRoundSummary;
   onJumpToSegment: (segmentIndex: number) => void;
 }) {
   const { collapsed, setCollapsed } = useEvaluationSummaryCollapsedPreference();
-  const [showAllWordsToPractice, setShowAllWordsToPractice] = useState(false);
   const [showAllWeakestSentences, setShowAllWeakestSentences] = useState(false);
-  const [showVideoSummary, setShowVideoSummary] = useState(false);
+  const [showRoundSummary, setShowRoundSummary] = useState(false);
 
-  const {
-    evaluatedCount,
-    totalCount,
-    weightedAccuracy,
-    weightedFluency,
-    weightedCompleteness,
-    weightedProsody,
-    wordsToPractice,
-    weakestSentences,
-    improvements,
-  } = summary;
-
-  // No eligible sentences / unknown denominator → no percentage at all.
-  const coveragePct = totalCount > 0 ? Math.min(100, Math.round((evaluatedCount / totalCount) * 100)) : null;
-  const visibleWordsToPractice = showAllWordsToPractice
-    ? wordsToPractice
-    : wordsToPractice.slice(0, WORDS_TO_PRACTICE_INITIAL_LIMIT);
-  const visibleWeakestSentences = showAllWeakestSentences
-    ? weakestSentences
-    : weakestSentences.slice(0, WEAKEST_SENTENCE_INITIAL_LIMIT);
-  const visibleImprovements = improvements.slice(0, IMPROVEMENTS_SHOWN_IN_SESSION);
+  const { coverage, metrics, detail, priorities, weakestSentences } = summary;
+  const scored = coverage.scoredSentences;
+  const eligible = coverage.eligibleSentences;
+  // Unknown or zero denominator → a count, no percentage, never "complete".
+  const coveragePct = eligible !== null && eligible > 0 ? Math.min(100, Math.round((scored / eligible) * 100)) : null;
+  const visibleWeakestSentences = showAllWeakestSentences ? weakestSentences : weakestSentences.slice(0, WEAKEST_SENTENCE_INITIAL_LIMIT);
   const usedFallbackScore = weakestSentences.some((s) => s.usedFallbackScore);
+  const improvements = [...summary.wordImprovements, ...summary.sentenceImprovements].slice(0, IMPROVEMENTS_SHOWN);
+  const detailText = detailStatement(summary);
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-2.5">
@@ -99,82 +60,72 @@ export function EvaluationSessionSummary({
             size={13}
             className={`shrink-0 transition-transform motion-reduce:transition-none ${collapsed ? "-rotate-90" : ""}`}
           />
-          <Sparkles size={12} /> Session
+          <Sparkles size={12} /> This round
         </span>
         <span className="text-xs font-medium text-[var(--text-muted)] tabular-nums" aria-live="polite">
-          {coveragePct === null ? `${evaluatedCount} evaluated` : `${evaluatedCount}/${totalCount} evaluated · ${coveragePct}%`}
+          {coveragePct === null ? `${scored} scored` : `${scored}/${eligible} scored · ${coveragePct}%`}
         </span>
       </button>
 
       {!collapsed && (
         <div id="evaluation-session-summary-body" className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            {/* Distinguishes these from the current-sentence Pronunciation
-                card's scores directly above this panel — same metric names,
-                but averaged across every evaluated sentence this session. */}
             <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-[var(--text-faint)]">Session averages</p>
+              <p className="text-xs font-semibold text-[var(--text-faint)]">Round averages</p>
               <button
                 type="button"
-                onClick={() => setShowVideoSummary(true)}
+                onClick={() => setShowRoundSummary(true)}
                 className="flex min-h-[28px] items-center gap-1 rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               >
-                <BarChart3 size={12} /> Video summary
+                <BarChart3 size={12} /> Round summary
               </button>
             </div>
             <MetricGrid
+              format={formatAggregateScore}
               metrics={[
-                { label: "Accuracy", value: weightedAccuracy },
-                { label: "Fluency", value: weightedFluency },
-                { label: "Completeness", value: weightedCompleteness },
-                { label: "Prosody", value: weightedProsody },
+                { label: "Accuracy", value: metrics.accuracy?.value ?? null },
+                { label: "Fluency", value: metrics.fluency?.value ?? null },
+                { label: "Completeness", value: metrics.completeness?.value ?? null },
+                { label: "Prosody", value: metrics.prosody?.value ?? null },
               ]}
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
             <p className="text-xs font-semibold text-[var(--text-faint)]">Words to practice</p>
-            {wordsToPractice.length === 0 ? (
-              <p className="text-xs text-[var(--text-faint)]">No major pronunciation issues detected.</p>
+            {detailText && <p className="text-xs text-[var(--text-faint)]">{detailText}</p>}
+            {detail.scoredWithWordDetail === 0 ? null : priorities.length === 0 ? (
+              <p className="text-xs text-[var(--text-faint)]">
+                No words were flagged in the {detail.scoredWithWordDetail} scored sentence{detail.scoredWithWordDetail === 1 ? "" : "s"} with word-level
+                feedback.
+              </p>
             ) : (
-              <>
-                <div className="flex flex-col gap-1">
-                  {visibleWordsToPractice.map((p) => (
-                    <button
-                      key={p.word}
-                      type="button"
-                      onClick={() => onJumpToSegment(p.segmentIndexes[0])}
-                      aria-label={`${p.word}, average score ${Math.round(p.averageLatestScore)}, jump to sentence ${p.segmentIndexes[0] + 1}`}
-                      className="flex min-h-[36px] items-center justify-between gap-2 rounded-lg border border-[var(--red)]/25 bg-[var(--red)]/[0.06] px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--red)]/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-medium text-[var(--red)]">{p.word}</span>
-                      <span className="shrink-0 text-[var(--text-muted)]">
-                        Avg. {Math.round(p.averageLatestScore)}/100 · {p.mispronunciationCount}/{p.evaluatedOccurrences} issues
-                        {p.focusPhoneme ? ` · /${p.focusPhoneme}/` : ""}
-                      </span>
-                      <ChevronRight size={12} className="shrink-0 text-[var(--text-faint)]" />
-                    </button>
-                  ))}
-                </div>
-                {!showAllWordsToPractice && wordsToPractice.length > WORDS_TO_PRACTICE_INITIAL_LIMIT && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllWordsToPractice(true)}
-                    className="min-h-[36px] self-start rounded-lg px-1.5 text-xs font-semibold text-[var(--accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                  >
-                    Show more
-                  </button>
-                )}
-              </>
+              <PriorityList priorities={priorities} onOpenSentence={onJumpToSegment} />
             )}
           </div>
 
-          {visibleImprovements.length > 0 && (
+          {improvements.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <p className="text-xs font-semibold text-[var(--text-faint)]">Improvement</p>
+              <p className="text-xs font-semibold text-[var(--text-faint)]">Improvement on the same sentence</p>
               <div className="flex flex-col gap-1">
-                {visibleImprovements.map((event) => (
-                  <ImprovementCard key={`${event.type}-${event.label}`} event={event} onJumpToSegment={onJumpToSegment} />
+                {improvements.map((i) => (
+                  <button
+                    key={`${i.kind === "word" ? `w${i.position}` : "s"}-${i.segmentIndex}`}
+                    type="button"
+                    onClick={() => onJumpToSegment(i.segmentIndex)}
+                    className="flex min-h-[36px] flex-col gap-0.5 rounded-lg border border-[var(--green)]/25 bg-[var(--green)]/[0.08] px-2 py-1.5 text-left text-xs"
+                  >
+                    <span className="flex items-center gap-1 font-semibold text-[var(--green)]">
+                      <TrendingUp size={12} /> {LEVEL_LABEL[i.level]}
+                    </span>
+                    <span className="truncate text-[var(--text)]">
+                      {i.kind === "word" ? `“${i.word}” · ` : ""}sentence {i.segmentIndex + 1}{" "}
+                      <span className="text-[var(--text-muted)]">
+                        {Math.round(i.fromScore)} → {Math.round(i.toScore)}
+                        {i.sinceFirstResult ? "" : " (recent)"}
+                      </span>
+                    </span>
+                  </button>
                 ))}
               </div>
             </div>
@@ -190,7 +141,7 @@ export function EvaluationSessionSummary({
               )}
             </p>
             {weakestSentences.length === 0 ? (
-              <p className="text-xs text-[var(--text-faint)]">No sentences evaluated yet.</p>
+              <p className="text-xs text-[var(--text-faint)]">No sentences scored yet.</p>
             ) : (
               <>
                 <div className="flex flex-col gap-1">
@@ -220,20 +171,18 @@ export function EvaluationSessionSummary({
               </>
             )}
             {usedFallbackScore && weakestSentences.length > 0 && (
-              <p className="text-xs text-[var(--text-faint)]">
-                * Azure accuracy shown where the overall pronunciation score isn&apos;t available.
-              </p>
+              <p className="text-xs text-[var(--text-faint)]">* Azure accuracy shown where the overall pronunciation score isn&apos;t available.</p>
             )}
           </div>
         </div>
       )}
 
       <VideoPracticeSummaryModal
-        open={showVideoSummary}
-        onClose={() => setShowVideoSummary(false)}
+        open={showRoundSummary}
+        onClose={() => setShowRoundSummary(false)}
         summary={summary}
         onJumpToSegment={(segmentIndex) => {
-          setShowVideoSummary(false);
+          setShowRoundSummary(false);
           onJumpToSegment(segmentIndex);
         }}
       />

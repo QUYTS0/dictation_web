@@ -12,7 +12,7 @@ import { MetricInfoPopover } from "./MetricInfoPopover";
 import { PronunciationReportModal } from "./PronunciationReportModal";
 import { WordMatchInfoPopover } from "./WordMatchInfoPopover";
 import { buildComparedTokens, formatErrorTypeLabel, summarizeWordMatchDiff, type WordMatchChange } from "../helpers";
-import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import type { ShadowingRoundSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 import { computeWordMatch } from "@/lib/practice/wordMatch";
 import type {
@@ -403,7 +403,7 @@ export function EvaluationTab({
   autoWordMatchEnabled: boolean;
   onRetryWordMatch: () => void;
   quota: PracticeQuotaState;
-  evaluationSummary: ShadowingEvaluationSummary;
+  evaluationSummary: ShadowingRoundSummary;
   onJumpToSegment: (segmentIndex: number) => void;
   /** Phase 4: saving state of the current take and its results. */
   persistence?: ShadowingPersistenceView;
@@ -450,6 +450,23 @@ export function EvaluationTab({
         </div>
       )}
       {persistence?.loadError && <p className="text-xs text-amber-600">{persistence.loadError}</p>}
+      {persistence?.summaryRefresh === "failed" && (
+        <div
+          data-testid="summary-refresh-failed"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-700"
+        >
+          <p>Your score is saved, but the round summary couldn&apos;t refresh. It still shows your earlier results.</p>
+          {persistence.onRetrySummaryRefresh && (
+            <button
+              type="button"
+              onClick={persistence.onRetrySummaryRefresh}
+              className="flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-semibold text-[var(--text)] hover:bg-white/10"
+            >
+              <RotateCcw size={12} /> Refresh summary
+            </button>
+          )}
+        </div>
+      )}
       {!hasClip && (lastSuccessful || savedWordMatch) ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-[var(--text-muted)]">
@@ -640,6 +657,14 @@ export function EvaluationTab({
                   {evaluationUiState === "success" && trueEvaluation && (
                     <>
                       <PronunciationScoreCard result={trueEvaluation} stale={false} />
+                      {trueEvaluation.persistence === "saved" &&
+                        !!trueEvaluation.attemptId &&
+                        entry?.selectionPending?.includes(trueEvaluation.attemptId) &&
+                        persistence?.summaryRefresh !== "failed" && (
+                          <p data-testid="summary-refresh-pending" className="text-xs text-[var(--text-faint)]">
+                            Saved · updating the round summary…
+                          </p>
+                        )}
                       {trueEvaluation.persistence === "unsaved" && (
                         <div className="flex flex-col gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-700">
                           <p>This score isn&apos;t saved yet — it will disappear if you leave the page.</p>
@@ -674,7 +699,7 @@ export function EvaluationTab({
         </>
       )}
 
-      {evaluationSummary.evaluatedCount > 1 && (
+      {evaluationSummary.coverage.scoredSentences > 1 && (
         <EvaluationSessionSummary summary={evaluationSummary} onJumpToSegment={onJumpToSegment} />
       )}
     </div>

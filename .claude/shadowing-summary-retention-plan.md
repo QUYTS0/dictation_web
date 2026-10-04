@@ -1,7 +1,14 @@
 # Shadowing lesson summaries and report-detail retention — plan
 
 Status: **plan only**. Nothing here is implemented; no migration is created;
-no data has been changed or deleted. Items marked **Recommended** are design
+no data has been changed or deleted.
+
+> Update 2026-10-04: the *correctness* parts that overlap SS1/SS2 were implemented in a different
+> form. They cover occurrence identity, error-type classification, comparable-only improvement,
+> canonical representative order on the client, eligible-sentence denominators and the shared
+> builder in `src/lib/practice/shadowingSummary.ts`; see `.claude/shadowing-summary-audit.md` §0.
+> That work added no table and no migration. **SS3–SS5 (snapshots, watermark, measurement,
+> compaction) and the "Save lesson summary" action remain proposals.** Items marked **Recommended** are design
 proposals awaiting implementation review; items marked **Established** describe
 behavior that exists in the repository today.
 

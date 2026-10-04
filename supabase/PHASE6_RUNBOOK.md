@@ -166,7 +166,7 @@ round. Rounds are never combined. Dictation facts use valid practice only, order
 | Corrected after mistakes | The latest answer is correct and an earlier recorded answer was incorrect. |
 | Best run in this round | Longest run of consecutive correct answers over the whole round (a wrong answer ends a run). Secondary; labeled "not your daily streak". |
 | Mixed rounds | A round completed with Dictation + Shadowing can have fewer Dictation-practiced sentences than required. Dictation figures use the Dictation denominator; coverage shows each mode separately. |
-| Shadowing | The round's independent Azure and Word Match summaries (rules as on the Dashboard). |
+| Shadowing | The round's independent Azure and Word Match summaries (rules as on the Dashboard), every count shown out of the round's **eligible** sentences. Detailed feedback: see "Shadowing summary" below. |
 
 **Availability.** `historyComplete` = the round is verified (`provenance='current'`) and has no
 unverified legacy answers. When it is false:
@@ -180,6 +180,42 @@ and the mistakes list were page-local React state, so they reset at every visit.
 
 The card is replaced by the report view. The page no longer reads those counters, and the hook no
 longer returns them. Every figure now comes from `fn_round_report`.
+
+### Shadowing summary (practice page and every round report — post-042, no SQL)
+
+One pure builder (`src/lib/practice/shadowingSummary.ts`) for the practice page's "This round"
+panel and dialog and for the "Shadowing summary · Round N" section of every round report
+(completion view, `/results`, History).
+
+| Shown | Rule |
+|---|---|
+| Recorded in Shadowing | Eligible sentences with a **practice-valid** take (`progress.coveredSentences.shadowing`) of the eligible sentences (pinned revision). A too-short take counts as a recording, not coverage. |
+| Scored by Azure | Sentences with a saved successful Azure result, of the eligible sentences. Unknown denominator → count only, never a percentage or "complete". |
+| State | "No sentences have been scored by Azure yet" / "Partial: N of M scored" / "All sentences are recorded in Shadowing — N of M scored" / "Every eligible sentence has an Azure score". Round completion is separate. |
+| Azure averages | Unchanged weights; missing metrics excluded; one decimal (`formatAggregateScore`), also on the tiles, History and Dashboard. |
+| Practice next | Pronunciation evidence only (Mispronunciation, or a scored word below 60), counted **per occurrence**: "Flagged in 1 of 2 occurrences across 1 of 1 sentence". Recurring (≥ 2 sentences) first. Five shown, "Show N more". |
+| Not recognized / Extra words / Rhythm | Azure `Omission` / `Insertion` / break and monotone types — listed separately, never as pronunciation errors. |
+| Improvement | Same sentence, two saved results; word level only when both align one-to-one with the sentence and the word occurs once. "Recent comparison" when the 5-result history may be truncated. |
+| Detail | "Word-level feedback wasn't saved…" / "…available for k of N scored sentences" — never "no issues" without evidence. |
+| Word Match | A separate line: browser recognition, not a pronunciation score. |
+
+**Loading.** The section fetches `GET /api/practice/attempts?roundId=` (cache key
+`["shadowing-round-results", userId, roundId]`) only while open: open by default on the completion
+view and `/results`, collapsed in History. The SQL tiles stay visible if it fails (Retry). A
+response for another round or script revision is refused. Sentences are previewed read-only
+(`/results`, History) or opened in the practice view (completion view, the page's own round).
+Reading writes nothing and never calls Azure.
+
+**A new score on the practice page (R1).** The evaluate and recovery responses don't carry the
+recording's time, so the page can't tell where a just-saved score belongs among the sentence's
+saved results. It shows that score on its **take's card** ("Saved · updating the round summary…")
+but the **round summary** — coverage, averages, words to practise, improvement — keeps its last
+confirmed data until the round is re-read from the server (automatically, right after the save).
+Only that re-read places the score, by the server's rule: latest recording `created_at`, then
+attempt id. Polling results carry the time and are placed at once. If the re-read fails, the tab
+says "Your score is saved, but the round summary couldn't refresh" with **Refresh summary** (a
+re-read only; no retry loop, no new evaluation). Nothing provisional is written to the shared
+report cache or restored from sessionStorage as the selection.
 
 ## 4. Resume, modes and revisions
 
@@ -397,6 +433,18 @@ grant. `040`'s `fn_history_sessions` stays for already-open old tabs.
    - [ ] With the device in Asia/Ho_Chi_Minh, practice shortly after local midnight → the header and the Dashboard show the same streak, and it includes today (not yesterday).
    - [ ] Practice before midnight and again after it → the streak grows by one day; the header and the Dashboard agree.
    - [ ] Leave a page open (idle) across midnight without practicing → no new day appears.
+7. **Shadowing summary** (post-042, no SQL — use recordings you already have; no new paid evaluations are needed)
+   - [ ] A round finished with Dictation, with a few Shadowing recordings: the report reads "Shadowing recordings k/M", "N of M sentences scored by Azure" (M = the round's sentences, not the recorded ones) and "Round complete" — nothing claims the Shadowing is fully evaluated.
+   - [ ] The practice page's "This round" panel shows the same N/M and the same averages (one decimal) as the report, `/results` and the Dashboard.
+   - [ ] "Shadowing summary · Round N" on `/results` loads and lists up to five words with "Flagged in a of b occurrences across c of d sentences"; "Show more" reveals the rest.
+   - [ ] A sentence with a repeated word ("the … the") shows the weak occurrence; a skipped word appears under "Not recognized in the recording", not under "Practice next".
+   - [ ] History → expand a video → choose an older round: its report is titled with that round; the Shadowing summary stays collapsed and loads only when opened; "Show feedback" previews a sentence without leaving History.
+   - [ ] Save a score through "Retry saving" (recovery): the report and the Dashboard show it after navigating there, without a manual reload.
+   - [ ] iPhone (Safari, portrait): the summary fits without horizontal scroll; "Show more", "More feedback" and "Show feedback" are tappable.
+   - The next three checks each need **one new Azure evaluation** (counts toward the monthly quota); skip them if you want no new evaluations — the hook tests cover the same paths.
+   - [ ] Delayed re-read (DevTools → Network: throttle, or block `/api/practice/attempts` for a moment) after a new score on a sentence that already has a saved score: the take's card shows the new score with "Saved · updating the round summary…", while "This round" keeps its earlier averages and words — it never jumps to the new score and back. When the request goes through, the summary matches `/results`.
+   - [ ] Block `/api/practice/attempts` before the re-read: the tab says the score is saved but the summary couldn't refresh; unblock and press **Refresh summary** → the summary updates; the Network tab shows no repeated requests and no `POST /api/practice/evaluate`.
+   - [ ] First score of a sentence: the card shows it as saved (not "isn't saved yet"); the summary counts it once the re-read finishes.
 
 ## 9. Recovery
 
@@ -432,6 +480,7 @@ Numbers after the pre-rollout correction pass:
 | Full Jest with the local DB, `--runInBand` | **131 suites passed, 4 skipped; 1491 passed, 113 skipped, 0 failed.** The 113 skipped are the Supabase-HTTP suites (`PHASE1_IT_*` / `TRANSCRIPT_IT_*`), not run. |
 | Full Jest with the local DB, parallel workers (default) | Same totals, except `transcriptPdf.test.ts` › "paginates a long transcript" **failed with the 5 s default timeout in 3 of 4 parallel runs**. That file is unchanged since its own commit, CPU-bound (PDF + fonts), passes alone and in-band, and its timeout was not raised. (The one parallel run made while `fn_valid_time_zone` was still slow also timed out four `phase6-corrections` tests — the cause, fixed below — and one `vocabulary-page.test.tsx` case, an unchanged file.) The parallel runs also print Jest's "a worker process has failed to exit gracefully" warning. It is intermittent, absent in-band, not reproducible from any Phase 6 suite (bisected), and `--detectOpenHandles` reports nothing. Likely source (unconfirmed): the uncleared `Promise.race` timers in the unchanged AI routes (`explain-all/route.ts:553`, `ai/explain/route.ts:130`). Not masked, not fixed here (out of scope). |
 | Full Jest without a DB | 118 suites passed, 17 skipped; 1362 passed, 242 skipped (one earlier parallel run had the same `transcriptPdf` timeout). |
+| Shadowing summary R1 follow-up (2026-10-04, app only, no SQL) | `tsc` and lint clean; 11 focused suites (128 tests, incl. the real-PG parity test) pass. Full Jest, in band, local DB: **1,578 passed, 113 skipped (Supabase HTTP), 1 failed** — `vocabulary-page.test.tsx` › "selection cap", a test whose own duration varied 9–33 s between identical standalone runs and that also failed on a clean `HEAD` worktree; the cause is not established (details in `.claude/shadowing-summary-audit.md` §0, "R1 follow-up"). Build passes. |
 | Supabase HTTP (PostgREST/GoTrue) | **Not verified.** |
 | Real browser / iPhone | **Not verified.** jsdom cannot establish CSS layout, breakpoints, scrolling or iPhone rendering. Run §8, especially items 3 and 6. |
 | Applied to the user's project | **No.** |

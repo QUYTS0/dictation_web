@@ -3,6 +3,7 @@ import { dashboardKeys } from "@/lib/queries/dashboard";
 import { historyMistakesKeys } from "@/lib/queries/historyMistakes";
 import { historySessionsKeys } from "@/lib/queries/historySessions";
 import { roundReportKeys } from "@/lib/queries/roundReport";
+import { shadowingRoundResultsKeys } from "@/lib/queries/shadowingRoundResults";
 import { videoLibraryKeys } from "@/lib/queries/videoLibrary";
 
 /**
@@ -26,7 +27,9 @@ export function invalidateLearningViews(
   void qc.invalidateQueries({ queryKey: videoLibraryKeys.allForUser(userId) });
   void qc.invalidateQueries({ queryKey: historySessionsKeys.allForUser(userId) });
   for (const roundId of opts.roundIds ?? []) {
-    if (roundId) void qc.invalidateQueries({ queryKey: roundReportKeys.report(userId, roundId) });
+    if (!roundId) continue;
+    void qc.invalidateQueries({ queryKey: roundReportKeys.report(userId, roundId) });
+    void qc.invalidateQueries({ queryKey: shadowingRoundResultsKeys.round(userId, roundId) });
   }
   if (opts.mistakes) {
     void qc.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(userId) });

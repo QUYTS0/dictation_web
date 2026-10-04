@@ -8,7 +8,14 @@ import { SEMANTIC_TEXT_CLASS, semanticTierFor } from "../evaluationFeedback";
  *  quick-scan cue, never the only one. A metric with no value is simply
  *  omitted from the grid, never shown as a fake 0; the whole grid renders
  *  nothing if every metric is missing. */
-export function MetricGrid({ metrics }: { metrics: Array<{ label: string; value: number | null }> }) {
+export function MetricGrid({
+  metrics,
+  format = (v) => String(Math.round(v)),
+}: {
+  metrics: Array<{ label: string; value: number | null }>;
+  /** Round-level averages pass formatAggregateScore (one decimal); a single result keeps whole numbers. */
+  format?: (value: number) => string;
+}) {
   const present = metrics.filter(
     (m): m is { label: string; value: number } => m.value !== null && m.value !== undefined
   );
@@ -21,7 +28,7 @@ export function MetricGrid({ metrics }: { metrics: Array<{ label: string; value:
           <div key={m.label} className="flex items-baseline justify-between gap-2">
             <span className="text-xs text-[var(--text-muted)]">{m.label}</span>
             <span className={`text-sm font-semibold tabular-nums ${SEMANTIC_TEXT_CLASS[semanticTierFor(clamped)]}`}>
-              {Math.round(clamped)}
+              {format(clamped)}
             </span>
           </div>
         );

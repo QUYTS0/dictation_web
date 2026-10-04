@@ -202,6 +202,10 @@ export interface TrueEvaluationResult {
   persistence?: ResultPersistence;
   /** Restored from the server rather than evaluated on this page. */
   restored?: boolean;
+  /** When the scored recording was saved (server created_at) — the canonical
+   *  order of saved results. Known for restored results; unknown for a result
+   *  that just arrived on this page (the hook then reconciles with the server). */
+  recordingCreatedAt?: string;
 }
 
 /** A single word's score within one historical attempt — deliberately much
@@ -225,6 +229,8 @@ export interface SentenceEvaluationAttempt {
   clipId?: string;
   /** Phase 4: the saved recording this history point scored. */
   attemptId?: string;
+  /** When that recording was saved (server created_at), if known. */
+  createdAt?: string;
   pronunciationScore?: number;
   accuracyScore?: number;
   fluencyScore?: number;
@@ -257,6 +263,12 @@ export interface SentenceEvaluation {
    *  should treat that the same as a single-point history containing just
    *  lastSuccessfulTrueEvaluation (see toAttempt() in useShadowingEvaluations.ts). */
   attempts?: SentenceEvaluationAttempt[];
+  /** Attempt ids of SAVED results that arrived on this page without the
+   *  server's ordering metadata (recording time). They are shown on their
+   *  take's card but never become the representative score or enter the
+   *  history until a server read placed them (R1) — the round summary keeps
+   *  its last confirmed selection meanwhile. */
+  selectionPending?: string[];
   /** Phase 4: the most recent SAVED recording of this sentence in the round
    *  (from the server) — lets the UI say "your latest recording hasn't been
    *  evaluated" instead of presenting an older take's score as current. */
@@ -288,4 +300,8 @@ export interface ShadowingPersistenceView {
   roundCompleted: boolean;
   /** Saved results could not be loaded from the server. */
   loadError: string | null;
+  /** A saved score waits for the round summary to re-read the server
+   *  ("pending"), or that re-read failed ("failed" — retry with onRetrySummaryRefresh). */
+  summaryRefresh?: "pending" | "failed" | null;
+  onRetrySummaryRefresh?: () => void;
 }

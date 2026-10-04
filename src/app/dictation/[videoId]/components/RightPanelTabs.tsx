@@ -15,7 +15,7 @@ import type {
   SentenceEvaluation,
   ShadowingPersistenceView,
 } from "../types";
-import type { ShadowingEvaluationSummary } from "../useShadowingEvaluations";
+import type { ShadowingRoundSummary } from "../useShadowingEvaluations";
 import type { PracticeQuotaState } from "../usePracticeEvaluation";
 
 type EvaluationTabStatus = "idle" | "processing" | "completed" | "failed";
@@ -232,7 +232,7 @@ export function RightPanelTabs({
   autoWordMatchEnabled: boolean;
   onRetryWordMatch: () => void;
   trueEvalQuota: PracticeQuotaState;
-  evaluationSummary: ShadowingEvaluationSummary;
+  evaluationSummary: ShadowingRoundSummary;
   /** A completed/failed evaluation not yet viewed via this tab — see
    *  TabButton's own doc comment. */
   hasUnreadEvaluation?: boolean;

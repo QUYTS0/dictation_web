@@ -34,6 +34,7 @@ export function azureResultFrom(dto: ShadowingAttemptDto): TrueEvaluationResult 
     seq: a.seq,
     persistence: "saved",
     restored: true,
+    recordingCreatedAt: dto.createdAt,
   };
 }
 
@@ -78,6 +79,7 @@ export function entryFromServer(seg: ShadowingSegmentResults, referenceText: str
     lastSuccessfulTrueEvaluation: lastSuccessful,
     attempts: seg.azureHistory.map((h) => ({
       evaluatedAt: h.evaluatedAt ?? h.createdAt,
+      createdAt: h.createdAt,
       attemptId: h.attemptId,
       pronunciationScore: num(h.pronunciationScore),
       accuracyScore: num(h.accuracyScore),
@@ -97,10 +99,23 @@ export function entryFromServer(seg: ShadowingSegmentResults, referenceText: str
   };
 }
 
+/**
+ * `preserveLive` (a reconcile after a save on this page, not a page load):
+ * the server still decides every SAVED result and the representative score
+ * (lastSuccessfulTrueEvaluation, history), but the page's own in-flight
+ * status — an evaluation or Word Match still running, or the result of the
+ * take on screen — is kept, so a refresh never wipes what the user is doing.
+ *
+ * `placedByThisRead(attemptId)`: whether this read started after the save of
+ * a result listed in `selectionPending` (so the server response already
+ * reflects it). Those ids are cleared — the server's selection now decides;
+ * the others stay pending (a read that started earlier can't know them).
+ */
 export function mergeServerResults(
   local: ShadowingEvaluationMap,
   server: ShadowingRoundResults,
-  referenceTextFor: (segmentIndex: number) => string
+  referenceTextFor: (segmentIndex: number) => string,
+  opts: { preserveLive?: boolean; placedByThisRead?: (attemptId: string) => boolean } = {}
 ): ShadowingEvaluationMap {
   const out: ShadowingEvaluationMap = {};
   for (const seg of server.segments) {
@@ -109,6 +124,20 @@ export function mergeServerResults(
   for (const [key, loc] of Object.entries(local)) {
     const i = Number(key);
     const srv = out[i];
+    if (opts.preserveLive) {
+      const liveTrue = loc.trueEvaluation && loc.trueEvaluation.status !== "idle" ? loc.trueEvaluation : undefined;
+      const liveWordMatch = loc.wordMatch && (loc.wordMatch.status !== "completed" || loc.wordMatch.persisted === false) ? loc.wordMatch : undefined;
+      const placed = opts.placedByThisRead ?? (() => true);
+      const stillPending = (loc.selectionPending ?? []).filter((id) => !placed(id));
+      const pending = { selectionPending: stillPending.length > 0 ? stillPending : undefined };
+      if (srv) {
+        out[i] = { ...srv, ...(liveTrue ? { trueEvaluation: liveTrue } : {}), ...(liveWordMatch ? { wordMatch: liveWordMatch } : {}), ...pending };
+      } else if (liveTrue || liveWordMatch || loc.wordMatch || stillPending.length > 0) {
+        // Nothing saved for this sentence yet (e.g. only a running evaluation): keep the live entry as is.
+        out[i] = { ...loc, ...pending };
+      }
+      continue;
+    }
     const te = loc.trueEvaluation;
     const keepTrue =
       te?.status === "completed" &&

@@ -20,6 +20,7 @@ import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import { removeFromLibrary, useContinueLearningQuery, useVideoLibraryQuery } from "@/lib/queries/videoLibrary";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
 import { formatDurationSeconds } from "@/lib/utils/time";
+import { formatAggregateScore } from "@/lib/practice/scoreFormat";
 import { LIBRARY_FILTERS, type LibraryFilter, type LibraryItem } from "@/lib/types/learning";
 
 const FILTER_LABEL: Record<LibraryFilter, string> = {
@@ -235,7 +236,7 @@ function DashboardContent() {
                   />
                   <MetricCard
                     title="Pronunciation"
-                    value={azure && azure.pronunciation !== null ? String(Math.round(azure.pronunciation)) : "—"}
+                    value={azure ? formatAggregateScore(azure.pronunciation) : "—"}
                     icon={<Mic size={20} />}
                     trend={azure && azure.evaluatedSentences > 0 ? `${azure.evaluatedSentences} scored sentences` : undefined}
                   />

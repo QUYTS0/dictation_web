@@ -4,7 +4,10 @@ import { ReactNode, useMemo } from "react";
 import { clsx } from "clsx";
 import { errorTypeLabel } from "@/lib/constants/errorTypes";
 import { formatDurationSeconds } from "@/lib/utils/time";
+import { formatAggregateScore } from "@/lib/practice/scoreFormat";
 import type { ReportSentence, RoundReport } from "@/lib/types/learning";
+import { ShadowingFeedbackSection } from "./ShadowingFeedbackSection";
+import { ofEligible } from "./ShadowingSummaryView";
 
 /**
  * The whole-round report (plan Phase 6 §8/§9): ONE component, fed by ONE
@@ -53,9 +56,20 @@ export interface RoundReportPanelProps {
   renderSentenceExtra?: (sentence: ReportSentence) => ReactNode;
   /** "Next actions" — supplied by the host page. */
   actions?: ReactNode;
+  /** The signed-in viewer — enables the detailed Shadowing summary (loaded lazily). */
+  userId?: string;
+  /** Whether the detailed Shadowing summary starts open (loads at once) or collapsed (loads when opened). */
+  shadowingFeedback?: "open" | "collapsed";
 }
 
-export function RoundReportPanel({ report, onReviewSentence, renderSentenceExtra, actions }: RoundReportPanelProps) {
+export function RoundReportPanel({
+  report,
+  onReviewSentence,
+  renderSentenceExtra,
+  actions,
+  userId,
+  shadowingFeedback = "collapsed",
+}: RoundReportPanelProps) {
   const { round, dictation, shadowing, progress } = report;
   const needsReview = useMemo(() => report.sentences.filter((s) => s.category === "needs_review"), [report.sentences]);
   const corrected = useMemo(() => report.sentences.filter((s) => s.category === "corrected"), [report.sentences]);
@@ -141,28 +155,47 @@ export function RoundReportPanel({ report, onReviewSentence, renderSentenceExtra
             detail={report.activity.activeSec > 0 ? "engaged time across this round's sessions" : "Not tracked for this round"}
           />
         </div>
+        {/* Shadowing: every coverage figure is out of the round's ELIGIBLE
+            sentences (its pinned revision) — never out of the sentences that
+            happen to have a recording. Unknown denominator → counts only. */}
         {hasShadowing && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" data-testid="report-shadowing">
-            <Tile label="Shadowing takes" value={String(shadowing.takes)} detail={`${shadowing.practicedSentences} sentences practiced`} />
             <Tile
+              testId="report-shadowing-recorded"
+              label="Shadowing recordings"
+              value={required ? `${progress.coveredSentences.shadowing}/${required}` : String(progress.coveredSentences.shadowing)}
+              detail={`sentences with a valid recording · ${shadowing.takes} recording${shadowing.takes === 1 ? "" : "s"} in total`}
+            />
+            <Tile
+              testId="report-shadowing-azure"
               label="Pronunciation (Azure)"
-              value={score(shadowing.azure.pronunciation)}
+              value={formatAggregateScore(shadowing.azure.pronunciation)}
               detail={
                 shadowing.azure.evaluatedSentences > 0
-                  ? `${shadowing.azure.evaluatedSentences}/${shadowing.attemptedSentences} evaluated sentences`
+                  ? `${ofEligible(shadowing.azure.evaluatedSentences, required)} scored by Azure`
                   : "No saved pronunciation scores"
               }
             />
             <Tile
+              testId="report-shadowing-word-match"
               label="Word Match"
-              value={shadowing.wordMatch.accuracy === null ? "—" : `${Math.round(shadowing.wordMatch.accuracy)}%`}
+              value={shadowing.wordMatch.accuracy === null ? "—" : `${formatAggregateScore(shadowing.wordMatch.accuracy)}%`}
               detail={
                 shadowing.wordMatch.evaluatedSentences > 0
-                  ? `${shadowing.wordMatch.evaluatedSentences}/${shadowing.attemptedSentences} sentences`
+                  ? `${ofEligible(shadowing.wordMatch.evaluatedSentences, required)} · browser recognition, not a pronunciation score`
                   : "No saved Word Match results"
               }
             />
           </div>
+        )}
+        {hasShadowing && userId && (
+          <ShadowingFeedbackSection
+            key={report.round.roundId}
+            userId={userId}
+            report={report}
+            defaultOpen={shadowingFeedback === "open"}
+            onReviewSentence={onReviewSentence}
+          />
         )}
         {!report.historyComplete && (
           <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-2.5 text-xs text-[var(--text-muted)]">
