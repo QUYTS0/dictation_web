@@ -328,3 +328,30 @@ was not rerun for this SQL/documentation correction. On Windows these npm comman
 `npm.cmd` because the local PowerShell execution policy blocks `npm.ps1`.
 Earlier P5 implementation evidence remains in `.claude/learning-reports-review-plan.md` §12.6;
 it does not establish remote P5 deployment or browser status.
+
+## 12. Diagnosing a failed Gemini assessment
+
+`[gemini] ai/assessment provider error` followed by HTTP 502 means the provider call failed
+before the assessment finish RPC. It is not evidence of a 044/045 migration failure. A 200 from
+`GET /api/ai/quota` only reads the application's counters; it does not check Google's quota,
+API access or service health.
+
+Older logs showed only `Error` because the installed SDK's HTTP error classes inherit that
+`name`. The logger now records `httpStatus`, `reason`, an allowlisted `apiReason`, the SDK error
+type, model, attempt number, structured-output flag and a fixed operator hint. It does not log
+raw provider messages, request text, API keys or response bodies. Public error messages distinguish
+provider quota, credentials/access, request rejection, network, timeout and service failures.
+
+| New log | Check |
+|---|---|
+| `httpStatus: 429`, `reason: quota` | Google's request/token limits and remaining model quota; these are separate from Redis. A smaller request succeeding does not rule out a token limit. |
+| `httpStatus: 400`, `reason: invalid_request` | Assessment response schema, generation parameters, model support and project prerequisites. |
+| `reason: credentials` / `permission_denied` | Key validity/restrictions and project API access. |
+| `httpStatus: 404` | Configured model and its availability for `generateContent`. |
+| `httpStatus: 500` or `503` | Temporary provider failure. |
+| No HTTP status, `reason: network` / `timeout` | Server network connectivity or the request deadline. |
+
+After the dev server reloads the diagnostic code, a user may explicitly retry once and inspect
+the new log. That request may consume quota. Provider failures are not automatically retried or
+refunded; both operations are abandoned and earlier saved results stay intact. Diagnostic tests
+mock fetch while using the installed SDK, so they require no live Gemini request.

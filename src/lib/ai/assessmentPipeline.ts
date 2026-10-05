@@ -39,6 +39,7 @@ import { noteItem, validateNotes, validateOverview, type ValidNote } from "@/lib
 import { abandonAssessment, beginAssessment, finishAssessment } from "@/lib/ai/assessmentPersistence";
 import { abandonExplanations, beginExplanations, finishExplanations, type AbandonReason } from "@/lib/practice/explanationPersistence";
 import { admissionFailure, callGeminiAdmitted, parseJsonText, type GeminiCallResult } from "@/lib/ai/geminiCall";
+import { geminiFailureMessage } from "@/lib/ai/geminiErrors";
 import { contentHash, getAiRecoverySecret, sealAiRecovery } from "@/lib/ai/aiRecovery";
 import type { StoredExplanation } from "@/lib/practice/explanationIdentity";
 import type { RoundReport } from "@/lib/types/learning";
@@ -144,7 +145,7 @@ async function callWithOneRetry(
         parsed: null,
         last,
         requestsUsed,
-        failure: fail(502, "provider_failed", "The AI service failed. The request may still count toward today's limit. Earlier results are kept."),
+        failure: fail(502, "provider_failed", geminiFailureMessage(last.diagnostics)),
       };
     }
     const parsed = parseJsonText(last.text);

@@ -11,6 +11,7 @@
  */
 import { GoogleGenerativeAI, type GenerationConfig, type Schema } from "@google/generative-ai";
 import { admitGeminiAttempt, type AdmissionRequest, type AdmissionResult } from "@/lib/ai/quota";
+import { geminiErrorDiagnostics, GEMINI_ERROR_HINTS, type GeminiErrorDiagnostics } from "@/lib/ai/geminiErrors";
 
 export interface GeminiUsage {
   promptTokens: number | null;
@@ -22,7 +23,7 @@ export type GeminiCallResult =
   | { status: "ok"; text: string; finishReason: string | null; truncated: boolean; usage: GeminiUsage }
   | { status: "not_admitted"; admission: Exclude<AdmissionResult, { status: "admitted" } | { status: "unmetered" }> }
   /** The provider may or may not have done (and charged for) the work. */
-  | { status: "provider_error"; timedOut: boolean };
+  | { status: "provider_error"; timedOut: boolean; diagnostics: GeminiErrorDiagnostics };
 
 export interface GeminiCallRequest {
   apiKey: string;
@@ -84,8 +85,15 @@ export async function callGeminiAdmitted(
     );
     return { status: "ok", text, finishReason, truncated, usage };
   } catch (err) {
-    console.error(`[gemini] ${req.logTag} provider error${timedOut ? " (timeout)" : ""}:`, err instanceof Error ? err.name : "error");
-    return { status: "provider_error", timedOut };
+    const diagnostics = geminiErrorDiagnostics(err, timedOut);
+    console.error(`[gemini] ${req.logTag} provider error:`, {
+      ...diagnostics,
+      model: req.model,
+      attempt: req.admission.attempt,
+      structuredOutput: !!req.responseSchema,
+      hint: GEMINI_ERROR_HINTS[diagnostics.reason],
+    });
+    return { status: "provider_error", timedOut, diagnostics };
   } finally {
     clearTimeout(timer);
   }

@@ -237,6 +237,25 @@ describe("Generate assessment", () => {
     expect(names()).not.toContain("fn_assessment_finish");
   });
 
+  it.each([
+    [400, "rejected the assessment request"],
+    [403, "denied access"],
+    [429, "separate from the app's displayed limit"],
+    [503, "temporarily unavailable"],
+  ])("upstream %i has an actionable public message, no automatic retry and no saved-result changes", async (upstreamStatus, message) => {
+    generateContent.mockRejectedValue(Object.assign(new Error("private provider response"), { status: upstreamStatus }));
+    const { status, json } = await generate();
+    expect(status).toBe(502);
+    expect(json.code).toBe("provider_failed");
+    expect(json.error).toContain(message);
+    expect(json.error).not.toContain("private provider response");
+    expect(generateContent).toHaveBeenCalledTimes(1);
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(names()).toEqual(expect.arrayContaining(["fn_assessment_abandon", "fn_explanations_abandon"]));
+    expect(names()).not.toContain("fn_assessment_finish");
+    expect(names()).not.toContain("fn_explanations_finish");
+  });
+
   it("unreadable first response → ONE metered parse retry with its own admission id; success is saved (2 requests used)", async () => {
     generateContent.mockResolvedValueOnce(gemini("not json at all")).mockResolvedValueOnce(gemini(OVERVIEW_OK));
     const { json } = await generate();
