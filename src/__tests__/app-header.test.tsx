@@ -31,11 +31,29 @@ function widthContainer() {
 
 describe("AppHeader width stability", () => {
   it("uses the shared wide width primitive regardless of the active tab", () => {
-    for (const active of ["dashboard", "vocabulary", "bookmarks", "history"] as const) {
+    for (const active of ["dashboard", "library", "vocabulary", "bookmarks", "history"] as const) {
       const { unmount } = render(<AppHeader active={active} />);
       expect(widthContainer().className).toContain(PAGE_WIDTH_CLASS.wide);
       unmount();
     }
+  });
+
+  it("navigation: Dashboard | My Learning | Vocabulary | Bookmarks | History; only the active one is marked current", () => {
+    const { unmount } = render(<AppHeader active="library" />);
+    const nav = screen.getByRole("navigation");
+    const links = Array.from(nav.querySelectorAll("a"));
+    expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["Dashboard", "/dashboard"],
+      ["My Learning", "/library"],
+      ["Vocabulary", "/vocabulary"],
+      ["Bookmarks", "/bookmarks"],
+      ["History", "/history"],
+    ]);
+    expect(links.filter((a) => a.getAttribute("aria-current") === "page").map((a) => a.textContent)).toEqual(["My Learning"]);
+    unmount();
+    render(<AppHeader active="dashboard" />);
+    expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "My Learning" })).not.toHaveAttribute("aria-current");
   });
 
   it("never falls back to a narrower literal (e.g. the old max-w-6xl) for any tab", () => {

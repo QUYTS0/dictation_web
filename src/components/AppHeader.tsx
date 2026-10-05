@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import clsx from "clsx";
-import { BookOpen, Headphones, History, LayoutDashboard, MapPin } from "lucide-react";
+import { BookOpen, Headphones, History, LayoutDashboard, Library, MapPin } from "lucide-react";
 import UserButton from "@/components/UserButton";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 
 const NAV_LINKS = [
   { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  // The user's Library (saved videos and their state), shown as "My Learning".
+  { key: "library", href: "/library", label: "My Learning", icon: Library },
   { key: "vocabulary", href: "/vocabulary", label: "Vocabulary", icon: BookOpen },
   { key: "bookmarks", href: "/bookmarks", label: "Bookmarks", icon: MapPin },
   { key: "history", href: "/history", label: "History", icon: History },
@@ -22,7 +24,7 @@ interface AppHeaderProps {
 
 /**
  * Shared app-shell header (logo + primary nav + UserButton) used by every
- * signed-in page (dashboard, vocabulary, bookmarks, history). The dictation/listening
+ * signed-in page (dashboard, my learning, vocabulary, bookmarks, history). The dictation/listening
  * workspace pages use their own compact title-bar header instead, since
  * that's a distinct pattern (back button + progress label, zen-mode aware).
  */
@@ -45,6 +47,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
                 <Link
                   key={link.key}
                   href={link.href}
+                  aria-current={isActive ? "page" : undefined}
                   className={clsx(
                     "flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
                     isActive

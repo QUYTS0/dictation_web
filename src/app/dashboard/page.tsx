@@ -1,47 +1,48 @@
 "use client";
 
-import { FormEvent, Suspense, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, MouseEvent, Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import clsx from "clsx";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, BookOpen, CheckCircle2, Clock, Flame, Headphones, Mic, PlayCircle, Target, Video } from "lucide-react";
+import { ArrowRight, Flame, Plus, Video, X } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
-import ErrorPatternsPanel from "@/components/ErrorPatternsPanel";
-import MetricCard from "@/components/MetricCard";
-import VocabRow from "@/components/VocabRow";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { LibraryCard } from "@/components/library/LibraryCard";
 import { useAuth } from "@/context/auth";
-import { usePersistedViewState } from "@/hooks/usePersistedViewState";
+import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
+import { toFocusSource } from "@/lib/dashboard/selectFocus";
+import { useDashboardFocus } from "@/lib/dashboard/useDashboardFocus";
+import { ContinueLearningCard } from "./components/ContinueLearningCard";
+import { FocusCard } from "./components/FocusCard";
+import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
+import { ProgressSummary } from "./components/ProgressSummary";
+import { VocabularyCard } from "./components/VocabularyCard";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
 import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
-import { removeFromLibrary, useContinueLearningQuery, useVideoLibraryQuery } from "@/lib/queries/videoLibrary";
+import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
 import { isValidYouTubeUrl } from "@/lib/utils/url";
-import { formatDurationSeconds } from "@/lib/utils/time";
-import { formatAggregateScore } from "@/lib/practice/scoreFormat";
-import { LIBRARY_FILTERS, type LibraryFilter, type LibraryItem } from "@/lib/types/learning";
 
-const FILTER_LABEL: Record<LibraryFilter, string> = {
-  all: "All",
-  continue: "Unfinished",
-  in_progress: "In progress",
-  completed: "Completed",
-  not_started: "Not started",
-  listening: "Listening",
-};
-const LIBRARY_FILTER_TABS = LIBRARY_FILTERS.filter((f) => f !== "continue");
+const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function pct(correct: number, practiced: number): string {
-  return practiced > 0 ? `${Math.round((100 * correct) / practiced)}%` : "—";
+/**
+ * "scroll" (Next Up's CTA, possibly far from the form): scroll the input into
+ * view honoring reduced motion, then focus without a second jump. "toggle":
+ * the input is right under the toggle — just focus it.
+ */
+function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "scroll") {
+  if (!input) return;
+  if (how === "scroll") input.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" });
+  input.focus({ preventScroll: how === "scroll" });
 }
 
 /**
- * Video-first Dashboard (plan §10.1): Continue Learning, a compact Add Video,
- * and the paginated Library — one card per video; Dictation, Listening and
- * Shadowing are modes inside the video's practice page, never separate
- * entries here. Every metric is its own number (§6.8), never blended.
+ * The learner's home. It answers, in this order:
+ *   1. What should I continue?   — "Pick up where you left off" (ONE item)
+ *   2. What should I do next?    — "Next up" (the Focus decision)
+ *   3. Am I making progress?     — "Your progress", Vocabulary, Needs attention
+ * Adding a video is a secondary, on-demand action. Browsing saved videos is
+ * My Learning (/library); past activity is History. Every metric is its own
+ * canonical number (§6.8), never recomputed or blended here.
  */
 function DashboardContent() {
   const router = useRouter();
@@ -52,22 +53,30 @@ function DashboardContent() {
   const [url, setUrl] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [pendingRemoval, setPendingRemoval] = useState<LibraryItem | null>(null);
-  const [removing, setRemoving] = useState(false);
-  const [removeError, setRemoveError] = useState<string | null>(null);
-
-  const [view, updateView, viewHydrated] = usePersistedViewState("video-library-viewstate", userId, { filter: "all" });
-  const filter: LibraryFilter = (LIBRARY_FILTER_TABS as readonly string[]).includes(view.filter) ? (view.filter as LibraryFilter) : "all";
+  const [addOpen, setAddOpen] = useState(false);
+  // Focus hand-offs across the disclosure's mount/unmount: what to do with
+  // the input once the form mounts, and returning focus to the toggle on close.
+  const pendingInputFocus = useRef<"toggle" | "scroll" | null>(null);
+  const returnFocusToToggle = useRef(false);
+  const addVideoInputRef = useRef<HTMLInputElement>(null);
+  const addToggleRef = useRef<HTMLButtonElement>(null);
 
   const summaryQuery = useDashboardSummaryQuery(userId);
   const summary = summaryQuery.data;
   const continueQuery = useContinueLearningQuery(userId);
-  const libraryQuery = useVideoLibraryQuery(userId, filter);
-  const libraryItems = useMemo(() => libraryQuery.data?.pages.flatMap((p) => p.items) ?? [], [libraryQuery.data]);
-  const libraryTotal = libraryQuery.data?.pages[0]?.total ?? 0;
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
-  useScrollRestoration(pathname, userId, viewHydrated && !libraryQuery.isPlaceholderData && !libraryQuery.isLoading && !summaryQuery.isLoading);
+  useScrollRestoration(pathname, userId, !summaryQuery.isLoading && !continueQuery.isLoading);
+
+  useEffect(() => {
+    if (addOpen && pendingInputFocus.current) {
+      focusAddVideoInputEl(addVideoInputRef.current, pendingInputFocus.current);
+      pendingInputFocus.current = null;
+    } else if (!addOpen && returnFocusToToggle.current) {
+      returnFocusToToggle.current = false;
+      addToggleRef.current?.focus();
+    }
+  }, [addOpen]);
 
   const handleAdd = async (e: FormEvent) => {
     e.preventDefault();
@@ -97,40 +106,76 @@ function DashboardContent() {
     }
   };
 
-  const confirmRemoval = async () => {
-    if (!pendingRemoval || !userId) return;
-    setRemoving(true);
-    setRemoveError(null);
-    try {
-      await removeFromLibrary(pendingRemoval.videoId);
-      invalidateLearningViews(queryClient, userId);
-      setPendingRemoval(null);
-    } catch {
-      setRemoveError("Couldn't remove the video. Please try again.");
-    } finally {
-      setRemoving(false);
+  const openAddVideo = (how: "toggle" | "scroll") => {
+    if (addOpen) return focusAddVideoInputEl(addVideoInputRef.current, how); // already open: just bring it into view
+    pendingInputFocus.current = how;
+    setAddOpen(true);
+  };
+  // Collapsing keeps whatever was typed (state lives here, not in the form).
+  const closeAddVideo = () => {
+    returnFocusToToggle.current = true;
+    setAddOpen(false);
+    setAddError(null);
+  };
+  const onAddKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && !adding) {
+      e.preventDefault();
+      closeAddVideo();
     }
   };
 
-  const continueItems = continueQuery.data?.items ?? [];
-  const accuracy = summary?.sentenceAccuracy;
-  const azure = summary?.shadowing.azure;
+  // The ONE resume item — the same top item Focus evaluates for sentences.
+  const continueTop = continueQuery.data?.items[0] ?? null;
+  const { result: focus, vocab } = useDashboardFocus(userId, {
+    continueItems: toFocusSource({ data: continueQuery.data?.items, isError: continueQuery.isError }),
+    summary: toFocusSource(summaryQuery),
+  });
+  // Dedup: Next Up owns "Start review" when it is about vocabulary; while it
+  // is still deciding, no button either (no flash of a duplicate). Next to a
+  // sentence Next Up, the review is a different action, so it may appear.
+  const showVocabReviewButton = vocab.status === "ready" && vocab.data.reviewable > 0 && focus.kind === "sentences";
+
+  // Next Up's "Add a video": open the one form and bring its input into view.
+  const focusAddVideoInput = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    openAddVideo("scroll");
+  };
+
+  // Primary slot: the resume card, a load/error state, a pointer to My
+  // Learning when there is saved content but nothing unfinished, or nothing.
+  const continueSlot =
+    continueQuery.isError && !continueQuery.data ? (
+      <div className="rounded-3xl border border-slate-200/70 bg-white/60 p-5 text-sm text-red-600">Couldn&apos;t load your unfinished videos.</div>
+    ) : !continueQuery.data ? (
+      <div aria-busy="true" aria-label="Loading continue learning" className="min-h-[180px] animate-pulse rounded-3xl border border-primary-100 bg-primary-50/50" />
+    ) : continueTop ? (
+      <ContinueLearningCard item={continueTop} />
+    ) : summary && summary.libraryVideos > 0 ? (
+      <div data-testid="continue-empty" className="rounded-3xl border border-slate-200/70 bg-white/60 p-5 text-sm text-slate-600 sm:p-6">
+        Nothing unfinished right now.{" "}
+        <Link href="/library" className="inline-flex items-center gap-1 font-semibold text-primary-600 hover:text-primary-700">
+          Browse My Learning <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      </div>
+    ) : null;
+  const focusShown = focus.kind !== "hidden";
+  const name = user?.email?.split("@")[0] ?? "Learner";
+  const streak = summary?.streakDays ?? 0;
 
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f6f7fc] font-sans text-slate-900 antialiased">
+      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-40 blur-[120px]" />
 
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="dashboard" />
 
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-4 py-8">
+        <main className={clsx("mx-auto flex w-full flex-1 flex-col gap-6 py-8 sm:gap-8", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
           {loading ? (
             <p className="text-sm text-slate-500">Loading…</p>
           ) : !user ? (
             <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Dashboard</h1>
-              <p className="mt-2 text-sm text-slate-500">Sign in to see your library and continue where you left off.</p>
+              <p className="mt-2 text-sm text-slate-500">Sign in to see your progress and continue where you left off.</p>
               <button
                 onClick={openAuthModal}
                 className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -140,209 +185,121 @@ function DashboardContent() {
             </section>
           ) : (
             <>
-              <section className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-end">
-                <div>
-                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">
-                    Welcome back, {user.email?.split("@")[0] ?? "Learner"}
-                  </h1>
-                  <p className="text-sm text-slate-500">
-                    {summary ? `${summary.libraryVideos} video${summary.libraryVideos === 1 ? "" : "s"} in your library.` : " "}
+              {/* Welcome + momentum: the streak sits with the heading, not floating away from it. */}
+              <section data-testid="dashboard-welcome" className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+                <div className="min-w-0">
+                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Welcome back, {name}</h1>
+                  <p className="mt-1 text-sm text-slate-500 sm:text-base">
+                    {!summary ? " " : streak > 0 ? `Ready to keep your ${streak}-day streak going?` : "Ready for today's practice?"}
                   </p>
                 </div>
-                <div className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white/60 px-3 py-2 text-orange-600 shadow-md backdrop-blur-md">
-                  <Flame size={18} className="fill-orange-500/20" />
-                  <span className="text-sm font-semibold">
-                    {summary && summary.streakDays > 0 ? `${summary.streakDays} day learning streak` : "Start a learning streak"}
-                  </span>
-                </div>
-              </section>
-
-              {/* 1. Continue Learning — real unfinished work, any mode. */}
-              <section aria-labelledby="continue-learning">
-                <h2 id="continue-learning" className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-900">
-                  Continue Learning
-                </h2>
-                {continueQuery.isError && !continueQuery.data ? (
-                  <p className="text-sm text-red-600">Couldn&apos;t load your unfinished videos.</p>
-                ) : !continueQuery.data ? (
-                  <p className="text-sm text-slate-500">Loading…</p>
-                ) : continueItems.length === 0 ? (
-                  <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
-                    Nothing unfinished right now — add a video below or open one from your library.
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3" data-testid="continue-learning">
-                    {continueItems.map((item) => (
-                      <LibraryCard key={item.videoId} item={item} compact />
-                    ))}
-                  </div>
+                {streak > 0 && (
+                  <p data-testid="streak" className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1.5 text-sm font-semibold text-orange-600 ring-1 ring-orange-100">
+                    <Flame size={16} className="fill-orange-500/20" aria-hidden="true" /> {streak} {streak === 1 ? "day" : "days"}
+                  </p>
                 )}
               </section>
 
-              {/* 2. Add Video — one URL field, no mode selection. */}
-              <section className="rounded-3xl border border-white/60 bg-white/40 p-4 shadow-xl backdrop-blur-xl" aria-labelledby="add-video">
-                <h2 id="add-video" className="sr-only">
-                  Add a video
-                </h2>
-                <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row">
-                  <div className="relative flex flex-1 items-center">
-                    <Video className="absolute left-4 text-slate-400" size={20} />
-                    <input
-                      type="text"
-                      value={url}
-                      onChange={(e) => {
-                        setUrl(e.target.value);
-                        setAddError(null);
-                      }}
-                      placeholder="Paste a YouTube URL to add it to your library"
-                      aria-label="YouTube URL"
-                      className="w-full rounded-xl border border-white/60 bg-white/60 py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-primary-500/30"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={adding}
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-6 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {adding ? "Adding…" : "Add video"} {!adding && <ArrowRight size={18} />}
-                  </button>
-                </form>
-                {addError && <p className="mt-3 text-sm text-red-600">⚠ {addError}</p>}
-              </section>
+              {/* 1 + 2. The primary resume action and the next action (≈ 2/3 : 1/3 on desktop). */}
+              {(continueSlot || focusShown) && (
+                <div
+                  data-testid="dashboard-actions"
+                  className={clsx("grid items-start gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
+                >
+                  {continueSlot && <div className={clsx("min-w-0", focusShown && "lg:col-span-8")}>{continueSlot}</div>}
+                  {focusShown && (
+                    <div className={clsx("min-w-0", continueSlot && "lg:col-span-4")}>
+                      <FocusCard focus={focus} onAddVideo={focusAddVideoInput} />
+                    </div>
+                  )}
+                </div>
+              )}
 
+              {/* Add Video — secondary, on demand: one URL field, no mode selection. */}
+              <div className="-mt-2 flex flex-col items-stretch gap-3 sm:items-end">
+                {!addOpen ? (
+                  <button
+                    ref={addToggleRef}
+                    type="button"
+                    onClick={() => openAddVideo("toggle")}
+                    aria-expanded={false}
+                    aria-controls="add-video"
+                    className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl px-3 py-2 text-sm font-semibold text-primary-700 transition-colors hover:bg-primary-50 sm:self-end"
+                  >
+                    <Plus size={16} aria-hidden="true" /> Add a video
+                  </button>
+                ) : (
+                  <section
+                    id="add-video"
+                    className="w-full scroll-mt-24 rounded-3xl border border-slate-200/70 bg-white/70 p-4 sm:max-w-2xl"
+                    aria-labelledby="add-video-heading"
+                    onKeyDown={onAddKeyDown}
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <h2 id="add-video-heading" className="text-sm font-semibold text-slate-900">
+                        Add a video
+                      </h2>
+                      <button
+                        type="button"
+                        onClick={closeAddVideo}
+                        aria-label="Close add a video"
+                        className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                    <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row">
+                      <div className="relative flex flex-1 items-center">
+                        <Video className="absolute left-4 text-slate-400" size={20} aria-hidden="true" />
+                        <input
+                          id="add-video-url"
+                          ref={addVideoInputRef}
+                          type="text"
+                          value={url}
+                          onChange={(e) => {
+                            setUrl(e.target.value);
+                            setAddError(null);
+                          }}
+                          placeholder="Paste a YouTube URL"
+                          aria-label="YouTube URL"
+                          className="w-full rounded-xl border border-slate-200 bg-white py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-primary-500/30"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={adding}
+                        className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-6 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {adding ? "Adding…" : "Add video"} {!adding && <ArrowRight size={18} aria-hidden="true" />}
+                      </button>
+                    </form>
+                    {addError && <p className="mt-3 text-sm text-red-600">⚠ {addError}</p>}
+                  </section>
+                )}
+              </div>
+
+              {/* 3. Your progress — one surface for the six canonical metrics. */}
               {summaryQuery.isError && !summary ? (
                 <p className="text-sm text-red-600">Failed to load your progress. Please refresh and try again.</p>
               ) : summary ? (
-                <section className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6" aria-label="Progress summary">
-                  <MetricCard
-                    title="Completed videos"
-                    value={String(summary.completedVideos)}
-                    icon={<PlayCircle size={20} />}
-                    trend={summary.legacyCompletedVideos > 0 ? `+${summary.legacyCompletedVideos} in rounds started before detailed tracking` : undefined}
-                  />
-                  <MetricCard title="In progress" value={String(summary.inProgressVideos)} icon={<Target size={20} />} />
-                  <MetricCard title="Listened through" value={String(summary.listenedThroughVideos)} icon={<Headphones size={20} />} />
-                  <MetricCard
-                    title="Est. active practice"
-                    value={summary.activeTime.activeSec > 0 ? formatDurationSeconds(summary.activeTime.activeSec) : "—"}
-                    icon={<Clock size={20} />}
-                    trend={summary.activeTime.trackedSince ? `since ${new Date(summary.activeTime.trackedSince).toLocaleDateString()}` : undefined}
-                  />
-                  <MetricCard
-                    title="Sentence accuracy"
-                    value={accuracy ? pct(accuracy.correct, accuracy.practiced) : "—"}
-                    icon={<CheckCircle2 size={20} />}
-                    trend={accuracy && accuracy.practiced > 0 ? `${accuracy.correct}/${accuracy.practiced} latest answers` : undefined}
-                  />
-                  <MetricCard
-                    title="Pronunciation"
-                    value={azure ? formatAggregateScore(azure.pronunciation) : "—"}
-                    icon={<Mic size={20} />}
-                    trend={azure && azure.evaluatedSentences > 0 ? `${azure.evaluatedSentences} scored sentences` : undefined}
-                  />
-                </section>
+                <ProgressSummary summary={summary} />
               ) : (
-                <p className="text-sm text-slate-500">Loading your progress…</p>
+                <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-3xl border border-slate-200/70 bg-white/50" />
               )}
 
-              <div className="grid items-start gap-8 md:grid-cols-3">
-                {/* 3. Library — one card per video. */}
-                <section className="flex flex-col gap-4 md:col-span-2" aria-labelledby="library-heading">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h2 id="library-heading" className="text-sm font-semibold uppercase tracking-wider text-slate-900">
-                      Library {libraryTotal > 0 && <span className="text-slate-400">({libraryTotal})</span>}
-                    </h2>
-                    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter library">
-                      {LIBRARY_FILTER_TABS.map((f) => (
-                        <button
-                          key={f}
-                          type="button"
-                          role="tab"
-                          aria-selected={filter === f}
-                          onClick={() => updateView({ filter: f })}
-                          className={clsx(
-                            "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-                            filter === f ? "bg-primary-600 text-white" : "bg-white/60 text-slate-600 hover:bg-white"
-                          )}
-                        >
-                          {FILTER_LABEL[f]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {removeError && <p className="text-sm text-red-600">{removeError}</p>}
-                  {libraryQuery.isError && !libraryQuery.data ? (
-                    <p className="text-sm text-red-600">
-                      Couldn&apos;t load your library.{" "}
-                      <button type="button" onClick={() => libraryQuery.refetch()} className="font-semibold underline">
-                        Retry
-                      </button>
-                    </p>
-                  ) : !libraryQuery.data ? (
-                    <p className="text-sm text-slate-500">Loading your library…</p>
-                  ) : libraryItems.length === 0 ? (
-                    <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-xl backdrop-blur-md">
-                      {filter === "all" ? "Your library is empty — add a YouTube video above." : "No videos match this filter."}
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 sm:grid-cols-2" data-testid="library-grid">
-                      {libraryItems.map((item) => (
-                        <LibraryCard key={item.videoId} item={item} onRemove={(it) => setPendingRemoval(it)} />
-                      ))}
-                    </div>
-                  )}
-                  {libraryQuery.hasNextPage && (
-                    <button
-                      onClick={() => libraryQuery.fetchNextPage()}
-                      disabled={libraryQuery.isFetchingNextPage}
-                      className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
-                    >
-                      {libraryQuery.isFetchingNextPage ? "Loading…" : "Load more"}
-                    </button>
-                  )}
-                </section>
-
-                <div className="flex flex-col gap-8">
-                  <section>
-                    <div className="mb-4 flex items-center justify-between">
-                      <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-900">Recent Vocabulary</h2>
-                      <Link href="/vocabulary" className="flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700">
-                        <BookOpen size={14} /> {summary?.vocabularyCount ?? 0}
-                      </Link>
-                    </div>
-                    <div className="overflow-hidden rounded-3xl border border-white/60 bg-white/50 shadow-xl backdrop-blur-md">
-                      {!summary || summary.recentVocabulary.length === 0 ? (
-                        <p className="p-4 text-sm text-slate-500">No saved vocabulary yet.</p>
-                      ) : (
-                        <table className="w-full text-left text-sm">
-                          <tbody className="divide-y divide-slate-100">
-                            {summary.recentVocabulary.map((item) => (
-                              <VocabRow key={item.id} word={item.term} context={item.sentence_context} />
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
-                    </div>
-                  </section>
-                  <ErrorPatternsPanel patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
+              {/* 4. Vocabulary momentum + Needs attention. Stacked below lg. */}
+              <div className="grid items-stretch gap-4 sm:gap-5 lg:grid-cols-12" data-testid="dashboard-insights">
+                <div className="min-w-0 lg:col-span-7">
+                  <VocabularyCard summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
+                </div>
+                <div className="min-w-0 lg:col-span-5">
+                  <NeedsAttentionCard patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
                 </div>
               </div>
             </>
           )}
         </main>
       </div>
-
-      {pendingRemoval && (
-        <ConfirmDialog
-          title="Remove from your library?"
-          body={`“${pendingRemoval.title ?? pendingRemoval.videoId}” will disappear from your library. Your rounds, answers, recordings, reports and listening progress are kept — adding the video again brings them back.`}
-          confirmLabel="Remove"
-          busyLabel="Removing…"
-          isConfirming={removing}
-          onConfirm={confirmRemoval}
-          onCancel={() => setPendingRemoval(null)}
-        />
-      )}
     </div>
   );
 }

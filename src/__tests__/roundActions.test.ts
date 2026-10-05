@@ -74,6 +74,12 @@ describe("the unified action table", () => {
     expect(kinds(report({ transcriptId: null }))).toEqual(["view_report", "practice_again_new_round"]);
   });
 
+  it("the report link uses the app-wide generic label 'Review report'", () => {
+    for (const actions of [roundActions(report(), { newerActiveRound: { roundId: "r2", roundNumber: 2 } }), roundActions(report({ status: "abandoned" }))]) {
+      expect(actions.find((a) => a.kind === "view_report")?.label).toBe("Review report");
+    }
+  });
+
   it("an active round just continues practice", () => {
     expect(kinds(report({ status: "active" }))).toEqual(["continue_practice", "practice_again_new_round"]);
   });

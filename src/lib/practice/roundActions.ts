@@ -143,16 +143,16 @@ export function roundActions(report: RoundReport, ctx: RoundActionContext = {}):
   if (block === "newer_active_round" && newer) {
     return [
       { kind: "go_to_current_round", label: `Go to current round (Round ${newer.roundNumber})`, primary: true },
-      { kind: "view_report", label: "View full report", primary: false },
+      { kind: "view_report", label: "Review report", primary: false },
     ];
   }
   if (report.round.status === "active") {
     return [{ kind: "continue_practice", label: "Continue practice", primary: true }, newRound];
   }
-  if (block) return [{ kind: "view_report", label: "View full report", primary: true }, newRound];
+  if (block) return [{ kind: "view_report", label: "Review report", primary: true }, newRound];
 
   const sh = shadowingContinuation(report);
-  if (!sh) return [{ kind: "view_report", label: "View full report", primary: true }, newRound];
+  if (!sh) return [{ kind: "view_report", label: "Review report", primary: true }, newRound];
   if (sh.kind === "continue_recording") {
     return [
       {
@@ -161,7 +161,7 @@ export function roundActions(report: RoundReport, ctx: RoundActionContext = {}):
         primary: true,
         start: "unrecorded",
       },
-      { kind: "view_report", label: "View full report", primary: false },
+      { kind: "view_report", label: "Review report", primary: false },
       newRound,
     ];
   }
@@ -174,7 +174,7 @@ export function roundActions(report: RoundReport, ctx: RoundActionContext = {}):
         start: "unscored",
         note: "You'll record these sentences again — recordings aren't kept.",
       },
-      { kind: "view_report", label: "View full report", primary: false },
+      { kind: "view_report", label: "Review report", primary: false },
       newRound,
     ];
   }

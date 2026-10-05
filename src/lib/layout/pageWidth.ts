@@ -8,9 +8,9 @@ export type PageWidthMode = "narrow" | "standard" | "wide";
  */
 export const PAGE_WIDTH_CLASS: Record<PageWidthMode, string> = {
   narrow: "max-w-4xl",
-  // Provisional — mirrors Dashboard's current value unchanged. Not yet
-  // consumed by any page; revisit once Dashboard's own redesign defines
-  // what it actually needs. Do not bump this speculatively.
+  // Currently unused (Dashboard moved to "wide" so its edges align with
+  // AppHeader). Kept for a future mid-width page. Do not bump this
+  // speculatively.
   standard: "max-w-6xl",
   // Near-fluid safety cap, reusing the figure already proven in this
   // codebase's own Dictation player redesign (see

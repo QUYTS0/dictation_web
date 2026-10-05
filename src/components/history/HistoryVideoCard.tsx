@@ -156,7 +156,7 @@ function SelectedRoundReport({ userId, roundId }: { userId: string; roundId: str
             {/* The same next-step table as the completion view (links here: no writes from History). */}
             <RoundActions report={report.data.round} newerActiveRound={report.data.newerActiveRound ?? null} hideViewReport />
             <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-white">
-              <FileText size={14} /> Open full report
+              <FileText size={14} /> Review report
             </Link>
           </>
         }
@@ -267,7 +267,7 @@ function VideoDetails({
  */
 export function HistoryVideoCard({ userId, video }: { userId: string; video: HistoryVideo }) {
   const [expanded, setExpanded] = useState(false);
-  // A round chosen under "Rounds and sessions": the card's own "View report"
+  // A round chosen under "Rounds and sessions": the card's own "Review report"
   // then opens THAT round (otherwise the default round — active, else latest).
   const [picked, setPicked] = useState<string | null>(null);
   const r = video.round;
@@ -345,7 +345,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
                 href={`/results/${picked ?? r.roundId}`}
                 className="inline-flex items-center gap-1 rounded-xl border border-white/60 bg-white/60 px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-white/80"
               >
-                <FileText size={13} /> View report
+                <FileText size={13} /> Review report
               </Link>
             )}
             <Link

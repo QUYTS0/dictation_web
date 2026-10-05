@@ -4,7 +4,8 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import type { LibraryFilter, LibraryPage } from "@/lib/types/learning";
 
 export const LIBRARY_PAGE_SIZE = 12;
-export const CONTINUE_LEARNING_LIMIT = 3;
+/** The Dashboard resumes ONE item — the same top item Focus evaluates. */
+export const CONTINUE_LEARNING_LIMIT = 1;
 
 export const videoLibraryKeys = {
   /** Prefix covering every Library query of this user (list pages, Continue Learning). */

@@ -255,7 +255,7 @@ it("one card per video: last practiced, session and round counts, the default ro
   expect(card).toHaveTextContent("Round 2: In progress");
   expect(within(card).getByTestId("history-round-coverage")).toHaveTextContent("Round 2 coverage: 3/10 sentences practiced");
   expect(card).toHaveTextContent("Est. active 1h (all sessions)");
-  expect(within(card).getByRole("link", { name: /View report/ })).toHaveAttribute("href", "/results/r2");
+  expect(within(card).getByRole("link", { name: /Review report/ })).toHaveAttribute("href", "/results/r2");
   expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidA");
   // Nothing per round/session is fetched until the card is expanded.
   expect(calls.some((c) => c.url.includes("/rounds") || c.url.includes("/sessions?") || c.url.includes("/report"))).toBe(false);
@@ -267,7 +267,7 @@ it("Listening-only history: no round, no report link, revision-scoped Listening,
   expect(card).toHaveTextContent("Listening only — no practice round");
   expect(card).toHaveTextContent("Listening (current script): 42%");
   expect(card).toHaveTextContent("Not in your Library");
-  expect(within(card).queryByRole("link", { name: /View report/ })).toBeNull();
+  expect(within(card).queryByRole("link", { name: /report/i })).toBeNull();
   expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidL?mode=listening");
 });
 
@@ -285,7 +285,8 @@ it("expanding shows the selected round explicitly with its own report; choosing 
   const oldReport = await within(card).findByTestId("history-round-report-r1");
   expect(oldReport).toHaveTextContent("Revision A sentence"); // its own pinned transcript
   expect(within(oldReport).getByTestId("report-accuracy")).toHaveTextContent("90%"); // its own metrics
-  expect(within(oldReport).getByRole("link", { name: /Open full report/ })).toHaveAttribute("href", "/results/r1");
+  expect(within(oldReport).getByRole("link", { name: /Review report/ })).toHaveAttribute("href", "/results/r1");
+  expect(within(card).queryByRole("link", { name: /View report|Open full report/ })).toBeNull(); // one label for this action
   // Practice from the card still opens the video normally — the selection never changes practice state.
   expect(within(card).getByRole("link", { name: /^s*Continues*$/ })).toHaveAttribute("href", "/dictation/vidA");
   expect(within(card).getByTestId("history-unattributed")).toHaveTextContent("Not grouped into a study session: 14 answers");
@@ -419,12 +420,12 @@ describe("round 1 stays readable after round 2 starts", () => {
   };
   afterEach(() => window.history.replaceState(null, "", "/"));
 
-  it("no separate earlier-report button; choosing round 1 makes the card's normal 'View report' open round 1, whose report is its own", async () => {
+  it("no separate earlier-report button; choosing round 1 makes the card's normal 'Review report' open round 1, whose report is its own", async () => {
     withNewer("", json({ round: report("r1", 1, "Revision A sentence"), newerActiveRound: { roundId: "r2", roundNumber: 2 } }));
     renderPage();
     const card = await screen.findByTestId("history-video-vidA");
     expect(within(card).queryByRole("button", { name: /Earlier round report/i })).toBeNull();
-    const viewReport = within(card).getByRole("link", { name: /View report/ });
+    const viewReport = within(card).getByRole("link", { name: /Review report/ });
     expect(viewReport).toHaveAttribute("href", "/results/r2"); // the default round (active)
     fireEvent.click(within(card).getByRole("button", { name: "Rounds and sessions" }));
     fireEvent.click(await within(card).findByRole("button", { name: /Round 1 · Completed/ }));

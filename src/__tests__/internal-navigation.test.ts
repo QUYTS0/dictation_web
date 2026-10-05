@@ -50,6 +50,10 @@ describe("internal navigation stays inside the app shell (no new-tab / hard-code
   const root = path.join(__dirname, "..");
   const filesToAudit = [
     "app/dashboard/page.tsx",
+    "app/dashboard/components/ContinueLearningCard.tsx",
+    "app/dashboard/components/FocusCard.tsx",
+    "app/dashboard/components/VocabularyCard.tsx",
+    "app/library/page.tsx",
     "app/history/page.tsx",
     "app/bookmarks/page.tsx",
     "app/vocabulary/page.tsx",

@@ -25,7 +25,7 @@ export interface RoundActionsProps extends RoundActionContext {
   onContinuePractice?: () => void;
   onShowShadowingSummary?: () => void;
   onPracticeAgain?: () => void;
-  /** Hide "View full report" (the caller IS the full report). */
+  /** Hide "Review report" (the caller IS the full report). */
   hideViewReport?: boolean;
   buttonClassName?: string;
   primaryClassName?: string;

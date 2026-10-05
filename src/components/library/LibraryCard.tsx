@@ -42,15 +42,7 @@ const STATE_BADGE: Record<LibraryItem["state"], { label: string; className: stri
   listening_prior_revision: { label: "Listening", className: "bg-sky-50 text-sky-700" },
 };
 
-export function LibraryCard({
-  item,
-  compact = false,
-  onRemove,
-}: {
-  item: LibraryItem;
-  compact?: boolean;
-  onRemove?: (item: LibraryItem) => void;
-}) {
+export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: (item: LibraryItem) => void }) {
   const coverage = practiceCoverageText(item);
   const listening = listeningText(item);
   const progress = item.round?.progress;
@@ -71,14 +63,11 @@ export function LibraryCard({
   return (
     <article
       data-testid={`library-card-${item.videoId}`}
-      className={clsx(
-        "group flex gap-4 rounded-3xl border border-white/60 bg-white/50 p-4 shadow-xl backdrop-blur-md",
-        compact ? "flex-col sm:flex-row" : "flex-col"
-      )}
+      className="group flex flex-col gap-4 rounded-3xl border border-slate-200/70 bg-white/70 p-4 shadow-sm"
     >
       <Link
         href={libraryPracticeHref(item)}
-        className={clsx("relative aspect-video shrink-0 overflow-hidden rounded-xl bg-slate-800", compact ? "w-full sm:w-44" : "w-full")}
+        className="relative aspect-video w-full shrink-0 overflow-hidden rounded-xl bg-slate-800"
         aria-label={`Open ${item.title ?? item.videoId}`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}

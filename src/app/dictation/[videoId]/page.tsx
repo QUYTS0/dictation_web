@@ -1476,7 +1476,7 @@ export default function DictationPage({ params }: PageProps) {
               </a>
               {continuation && (
                 <Link href={`/results/${encodeURIComponent(continuation.roundId)}`} className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm font-semibold">
-                  View report
+                  Review report
                 </Link>
               )}
             </div>

@@ -605,7 +605,7 @@ describe("Learning Reports P2 — same-round Shadowing continuation", () => {
     const notice = await screen.findByTestId("continuation-blocked");
     expect(notice).toHaveTextContent("A newer round (Round 2) is in progress");
     expect(within(notice).getByRole("link", { name: "Go to current round" })).toHaveAttribute("href", "/dictation/vid1");
-    expect(within(notice).getByRole("link", { name: "View report" })).toHaveAttribute("href", `/results/${ROUND}`);
+    expect(within(notice).getByRole("link", { name: "Review report" })).toHaveAttribute("href", `/results/${ROUND}`);
     expect(practiceArea()).toHaveClass("hidden");
     expect(forbiddenWrites()).toEqual([]);
   });
