@@ -6,7 +6,7 @@
  * provider call exists in this test.
  */
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 let currentUser: { id: string } | null = { id: "user-A" };
@@ -118,53 +118,6 @@ it("shows saved notes with their relation to the answer (own, same mistake, earl
   expect(screen.getByText("Shared note.")).toBeInTheDocument();
 });
 
-it("output that couldn't be saved is flagged and the report is NOT presented as updated", async () => {
-  reportQueue = [report([mistake(0, "a0", null)])];
-  explainAllResponse = {
-    items: [{ attemptId: "a0", status: "explained", explanation: "Fresh but unsaved.", correctedText: "Ref.", example: "", unsaved: true }],
-    assessment: { verdict: "V", strengths: [], weaknesses: [], recommendation: "R" },
-    mistakesReviewed: 1, uniquePatternsExplained: 1, truncated: false, assessmentSaved: true,
-    explanations: { status: "not_saved", requested: 1, saved: 0, alreadySaved: 0, remaining: 0 },
-  };
-  renderPage();
-  fireEvent.click(await screen.findByRole("button", { name: /Get AI assessment/ }));
-  expect(await screen.findByText("Fresh but unsaved.")).toBeInTheDocument();
-  expect(screen.getByText("Not saved — this explanation will disappear when you reload.")).toBeInTheDocument();
-  expect(screen.getByText(/couldn't be saved — they're shown now but will disappear when you reload/)).toBeInTheDocument();
-  expect(reportCalls).toHaveLength(1);
-});
-
-it("a confirmed save refreshes the report so the STORED note (with its label) is what's shown", async () => {
-  reportQueue = [
-    report([mistake(0, "a0", null)]),
-    report([mistake(0, "a0", { explanation: "Stored note.", correctedText: "Ref.", example: "", via: "attempt", historical: false, legacy: false })]),
-  ];
-  explainAllResponse = {
-    items: [{ attemptId: "a0", status: "explained", explanation: "Stored note.", correctedText: "Ref.", example: "" }],
-    assessment: { verdict: "V", strengths: [], weaknesses: [], recommendation: "R" },
-    mistakesReviewed: 1, uniquePatternsExplained: 1, truncated: false, assessmentSaved: true,
-    explanations: { status: "saved", requested: 1, saved: 1, alreadySaved: 0, remaining: 0 },
-  };
-  renderPage();
-  fireEvent.click(await screen.findByRole("button", { name: /Get AI assessment/ }));
-  await waitFor(() => expect(reportCalls).toHaveLength(2));
-  expect(await screen.findByText("Stored note.")).toBeInTheDocument();
-  expect(screen.queryByText(/Not saved/)).not.toBeInTheDocument();
-});
-
-it("switching accounts never shows the previous account's explanations", async () => {
-  reportQueue = [report([mistake(0, "a0", null)])];
-  explainAllResponse = {
-    items: [{ attemptId: "a0", status: "explained", explanation: "Account A's note.", correctedText: "Ref.", example: "", unsaved: true }],
-    assessment: null, mistakesReviewed: 1, uniquePatternsExplained: 1, truncated: false,
-    explanations: { status: "not_saved", requested: 1, saved: 0, alreadySaved: 0, remaining: 0 },
-  };
-  const { rerenderPage } = renderPage();
-  fireEvent.click(await screen.findByRole("button", { name: /Get AI assessment/ }));
-  expect(await screen.findByText("Account A's note.")).toBeInTheDocument();
-
-  currentUser = { id: "user-B" };
-  await act(async () => rerenderPage());
-  await waitFor(() => expect(reportCalls).toContain("user-B"));
-  expect(screen.queryByText("Account A's note.")).not.toBeInTheDocument();
-});
+// The unsaved-output, refresh-after-save and account-switch cases now drive
+// the P5 actions (POST /assessment, /explanations, /assessment/recover) and
+// live in p5-results-assessment.test.tsx.

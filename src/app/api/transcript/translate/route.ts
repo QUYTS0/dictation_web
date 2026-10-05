@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { YoutubeTranscript } from "youtube-transcript";
 import { translate } from "@vitalets/google-translate-api";
-import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-ai";
-import { createServiceClient } from "@/lib/supabase/server";
-import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
+import { createHash, randomUUID } from "crypto";
+import { SchemaType, type Schema } from "@google/generative-ai";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { callGeminiAdmitted, parseJsonText } from "@/lib/ai/geminiCall";
 import { normalizeCues } from "@/lib/utils/segment";
 import { fetchYoutubeTranslatedCaptions } from "@/lib/youtubeTranslatedCaptions";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
@@ -183,62 +185,44 @@ export async function POST(request: NextRequest) {
     const finalMissing = englishSegments.filter((s) => !results.has(s.segment_index));
     if (finalMissing.length > 0) {
       const apiKey = process.env.GEMINI_API_KEY;
-      const quota = apiKey ? await checkGeminiQuota() : null;
       if (!apiKey) {
         console.error("[transcript translate] GEMINI_API_KEY not set; cannot translate remaining segments");
-      } else if (!quota?.allowed) {
-        // Same shared budget as /api/ai/explain — skip this tier rather than
-        // failing the whole request; whatever tiers 1-2 already found still
-        // gets returned below.
-        console.warn(`[transcript translate] skipping Gemini tier — quota exceeded (${quota?.reason})`);
       } else {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({
-          model: GEMINI_MODEL_NAME,
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: TRANSLATION_RESPONSE_SCHEMA,
-          },
-        });
+        // Learning Reports P5: each provider attempt is admitted on its own
+        // (shared app limits; the signed-in user's daily limit when there is
+        // one). Not admitted → this tier is skipped, as before; whatever
+        // tiers 1-2 found is still returned below.
+        const userId = await signedInUserId();
+        const chunkHash = createHash("sha256").update(finalMissing.map((s) => s.text_raw).join("\n")).digest("hex").slice(0, 16);
+        const operationId = `translate:${safeIdPart(transcriptId)}:${safeIdPart(language)}:${chunkHash}:${randomUUID()}`;
         const prompt = buildTranslationPrompt(
           finalMissing.map((s) => s.text_raw),
           language
         );
 
         let translated: Map<number, string> | null = null;
-        for (let attempt = 0; attempt < 2 && !translated; attempt++) {
-          let rawText: string;
-          try {
-            const result = await Promise.race([
-              model.generateContent(prompt),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error("Gemini translation timed out")), GEMINI_TIMEOUT_MS)
-              ),
-            ]);
-            rawText = result.response.text().trim();
-          } catch (geminiErr) {
-            console.error("[transcript translate] Gemini translation error:", geminiErr);
+        for (const attempt of [1, 2] as const) {
+          const res = await callGeminiAdmitted({
+            apiKey,
+            model: GEMINI_MODEL_NAME,
+            prompt,
+            responseSchema: TRANSLATION_RESPONSE_SCHEMA,
+            timeoutMs: GEMINI_TIMEOUT_MS,
+            admission: { operationType: "translate", operationId, attempt, userId },
+            logTag: "transcript/translate",
+          });
+          if (res.status === "not_admitted") {
+            console.warn(`[transcript translate] skipping Gemini attempt ${attempt} — not admitted (${res.admission.status})`);
             break;
           }
-
-          try {
-            const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
-            const parsed: unknown = JSON.parse(jsonStr);
-            const byIndex = indexTaggedTranslations(parsed, finalMissing.length);
-            if (byIndex) {
-              translated = byIndex;
-            } else {
-              console.warn(
-                `[transcript translate] Gemini returned unexpected/misaligned shape on attempt ${attempt + 1}:`,
-                rawText
-              );
-            }
-          } catch {
-            console.warn(
-              `[transcript translate] failed to parse Gemini response on attempt ${attempt + 1}:`,
-              rawText
-            );
+          if (res.status === "provider_error") break;
+          const parsed = parseJsonText(res.text);
+          const byIndex = parsed ? indexTaggedTranslations(parsed, finalMissing.length) : null;
+          if (byIndex) {
+            translated = byIndex;
+            break;
           }
+          console.warn(`[transcript translate] Gemini returned an unexpected/misaligned shape on attempt ${attempt}`);
         }
 
         if (translated) {
@@ -250,7 +234,7 @@ export async function POST(request: NextRequest) {
           });
         } else {
           console.error(
-            `[transcript translate] giving up on Gemini translation for ${finalMissing.length} segment(s) after retry`
+            `[transcript translate] no Gemini translation for ${finalMissing.length} segment(s)`
           );
         }
       }
@@ -380,3 +364,18 @@ function indexTaggedTranslations(parsed: unknown, count: number): Map<number, st
   }
   return byIndex.size === count ? byIndex : null;
 }
+
+/** The signed-in caller, if any (translation also serves signed-out visitors). */
+async function signedInUserId(): Promise<string | null> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const safeIdPart = (v: string) => v.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 64) || "x";

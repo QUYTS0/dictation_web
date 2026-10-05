@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import AuthModal from "@/components/AuthModal";
 import { clearShadowingCache } from "@/app/dictation/[videoId]/shadowingEvaluationPersistence";
+import { clearAllPending } from "@/lib/ai/recoveryStore";
 import { practiceFlushCoordinator } from "@/lib/practiceFlushCoordinator";
 
 // ---- Context shape ----
@@ -63,7 +64,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Signed out, or a different account signed in on this tab: the
           // previous account's Shadowing cache must not survive (keys are
           // already user-scoped; this also frees the storage).
-          if (prev) clearShadowingCache();
+          if (prev) {
+            clearShadowingCache();
+            // Learning Reports P5: pending AI saves are the previous account's.
+            clearAllPending();
+          }
           return session?.user ?? null;
         });
         // Close the modal on successful sign-in
@@ -97,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     queryClient.clear();
     // Only this app's Shadowing cache prefix — other sessionStorage data stays.
     clearShadowingCache();
+    clearAllPending();
   }, [queryClient]);
 
   const openAuthModal = useCallback(() => setModalOpen(true), []);

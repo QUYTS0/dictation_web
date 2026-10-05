@@ -31,7 +31,9 @@ import { randomUUID } from "crypto";
 const { Client } = require("pg") as typeof import("pg");
 export type PgClient = import("pg").Client;
 
-export const ADMIN_URL = process.env.LOCALDB_ADMIN_URL;
+// Jest --globals can supply a local URL without changing environment variables.
+// Both entry points remain subject to the same localhost-only guard below.
+export const ADMIN_URL = (globalThis as { LOCALDB_ADMIN_URL?: string }).LOCALDB_ADMIN_URL ?? process.env.LOCALDB_ADMIN_URL;
 export const HAS_LOCALDB = !!ADMIN_URL;
 
 const ROOT = path.resolve(__dirname, "../../../..");

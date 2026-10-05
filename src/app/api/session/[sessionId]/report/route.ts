@@ -5,6 +5,10 @@ import type { ErrorType, SessionAssessment, SessionReportMistake, SessionReportR
 import type { RoundReport } from "@/lib/types/learning";
 import { buildDictationEvidence } from "@/lib/practice/dictationAnalysis";
 import { resolveExplanations, type ExplanationAttempt, type StoredExplanation } from "@/lib/practice/explanationIdentity";
+import { buildReportAiView, readAssessmentRows } from "@/lib/ai/reportAi";
+import type { AssessmentAttemptRow } from "@/lib/ai/assessmentInput";
+import type { ReportAiView } from "@/lib/ai/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -118,11 +122,13 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     // sentence of THIS round (mode-aware key), else an earlier answer's note
     // (historical). A failed read leaves the deterministic report intact.
     let explanationsUnavailable = false;
+    let roundNotes: StoredExplanation[] = [];
     if (mistakes.length > 0) {
       const { data: savedNotes, error: notesError } = await supabase
         .from("attempt_explanations")
-        .select("id, attempt_id, source, seq, explanation, corrected_text, example_text, tip, prompt_version, model, created_at")
+        .select("id, attempt_id, source, seq, explanation, corrected_text, example_text, tip, prompt_version, model, created_at, note_kind, ref_attempt_id")
         .eq("round_id", sessionId);
+      roundNotes = notesError ? [] : ((savedNotes ?? []) as StoredExplanation[]);
       if (notesError) {
         console.error("[session/report] attempt_explanations query error:", notesError);
         explanationsUnavailable = true;
@@ -143,6 +149,8 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
             ...(r.viaSegmentIndex !== undefined ? { viaSegmentIndex: r.viaSegmentIndex } : {}),
             historical: r.historical,
             legacy: r.legacy,
+            kind: r.kind,
+            ...(r.refSegmentIndex !== undefined ? { refSegmentIndex: r.refSegmentIndex } : {}),
           };
         }
       }
@@ -243,6 +251,32 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       assessmentGeneratedAt = assessmentRow.ai_assessment_generated_at ?? null;
     }
 
+    // Learning Reports P5 (read-only): the accepted assessment or the legacy
+    // fallback, freshness vs content version, and whether a generation is
+    // running. Any failure here leaves the rest of the report intact.
+    let ai: ReportAiView | null = null;
+    if (!explanationsUnavailable) {
+      try {
+        const rows = await readAssessmentRows(supabase as unknown as SupabaseClient, sessionId);
+        if (rows.ok) {
+          ai = buildReportAiView({
+            report: roundReport as RoundReport,
+            attempts: (attempts ?? []) as AssessmentAttemptRow[],
+            notes: roundNotes,
+            accepted: rows.accepted,
+            latest: rows.latest,
+            legacy: { assessment, generatedAt: assessmentGeneratedAt },
+            now: new Date(),
+          });
+        } else {
+          console.error("[session/report] assessment read failed");
+        }
+      } catch (err) {
+        console.error("[session/report] assessment view failed:", err instanceof Error ? err.message : err);
+        ai = null;
+      }
+    }
+
     const response: SessionReportResponse = {
       session: {
         id: session.id,
@@ -266,6 +300,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
       dictationEvidence: buildDictationEvidence(attempts ?? []),
       newerActiveRound,
       ...(explanationsUnavailable ? { explanationsUnavailable: true } : {}),
+      ai,
       transcriptVersion,
       listening,
     };

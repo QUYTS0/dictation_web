@@ -46,6 +46,10 @@ export interface StoredExplanation {
   prompt_version: number | null;
   model: string | null;
   created_at: string;
+  /** P5 (044): "minor" and "duplicate" notes; absent/"explanation" for P4 rows. */
+  note_kind?: "explanation" | "minor" | "duplicate" | null;
+  /** For a "duplicate": the attempt whose explanation (same operation) it points at. */
+  ref_attempt_id?: string | null;
 }
 
 /** The attempt fields the reuse identity needs (immutable attempt row). */
@@ -148,6 +152,10 @@ export interface ResolvedExplanation {
   legacy: boolean;
   promptVersion: number | null;
   model: string | null;
+  /** P5: how the model classified it. "minor"/"duplicate" carry a short note in `explanation`. */
+  kind: "explanation" | "minor" | "duplicate";
+  /** For "duplicate": the 0-based sentence whose explanation it refers to (when known). */
+  refSegmentIndex?: number;
 }
 
 /**
@@ -204,9 +212,18 @@ export function resolveExplanations(
   const effective = effectiveByAttempt(rows);
   const byPattern = notesByPattern(roundAttempts, effective);
   const out = new Map<string, ResolvedExplanation>();
+  const segmentOf = new Map(roundAttempts.map((a) => [a.id, a.segment_index]));
+  const refOf = new Map(rows.map((r) => [r.id, r.ref_attempt_id ?? null]));
   for (const attempt of attempts) {
     const r = resolveExplanation(attempt, roundAttempts, rows, { effective, byPattern });
-    if (r) out.set(attempt.id, r);
+    if (!r) continue;
+    if (r.kind === "duplicate") {
+      const note = effective.get(attempt.id) ?? null;
+      const ref = note ? refOf.get(note.id) : null;
+      const seg = ref ? segmentOf.get(ref) : undefined;
+      if (seg !== undefined) r.refSegmentIndex = seg;
+    }
+    out.set(attempt.id, r);
   }
   return out;
 }
@@ -239,5 +256,6 @@ function toResolved(note: StoredExplanation, expectedText: string, via: Explanat
     legacy: note.source === "legacy_ai_feedback",
     promptVersion: note.prompt_version,
     model: note.model,
+    kind: note.note_kind === "minor" || note.note_kind === "duplicate" ? note.note_kind : "explanation",
   };
 }

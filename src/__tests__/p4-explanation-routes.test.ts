@@ -25,13 +25,19 @@ jest.mock("@google/generative-ai", () => ({
   })),
   SchemaType: new Proxy({}, { get: (_t, k) => String(k) }),
 }));
+// P5: every provider attempt is admitted (src/lib/ai/quota.ts). `checkGeminiQuota`
+// is kept as this suite's name for "an admission was requested".
 const checkGeminiQuota = jest.fn();
 jest.mock("@/lib/rateLimit", () => ({
   checkRateLimit: jest.fn(async () => null),
-  checkGeminiQuota: (...args: unknown[]) => checkGeminiQuota(...args),
+}));
+jest.mock("@/lib/ai/quota", () => ({
+  admitGeminiAttempt: async (...args: unknown[]) => {
+    const r = (await checkGeminiQuota(...args)) as { allowed: boolean; reason?: string };
+    return r.allowed ? { status: "admitted", key: "k" } : { status: "denied", reason: r.reason ?? "rpd", retryAfterSec: 60 };
+  },
 }));
 
-/** `single`: what .maybeSingle() returns when it differs from the list result. */
 type TableResult = { data: unknown; error?: unknown; count?: number; single?: unknown };
 const userTables: Record<string, TableResult> = {};
 const serviceTables: Record<string, TableResult> = {};
@@ -72,13 +78,11 @@ jest.mock("@/lib/supabase/server", () => ({
   }),
 }));
 
-import { POST as explainAllPOST } from "@/app/api/session/[sessionId]/explain-all/route";
 import { POST as explainPOST } from "@/app/api/ai/explain/route";
 import { GET as reportGET } from "@/app/api/session/[sessionId]/report/route";
 
 const ROUND = "11111111-1111-4111-8111-111111111111";
 const A = (n: number) => `aaaaaaaa-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const ASSESSMENT = { verdict: "Good", strengths: ["s"], weaknesses: ["w"], recommendation: "r" };
 
 const attempt = (n: number, seg: number, expected: string, user: string, mode: string | null = "relaxed") => ({
   id: A(n),
@@ -110,7 +114,6 @@ function rpcResults(map: Record<string, unknown>) {
     return { data: null, error: { message: `unexpected rpc ${fn}` } };
   });
 }
-const rpcNames = () => serviceRpc.mock.calls.map(([fn]) => fn);
 const rpcArgs = (fn: string) => serviceRpc.mock.calls.find(([name]) => name === fn)?.[1] as Record<string, unknown> | undefined;
 const started = (targets: string[], covered: string[] = []) => ({
   status: "started",
@@ -120,17 +123,6 @@ const started = (targets: string[], covered: string[] = []) => ({
   targets,
   covered,
 });
-const mergedResponse = (items: unknown[]) => ({ response: { text: () => JSON.stringify({ assessment: ASSESSMENT, items }) } });
-const assessmentOnlyResponse = { response: { text: () => JSON.stringify({ assessment: ASSESSMENT }) } };
-
-const explainAll = (body?: unknown) =>
-  explainAllPOST(
-    new NextRequest(`http://localhost/api/session/${ROUND}/explain-all`, {
-      method: "POST",
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    }),
-    { params: Promise.resolve({ sessionId: ROUND }) } as never
-  );
 const explainOne = (body: unknown) =>
   explainPOST(new NextRequest("http://localhost/api/ai/explain", { method: "POST", body: JSON.stringify(body) }));
 
@@ -150,163 +142,10 @@ beforeEach(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-describe("POST /api/session/[id]/explain-all (P4)", () => {
-  it("everything already saved: no begin, no explanation request — the unchanged overview runs as ONE assessment-only call", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet"), attempt(2, 2, "Alpha beta.", "Alpha bet!")] };
-    serviceTables.attempt_explanations = { data: [savedNote(A(1), "Saved alpha.")] }; // A(2) is the same relaxed mistake
-    rpcResults({});
-    generateContent.mockResolvedValue(assessmentOnlyResponse);
-
-    const res = await explainAll();
-    const json = await res.json();
-    expect(res.status).toBe(200);
-    expect(rpcNames()).toEqual(["fn_persist_session_assessment"]);
-    expect(generateContent).toHaveBeenCalledTimes(1);
-    expect(generateContent.mock.calls[0][0]).not.toContain('"items"');
-    expect(json.assessment).toEqual(ASSESSMENT);
-    expect(json.explanations).toEqual({ status: "reused", requested: 0, saved: 0, alreadySaved: 1, remaining: 0 });
-    expect(json.items).toEqual([]);
-  });
-
-  it("a save that finished after our read is honoured: begin says reuse → still no explanation request", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [] };
-    rpcResults({ fn_explanations_begin: { status: "reuse", covered: [A(1)], targets: [] } });
-    generateContent.mockResolvedValue(assessmentOnlyResponse);
-
-    const json = await (await explainAll()).json();
-    expect(rpcNames()).toEqual(["fn_explanations_begin", "fn_persist_session_assessment"]);
-    expect(generateContent).toHaveBeenCalledTimes(1);
-    expect(generateContent.mock.calls[0][0]).not.toContain('"items"');
-    expect(json.explanations).toMatchObject({ status: "reused", alreadySaved: 1 });
-  });
-
-  it("partial coverage: begin happens before quota; only the authoritative remaining targets are sent and saved", async () => {
-    userTables.attempt_logs = {
-      data: [attempt(1, 0, "Alpha beta.", "alpha bet"), attempt(2, 1, "Gamma delta.", "gamma delt"), attempt(3, 2, "Epsilon.", "epsilo")],
-    };
-    serviceTables.attempt_explanations = { data: [savedNote(A(1), "Saved alpha.")] };
-    // The pre-read leaves A(2), A(3); the DB says A(2) was saved meanwhile.
-    rpcResults({
-      fn_explanations_begin: started([A(3)], [A(2)]),
-      fn_explanations_finish: { status: "saved", count: 1, seq: 1 },
-    });
-    const order: string[] = [];
-    serviceRpc.mockImplementationOnce(async (fn: string) => {
-      order.push(fn);
-      return { data: started([A(3)], [A(2)]), error: null };
-    });
-    checkGeminiQuota.mockImplementation(async () => {
-      order.push("quota");
-      return { allowed: true };
-    });
-    generateContent.mockImplementation(async (prompt: string) => {
-      order.push("provider");
-      expect(prompt).toContain("epsilo");
-      expect(prompt).not.toMatch(/ONLY for these \d+ distinct patterns[\s\S]*gamma delt/);
-      return mergedResponse([{ index: 1, status: "explained", explanation: "Epsilon note.", correctedText: "Epsilon.", example: "E." }]);
-    });
-
-    const json = await (await explainAll()).json();
-    expect(order).toEqual(["fn_explanations_begin", "quota", "provider"]);
-    expect(rpcArgs("fn_explanations_begin")).toMatchObject({ p_target_attempt_ids: [A(2), A(3)], p_intent: "missing", p_kind: "batch" });
-    expect(rpcArgs("fn_explanations_finish")).toMatchObject({
-      p_operation_id: "op-1",
-      p_token: "tok-1",
-      p_items: [{ attemptId: A(3), explanation: "Epsilon note.", correctedText: "Epsilon.", example: "E.", tip: null }],
-    });
-    expect(json.explanations).toEqual({ status: "saved", requested: 1, saved: 1, alreadySaved: 2, remaining: 0 });
-    expect(writes).toEqual([]); // never a direct table write — in particular no ai_feedback DELETE/INSERT
-    expect(reads).not.toContain("service.ai_feedback");
-  });
-
-  it("another request is generating: 409, no quota check, no provider call", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [] };
-    for (const status of ["in_progress", "busy"]) {
-      rpcResults({ fn_explanations_begin: status === "busy" ? { status } : { status, operationId: "op-0" } });
-      const res = await explainAll();
-      expect(res.status).toBe(409);
-    }
-    expect(checkGeminiQuota).not.toHaveBeenCalled();
-    expect(generateContent).not.toHaveBeenCalled();
-  });
-
-  it("quota denied after begin: the operation is abandoned and nothing is called", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [] };
-    rpcResults({ fn_explanations_begin: started([A(1)]) });
-    checkGeminiQuota.mockResolvedValue({ allowed: false, reason: "rpd" });
-    const res = await explainAll();
-    expect(res.status).toBe(429);
-    expect(rpcArgs("fn_explanations_abandon")).toMatchObject({ p_operation_id: "op-1", p_token: "tok-1", p_reason: "quota_denied" });
-    expect(generateContent).not.toHaveBeenCalled();
-  });
-
-  it("a response without usable notes is abandoned and reported as none_usable — never as saved", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [] };
-    rpcResults({ fn_explanations_begin: started([A(1)]) });
-    generateContent.mockResolvedValue(mergedResponse([{ index: 1, status: "explained", explanation: "  " }]));
-    const json = await (await explainAll()).json();
-    expect(rpcNames()).not.toContain("fn_explanations_finish");
-    expect(rpcArgs("fn_explanations_abandon")).toMatchObject({ p_reason: "no_usable_notes" });
-    expect(json.explanations).toMatchObject({ status: "none_usable", saved: 0 });
-    expect(json.items.find((i: { attemptId: string }) => i.attemptId === A(1))).toMatchObject({ status: "minor" });
-  });
-
-  it("a failed save keeps earlier notes untouched and flags the new output as unsaved", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [] };
-    rpcResults({ fn_explanations_begin: started([A(1)]) });
-    serviceRpc.mockImplementation(async (fn: string) => {
-      if (fn === "fn_explanations_begin") return { data: started([A(1)]), error: null };
-      if (fn === "fn_explanations_finish") return { data: null, error: { message: "connection reset" } };
-      if (fn === "fn_persist_session_assessment") return { data: true, error: null };
-      return { data: { status: "abandoned" }, error: null };
-    });
-    generateContent.mockResolvedValue(mergedResponse([{ index: 1, status: "explained", explanation: "New alpha.", correctedText: "Alpha beta.", example: "E." }]));
-    const json = await (await explainAll()).json();
-    expect(json.explanations).toMatchObject({ status: "not_saved", saved: 0 });
-    expect(json.items[0]).toMatchObject({ attemptId: A(1), status: "explained", unsaved: true });
-    // A DB error leaves the operation for its lease to expire (a later recovery could finish it).
-    expect(rpcNames()).not.toContain("fn_explanations_abandon");
-    expect(writes).toEqual([]);
-  });
-
-  it("targets use the mode-aware identity: exact case-only and punctuation-only mistakes stay separate", async () => {
-    userTables.attempt_logs = {
-      data: [attempt(1, 0, "Epsilon zeta.", "epsilon zeta.", "exact"), attempt(2, 1, "Epsilon zeta.", "Epsilon zeta", "exact")],
-    };
-    serviceTables.attempt_explanations = { data: [] };
-    rpcResults({ fn_explanations_begin: started([A(1), A(2)]), fn_explanations_finish: { status: "saved", count: 2 } });
-    generateContent.mockResolvedValue(
-      mergedResponse([
-        { index: 1, status: "explained", explanation: "Capitalize." },
-        { index: 2, status: "explained", explanation: "Add the period." },
-      ])
-    );
-    await explainAll();
-    // The legacy (relaxed) grouping would have collapsed these into one target.
-    expect(rpcArgs("fn_explanations_begin")?.p_target_attempt_ids).toEqual([A(1), A(2)]);
-  });
-
-  it("reexplain is explicit and validated: no saved-note filtering; an unknown intent is refused before anything runs", async () => {
-    userTables.attempt_logs = { data: [attempt(1, 0, "Alpha beta.", "alpha bet")] };
-    serviceTables.attempt_explanations = { data: [savedNote(A(1), "Saved alpha.")] };
-    rpcResults({ fn_explanations_begin: started([A(1)]), fn_explanations_finish: { status: "saved", count: 1 } });
-    generateContent.mockResolvedValue(mergedResponse([{ index: 1, status: "explained", explanation: "Fresh alpha." }]));
-    await explainAll({ intent: "reexplain" });
-    expect(rpcArgs("fn_explanations_begin")).toMatchObject({ p_intent: "reexplain", p_target_attempt_ids: [A(1)] });
-    expect(reads).not.toContain("service.attempt_explanations");
-
-    jest.clearAllMocks();
-    const bad = await explainAll({ intent: "everything" });
-    expect(bad.status).toBe(400);
-    expect(serviceRpc).not.toHaveBeenCalled();
-    expect(generateContent).not.toHaveBeenCalled();
-  });
-});
+// The P4 explain-all cases (reuse, partial coverage, in-progress, quota
+// abandon, unusable / unsaved output, mode-aware targets, reexplain intent)
+// moved to p5-assessment-routes.test.ts: explain-all is now a compatibility
+// adapter over the P5 pipeline.
 
 describe("POST /api/ai/explain (P4)", () => {
   const stored = { ...attempt(1, 0, "Alpha beta.", "alpha bet"), session_id: ROUND, is_correct: false };

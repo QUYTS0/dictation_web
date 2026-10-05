@@ -91,6 +91,10 @@ export interface ExplanationNote {
   correctedText: string | null;
   example: string | null;
   tip: string | null;
+  /** P5 (migration 044): omitted / "explanation" keeps P4's exact item shape. */
+  kind?: "explanation" | "minor" | "duplicate";
+  /** For "duplicate": the attempt whose explanation is saved in the SAME operation. */
+  refAttemptId?: string | null;
 }
 
 export type FinishResult =
@@ -108,13 +112,10 @@ export async function finishExplanations(
     p_round_id: args.roundId,
     p_operation_id: args.operationId,
     p_token: args.token,
-    p_items: args.notes.map((n) => ({
-      attemptId: n.attemptId,
-      explanation: n.explanation,
-      correctedText: n.correctedText,
-      example: n.example,
-      tip: n.tip,
-    })),
+    p_items: args.notes.map((n) => {
+      const item = { attemptId: n.attemptId, explanation: n.explanation, correctedText: n.correctedText, example: n.example, tip: n.tip };
+      return !n.kind || n.kind === "explanation" ? item : { ...item, kind: n.kind, refAttemptId: n.refAttemptId ?? null };
+    }),
   });
   if (error || !data || typeof data !== "object") {
     return { status: "error", message: error?.message ?? "no result" };
@@ -128,7 +129,15 @@ export async function finishExplanations(
   return { status: "error", message: `unexpected status ${String(d.status)}` };
 }
 
-export type AbandonReason = "quota_denied" | "provider_failed" | "unparseable" | "no_usable_notes" | "invalid_output" | "not_configured";
+export type AbandonReason =
+  | "quota_denied"
+  | "quota_unavailable"
+  | "unknown_outcome"
+  | "provider_failed"
+  | "unparseable"
+  | "no_usable_notes"
+  | "invalid_output"
+  | "not_configured";
 
 /** Best-effort: never throws. A failed abandon only means the lease expires on its own (120 s). */
 export async function abandonExplanations(

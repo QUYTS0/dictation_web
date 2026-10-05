@@ -1,13 +1,24 @@
 import { NextResponse } from "next/server";
-import { peekGeminiQuota } from "@/lib/rateLimit";
+import { createClient } from "@/lib/supabase/server";
+import { peekGeminiQuota } from "@/lib/ai/quota";
 
 /**
- * Read-only status for the shared Gemini free-tier budget (RPM + RPD),
- * spent by /api/ai/explain and /api/transcript/translate — lets the UI show
- * "X/Y AI calls left today" without spending a call itself. Not
- * user-specific (the quota isn't either), so no auth required.
+ * Read-only status of the APPLICATION's Gemini quota (shared daily limit,
+ * plus the caller's own daily limit when one is configured and they are
+ * signed in), with its calendar-day reset label. Never increments anything
+ * and never calls the provider. The provider's own limits and reset time
+ * are an operator check — not claimed here.
  */
 export async function GET() {
-  const quota = await peekGeminiQuota();
-  return NextResponse.json(quota);
+  let userId: string | null = null;
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    userId = user?.id ?? null;
+  } catch {
+    userId = null;
+  }
+  return NextResponse.json(await peekGeminiQuota(userId));
 }

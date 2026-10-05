@@ -73,7 +73,7 @@ export interface RateLimitOptions {
  * Returns a NextResponse with status 429 if the caller has exceeded the
  * limit, or null if the request is allowed to proceed. Per-client (keyed by
  * IP) — for a budget shared across ALL callers regardless of who's asking,
- * use checkGeminiQuota instead.
+ * use admitGeminiAttempt (src/lib/ai/quota.ts) instead.
  */
 export async function checkRateLimit(
   request: NextRequest,
@@ -93,37 +93,10 @@ export async function checkRateLimit(
   return null;
 }
 
-// Google's free-tier RPM/RPD limits apply to the whole API key/project, not
-// per user — a per-IP limiter like checkRateLimit above would let every
-// visitor independently burn through the *same* shared quota. These two
-// keys are intentionally global (not scoped by client) so every Gemini call
-// site in the app draws from one real, shared budget. Override via env if
-// your tier's numbers differ from the defaults below (checked 2026-08).
-const GEMINI_RPM_LIMIT = Number(process.env.GEMINI_RPM_LIMIT ?? 5);
-const GEMINI_RPD_LIMIT = Number(process.env.GEMINI_RPD_LIMIT ?? 20);
-const GEMINI_RPM_KEY = "gemini-quota:rpm";
-const GEMINI_RPD_KEY = "gemini-quota:rpd";
-
-export interface GeminiQuotaResult {
-  allowed: boolean;
-  reason?: "rpm" | "rpd";
-  retryAfterSec?: number;
-}
-
-/**
- * Call this immediately before an actual Gemini API call — after any cache
- * check, and only on the branch that's really about to spend a call — so
- * cache hits and "didn't need Gemini after all" paths never consume budget.
- */
-export async function checkGeminiQuota(): Promise<GeminiQuotaResult> {
-  const rpm = await incrementWindow(GEMINI_RPM_KEY, GEMINI_RPM_LIMIT, 60);
-  if (!rpm.allowed) return { allowed: false, reason: "rpm", retryAfterSec: rpm.retryAfterSec };
-
-  const rpd = await incrementWindow(GEMINI_RPD_KEY, GEMINI_RPD_LIMIT, 86_400);
-  if (!rpd.allowed) return { allowed: false, reason: "rpd", retryAfterSec: rpd.retryAfterSec };
-
-  return { allowed: true };
-}
+// Gemini quota: see src/lib/ai/quota.ts (Learning Reports P5) — one atomic
+// admission per provider attempt, fail-closed in production. The old
+// non-atomic checkGeminiQuota/peekGeminiQuota were removed so no caller can
+// reach Gemini without an admission.
 
 // Azure Language F0's 5,000 text-records/month pool is shared across
 // several Language features on the same resource (sentiment analysis, key
@@ -227,34 +200,4 @@ export function isQuotaBackendConfigured(): boolean {
  *  reflects the actual runtime environment. */
 export function isProductionEnvironment(): boolean {
   return process.env.NODE_ENV === "production";
-}
-
-export interface GeminiQuotaStatus {
-  /** False when Upstash isn't configured — usage isn't actually tracked. */
-  configured: boolean;
-  rpmUsed: number;
-  rpmLimit: number;
-  rpdUsed: number;
-  rpdLimit: number;
-}
-
-/** Read-only status for display (e.g. "14/20 AI calls left today") — never increments. */
-export async function peekGeminiQuota(): Promise<GeminiQuotaStatus> {
-  const redis = getRedis();
-  if (!redis) {
-    return { configured: false, rpmUsed: 0, rpmLimit: GEMINI_RPM_LIMIT, rpdUsed: 0, rpdLimit: GEMINI_RPD_LIMIT };
-  }
-
-  const [rpmUsed, rpdUsed] = await Promise.all([
-    redis.get<number>(GEMINI_RPM_KEY),
-    redis.get<number>(GEMINI_RPD_KEY),
-  ]);
-
-  return {
-    configured: true,
-    rpmUsed: rpmUsed ?? 0,
-    rpmLimit: GEMINI_RPM_LIMIT,
-    rpdUsed: rpdUsed ?? 0,
-    rpdLimit: GEMINI_RPD_LIMIT,
-  };
 }

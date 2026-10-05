@@ -57,8 +57,8 @@ export async function peekPracticeQuota(): Promise<PracticeQuotaStatus> {
  * request, then recordPracticeUsage only after it actually succeeds, so a
  * failed Azure call never burns budget. Despite the name nothing is
  * reserved: it only reads the counter, so concurrent requests can all pass
- * the same remaining budget (same tolerance as checkGeminiQuota in
- * rateLimit.ts). The limit is approximate — acceptable at personal-app
+ * the same remaining budget (unlike the Gemini quota, which is admitted
+ * atomically — src/lib/ai/quota.ts). The limit is approximate — acceptable at personal-app
  * traffic, not a strict spending guarantee.
  */
 export async function reservePracticeQuota(durationSec: number): Promise<{ allowed: boolean; status: PracticeQuotaStatus }> {

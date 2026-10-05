@@ -3,11 +3,16 @@
 Status (2026-10-04): **P0–P3 approved for implementation (app-only)**.
 - **P4 implemented locally (2026-10-04)** with four corrections (backfill verification, token
   validation, mode-aware reuse, recheck before spending). Migration `043_saved_explanations.sql`
-  is not applied remotely; nothing is committed or deployed (§6, §12.5).
-- **P5 is not approved and not started.** Its design (§7–§10) awaits approval.
+  is applied and the P4 app is deployed (user-confirmed, latest update 2026-10-05). P4 browser
+  verification remains unrecorded; §12.5 preserves the earlier local implementation record.
+- **P5 implemented locally (2026-10-05)**: migration `044_ai_assessments.sql`, atomic quota
+  admission for every Gemini caller, signed recovery, the report's AI block (§12.6). **044 is
+  applied, user-confirmed. P5 app deployment and browser verification are unknown.** The forward
+  correction `045_assessment_finish_identity.sql` is tested locally and awaits application;
+  see `supabase/P5_ASSESSMENT_RUNBOOK.md` for provenance, upgrade evidence and rollout steps.
 - Implementation status is recorded per phase in §12.
 
-**Baseline**
+**Original audit baseline (historical, superseded by the status above)**
 - `main` @ `bcd27bb`, clean tree; not assumed deployed.
 - Migrations `001`–`042` are immutable and none higher exists. Any migration proposed here takes
   the **next available number, verified at implementation time**.
@@ -765,7 +770,7 @@ checked after the lease is cleared. The payload hash is computed in SQL from the
 | Event | Rule |
 |---|---|
 | **begin**(fp, pv, model) | 1. `pv < accepted_prompt_version` → `outdated_app` (no call, no charge; an older instance must not replace a newer prompt's result). 2. Accepted `(fp, pv, model)` all equal → `reuse`. 3. Live lease with equal `(fp, pv, model)` → `in_progress`; a live lease with anything different → `busy`. 4. Otherwise `latest_started_generation + 1`, a new token, lease 120 s → `started{gen, token}`. A start after an expired lease supersedes the old worker. **Creating the row or starting a generation never changes the accepted result or the legacy column.** |
-| **finish**(gen, token, fp, pv, model, payload, meta) | 1. `gen = accepted_generation`: same token **and** same hash → `already_accepted`; same token, different hash → `conflict` (stored result kept); different token → `invalid_token`. 2. `gen < latest_started_generation` → `superseded`. 3. `gen > latest_started` → `invalid`. 4. `gen = latest_started`: the token, fp, pv and model **must equal the lease's**, **even when the lease has expired**; otherwise `invalid_token`. 5. `pv < accepted_prompt_version` → `outdated_app`. Then accept: write `accepted_*`, mirror the legacy column (§10.2), clear the lease. Late completion after expiry is allowed **only** in branch 4, i.e. when no newer generation has started. |
+| **finish**(gen, token, fp, pv, model, payload, meta), corrected in 045 | Lock and verify ownership, then load the requested generation's own row (`not_found` if absent). Validate its token first (`invalid_token`), reject abandoned state, then compare fp/pv/model with that row using `IS DISTINCT FROM` (`invalid_identity`, including NULL). Validate payload/meta and hash. Any **accepted generation**, including a historical one: matching hash → `already_accepted`; different hash → `conflict`; neither writes anything. Otherwise `gen < latest_started_generation` → `superseded`; older pv than the accepted result → `outdated_app`; then accept and mirror (§10.2). Expired leases may finish only if no newer generation has started. Historical retries never compare identity with or replace a newer accepted result. |
 | **abandon**(gen, token) on provider or admission failure | Clears the lease if it matches. The accepted result is untouched. |
 | Lease expiry | Passive: the next begin supersedes. |
 | DB write failure | Finish didn't commit, so the client holds a recovery token (§8.4). |
@@ -868,7 +873,7 @@ saved assessment or explanation.
 **Atomic Lua script (Upstash `EVAL`)**
 - If `adm:<id>` exists, return its recorded outcome with **no new charge**.
 - Otherwise check RPM, shared RPD and user RPD together. If all pass, increment all of them and
-  set their TTLs, then `SET adm:<id> reserved EX 86400`. If any fails, charge nothing.
+  set their TTLs, then `SET adm:<id> reserved EX 172800`. If any fails, charge nothing.
 
 **Policy**
 - **Order:** DB `begin` (which allocates the generation or operation id) → admission → provider
@@ -881,9 +886,17 @@ saved assessment or explanation.
   `unknown_outcome` ("Try again" starts a new operation with a new charge, shown to the user).
 - If no capacity remains for the parse retry, skip it and report "AI response couldn't be read".
 
-**Window:** recommended calendar-day keys `rpd:<YYYY-MM-DD>` in `GEMINI_QUOTA_TZ`. The provider's
+**Window:** calendar-day keys `rpd:<YYYY-MM-DD>` in `GEMINI_QUOTA_TZ`. The 2-day TTL retains old
+keys; the date in the key selects the daily budget. The provider's
 reset time must be confirmed by the operator. The UI shows "N AI requests left today (shared app
 limit) · resets at <time>".
+
+**P4 → P5 transition / app rollback:** old `gemini-quota:rpm|rpd` counters and new
+`gemini:<env>:...` counters are independent, with no migration or admission bridge. Fresh P5
+keys exclude P4 usage; mixed server versions do not enforce a combined cap; rollback omits P5
+usage from the old counters. Stale tabs routed to P5 still use P5 admission. Drain old writers
+and account for remaining provider capacity/reset before cutover or rollback, per
+`supabase/P5_ASSESSMENT_RUNBOOK.md` §3.1. Separate environments can still share provider capacity.
 
 **Redis unavailable**
 - **Production (`NODE_ENV=production`): always fail closed** for new Gemini calls (503 "AI
@@ -1049,7 +1062,7 @@ Both take the next free number, verified at implementation time; P5's number fol
 | **P2** Same-round continuation | §5.3–5.4 | resume route, page entry, auto-save guard, report `actions` | — | 4–7, 21, 28–30, 56–57; implicit-creation test first; PG and jsdom | revert |
 | **P3** Report shell and sections | Tabs, compact summary, Listening, identity | shared `ReportShell` for `PracticeReportView`, `/results`, History | — | 8–11, 24; component and browser | revert |
 | **P4** Saved explanations — **implemented locally (§12.5)** | New explanation storage isolated from old writers; operation identity and token hash; `seq` ordering; mode-aware reuse; recheck before spending; per-round lock | report route, explain-all and `/api/ai/explain` writers, `explanationIdentity.ts`, `explanationPersistence.ts`, results page | **`043_saved_explanations.sql`**, additive (§6.2, §10.2) | 35–36, 55, 59–65, 71; PG (two real connections), mocked provider, route, component | §6.6 (app revert; tables and trigger stay) |
-| **P5** AI assessment | Overview generations with content versions, Explain more, recovery, quota, legacy rule | explain-all rewrite, Lua admission, recover route, UI | **required** (§8.2, §10.2) | 14–20, 31–32, 37–45, 47–54, 58, 66–70, 72; PG (two real connections), real-Lua integration, mocked provider | §10.2 |
+| **P5** AI assessment — **implemented locally (§12.6)** | Overview generations with content versions, Explain more, recovery, quota, legacy rule | `src/lib/ai/*`, assessment / explanations / recover routes, explain-all adapter, report `ai` block, UI | **`044_ai_assessments.sql`** (§8.2, §10.2) | 14–20, 31–32, 37–45, 47–54, 58, 66–70, 72; PG (two real connections), real-Lua integration, mocked provider | §10.2 |
 | **P6** Integration and rollout | | runbook, operator checks | — | browser, iPhone, operator | — |
 
 **Dependencies:** P1 → P3. P0 and P2 are independent. **P0–P3 never wait for P4 or P5.**
@@ -1462,6 +1475,93 @@ limit). Model-marked "duplicate"/"minor" items are still not stored, so they can
 
 **P5:** not started. No assessment generations, no new quota, no recovery route, no Explain-more UI.
 
+### 12.6 P5 — AI assessment, more explanations, recovery, quota admission (2026-10-05; 044 applied, app/browser status unknown)
+
+**Baseline.** `main` @ `957ea21` ("p4"), clean tree. Per the user, 043 is applied remotely and the
+P4 postflight passed: 94 copyable legacy rows with one copy each; no inconsistent notes or
+duplicate ids; the trigger is enabled; `preserved_after_legacy_delete = 0`.
+**Latest user-confirmed state:** P4 is deployed and 044 is applied. P4 browser checks and P5
+deployment/browser verification remain unrecorded. The original local 044 remains byte-unchanged;
+its exact remotely applied bytes are unverified. Forward fix 045 moves identity validation before
+accepted retries and corrects the table comment without changing grants. The populated 044 → 045
+upgrade, old-function regression evidence and rollout are in `P5_ASSESSMENT_RUNBOOK.md` §5/§11.
+
+**Implemented** (as §7–§10, with the changes below)
+- **Migration `044_ai_assessments.sql`:**
+  - `round_assessments` and `assessment_generations`;
+  - `fn_assessment_begin` / `_finish` / `_abandon`;
+  - the guarded `fn_persist_session_assessment`;
+  - `fn_explanations_finish` replaced with note kinds;
+  - `attempt_explanations.note_kind` / `ref_attempt_id` (additive);
+  - `fn_assessment_legacy_mirror`.
+- **Server modules (`src/lib/ai/`):**
+  - `quota.ts`: atomic Lua admission, fail-closed;
+  - `geminiCall.ts`: the only provider caller, admitted per attempt;
+  - `assessmentInput.ts`: canonical metrics, evidence, budget, `p1` targets, fingerprint;
+  - `assessmentPrompt.ts`, `assessmentValidate.ts`, `assessmentPersistence.ts`, `assessmentPipeline.ts`;
+  - `aiRecovery.ts`: sealed recovery tokens; `assessmentRecover.ts`;
+  - `reportAi.ts`, `legacyMirror.ts`, `routeContext.ts`;
+  - client side: `types.ts`, `recoveryStore.ts`, `useAiAssessment.ts`.
+- **Routes:**
+  - new: `POST /api/session/[id]/assessment`, `POST /api/session/[id]/explanations`,
+    `POST /api/session/[id]/assessment/recover`;
+  - `explain-all` became a compatibility adapter;
+  - `/api/ai/explain` and `/api/transcript/translate` now use per-attempt admission;
+  - `/api/ai/quota` returns the new read-only view;
+  - the report GET adds the read-only `ai` block.
+- **UI:** `AiAssessmentSection` inside the existing report page. It shows freshness and version as
+  two labels, costed actions, Explain more, Re-explain selection, unsaved/Save, bounded polling and
+  the quota line. The auth context clears pending AI saves on sign-out and account switch.
+- **Removed:** the non-atomic `checkGeminiQuota` / `peekGeminiQuota` (old keys `gemini-quota:*`).
+
+**Changes from the plan, and why**
+
+| Plan | Implemented | Reason |
+|---|---|---|
+| Single lease columns on `round_assessments` | One `assessment_generations` row per generation (token hash, identity, state); `round_assessments` holds the accepted result | Every finish/abandon is authenticated even for an older, superseded or accepted generation. This is the same model as P4's `explanation_operations`. |
+| Recovery token = HMAC-signed claims (Azure pattern) | Claims **sealed** with AES-256-GCM, the purpose `ai-recovery:v1` as additional authenticated data, key derived from the new `AI_RECOVERY_SIGNING_SECRET` | The claims contain the database operation token, which the browser must not be able to read. GCM gives integrity like the HMAC, plus confidentiality. |
+| Explain-more selection by attempt ids | By **sentence** indexes, mapped on the server to authoritative targets | The client can't name arbitrary attempts; the database re-validates them anyway. |
+| (gap) P4 dropped model "minor"/"duplicate" items, so they were requested again | `note_kind` with `minor` / `duplicate` (+ `ref_attempt_id`, which must be an explanation in the same payload). Ordinary items keep P4's canonical form | Honest storage without empty "explained" rows; P4-era hashes are unchanged (tested). |
+| "Generate" with `explain-all` | The old endpoint is kept as an adapter over the same pipeline | Stale tabs keep working without bypassing the quota or storage. |
+| Polling via a status endpoint | Re-reads the round report (GET), bounded to 20 × 3 s | No new endpoint; it stays read-only. |
+| Translation per-user limit | Applied when the caller is signed in; signed-out translation counts only against the shared limits | The route serves signed-out visitors; no owner is invented. |
+
+**Verification (final code)**
+- `tsc` clean. Lint: 0 errors, the 3 existing warnings (none in P5 files). Production build passes.
+- Real PostgreSQL 17.6 and real Redis 5.0.14 (both disposable servers in the session scratchpad;
+  Redis is the portable Windows build of Redis, fetched into the scratchpad only), every
+  integration suite in band: **20 suites, 201 tests passed, 0 failed**. 4 suites (113 tests) were
+  skipped: Supabase HTTP, which needs a running Supabase stack.
+  - `p5-assessments` (13): upgrade from 043 with P4 data (pre/postflight as written); P4 hash
+    compatibility; reuse vs regenerate (prompt or model) on unchanged data; outdated app; tokens
+    before/after acceptance and after expiry; same vs conflicting payload; identity; abandon;
+    reverse finish order; concurrent begins with the lock wait observed; the legacy race in
+    **both** lock orders on separate connections; fallback after started/abandoned/expired
+    generations; note kinds; column privileges and RLS.
+  - `p5-quota-redis` (10): the production Upstash client runs the real Lua through a local REST
+    shim. Covers admission and expiries, duplicate ids, separately charged parse retries, a
+    rejection at the boundary incrementing nothing, RPM / user limits, 25 concurrent admissions
+    with cap 10, id isolation (rounds, users, types, environments), a lost reply staying spent,
+    fail-closed in production, peek, and calendar days by time zone.
+- Full Jest without database URLs: **134 suites, 1,567 tests passed, 0 failed**; 24 suites (314
+  tests) skipped are the database/Redis tiers, run above.
+  - New: `p5-assessment-units` (15), `p5-assessment-routes` (28), `p5-results-assessment` (7).
+  - Re-scoped P4 suites: `explain-all-persistence` (now the adapter's contract),
+    `p4-explanation-routes` (single explain + report; the explain-all cases moved to P5),
+    `p4-results-explanations` (saved labels; the action cases moved to P5).
+- **Mutation checks**, each caught by its tests and then restored:
+  1. Lua without the duplicate check;
+  2. the legacy writer without the round lock;
+  3. the legacy writer without the accepted-assessment refusal;
+  4. the pipeline not abandoning its own explanation operation;
+  5. the client without the automatic save retry.
+
+**Not verified:** browser, iPhone, Supabase HTTP/PostgREST, the real Supabase project, Upstash
+itself (the shim speaks its REST protocol to real Redis), and real Gemini responses.
+
+**Remaining operator decisions:** see `P5_ASSESSMENT_RUNBOOK.md` §7 (the provider's real limits
+and reset time, a per-user limit, environment key prefixes, the 35-target cap).
+
 ---
 
 ## 13. Acceptance matrix
@@ -1603,3 +1703,9 @@ không chứng minh việc hoàn thành đã được xác minh.
 - Migration `043_saved_explanations.sql`: bảng `attempt_explanations` và `explanation_operations`, trigger chép `ai_feedback` cùng backfill trong một transaction có khóa, các RPC begin/finish/abandon chỉ dành cho service role.
 - Kiểm tra sau migration theo từng dòng nguồn (không so tổng số dòng). Token luôn được kiểm tra, kể cả khi lặp lại. Khóa tái sử dụng phân biệt chế độ chấm (exact/relaxed/learning; chế độ không rõ thì không dùng chung). Phần đã lưu được kiểm tra lại ngay trong begin, dưới khóa, nên không trả tiền hai lần.
 - Chưa áp dụng lên Supabase, chưa commit, chưa deploy. P5 chưa làm.
+
+**P5 (đã làm, chỉ ở máy local)**
+- Migration `044_ai_assessments.sql`: `round_assessments` và `assessment_generations` (một dòng cho mỗi lần sinh, giữ mã băm token); các RPC begin/finish/abandon; writer legacy được khóa theo round; ghi chú loại `minor` và `duplicate`.
+- Mọi lời gọi Gemini (đánh giá, giải thích, dịch) đều qua một cổng duy nhất, mỗi lần gọi được Lua giữ chỗ nguyên tử. Production luôn từ chối khi Redis lỗi.
+- Khôi phục kết quả chưa lưu bằng token được mã hóa (24 giờ), không gọi Gemini, không tính quota.
+- Đã kiểm thử trên PostgreSQL và Redis thật (local). Chưa áp dụng lên Supabase, chưa commit, chưa deploy. Muốn đưa lên production thì P4 phải đã deploy và đã kiểm tra trên trình duyệt.

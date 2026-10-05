@@ -387,6 +387,10 @@ export interface ExplanationContext {
   historical: boolean;
   /** Copied from the pre-P4 table: generation rules/version unknown ("earlier explanation"). */
   legacy: boolean;
+  /** P5: "minor" / "duplicate" notes carry a short note instead of a full explanation. */
+  kind?: "explanation" | "minor" | "duplicate";
+  /** P5 duplicate: the 0-based sentence whose explanation it refers to. */
+  refSegmentIndex?: number;
 }
 
 export interface SessionReportResponse {
@@ -420,6 +424,8 @@ export interface SessionReportResponse {
   newerActiveRound?: { roundId: string; roundNumber: number } | null;
   /** Learning Reports P4: saved explanations couldn't be loaded (the rest of the report is unaffected). */
   explanationsUnavailable?: boolean;
+  /** Learning Reports P5: the AI assessment block (null when unavailable; read-only). */
+  ai?: import("@/lib/ai/types").ReportAiView | null;
   /** Learning Reports P3: the version number of the round's pinned script (null if unknown). */
   transcriptVersion?: number | null;
   /**

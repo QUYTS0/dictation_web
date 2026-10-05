@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI, SchemaType, type Schema } from "@google/generative-ai";
+import { SchemaType, type Schema } from "@google/generative-ai";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { checkRateLimit, checkGeminiQuota } from "@/lib/rateLimit";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { admissionFailure, callGeminiAdmitted, parseJsonText } from "@/lib/ai/geminiCall";
 import { GEMINI_MODEL_NAME } from "@/lib/gemini";
 import { resolveExplanation, type ExplanationAttempt, type StoredExplanation } from "@/lib/practice/explanationIdentity";
 import {
@@ -185,67 +186,43 @@ export async function POST(request: NextRequest) {
     }
     const operation = { userId: user.id, roundId, operationId: begin.operationId, token: begin.token };
 
-    const quota = await checkGeminiQuota();
-    if (!quota.allowed) {
-      await abandonExplanations(service, { ...operation, reason: "quota_denied" });
-      const message =
-        quota.reason === "rpd"
-          ? "Daily AI quota reached. Try again tomorrow."
-          : "AI is handling too many requests right now. Try again in a moment.";
-      return NextResponse.json(
-        { error: message },
-        { status: 429, headers: quota.retryAfterSec ? { "Retry-After": String(quota.retryAfterSec) } : undefined }
-      );
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: GEMINI_MODEL_NAME,
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: EXPLAIN_RESPONSE_SCHEMA,
-      },
-    });
-
+    // Every provider attempt is admitted separately (attempt 2 = the parse
+    // retry); a denied or ambiguous admission never reaches the provider.
     const prompt = buildPrompt(attempt.expected_text, attempt.user_text);
-    console.log(`[ai/explain] calling Gemini for attemptId=${attemptId}`);
-
     let parsed: Partial<AIExplainResponse> | null = null;
-    let lastError: unknown;
-    for (let i = 0; i < 2 && !parsed; i++) {
-      let rawText: string;
-      try {
-        const result = await Promise.race([
-          model.generateContent(prompt),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("AI request timed out")), 15000)
-          ),
-        ]);
-        rawText = result.response.text().trim();
-      } catch (aiErr) {
-        console.error("[ai/explain] Gemini error:", aiErr);
-        await abandonExplanations(service, { ...operation, reason: "provider_failed" });
+    for (const attemptNo of [1, 2] as const) {
+      const res = await callGeminiAdmitted({
+        apiKey,
+        model: GEMINI_MODEL_NAME,
+        prompt,
+        responseSchema: EXPLAIN_RESPONSE_SCHEMA,
+        timeoutMs: 15000,
+        admission: { operationType: "explain", operationId: `explain:${roundId}:${begin.operationId}`, attempt: attemptNo, userId: user.id },
+        logTag: "ai/explain",
+      });
+      if (res.status === "not_admitted") {
+        await abandonExplanations(service, { ...operation, reason: res.admission.status === "denied" ? "quota_denied" : res.admission.status === "duplicate" ? "unknown_outcome" : "quota_unavailable" });
+        if (attemptNo === 2) {
+          return NextResponse.json({ error: "The AI response couldn't be read, and no AI request was left for a retry." }, { status: 502 });
+        }
+        const f = admissionFailure(res.admission);
         return NextResponse.json(
-          { error: "AI service failed. Please try again." },
-          { status: 502 }
+          { error: f.error, code: f.code },
+          { status: f.status, headers: f.retryAfterSec ? { "Retry-After": String(f.retryAfterSec) } : undefined }
         );
       }
-
-      try {
-        // responseSchema keeps this raw in the common case; the fence-strip
-        // is a safety net for any stray ```json wrapper.
-        const jsonStr = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/, "");
-        const value = JSON.parse(jsonStr);
-        parsed = value && typeof value === "object" ? value : null;
-        if (!parsed) lastError = new Error("Response is not an object");
-      } catch (parseErr) {
-        lastError = parseErr;
-        console.warn(`[ai/explain] failed to parse Gemini response on attempt ${i + 1}:`, rawText);
+      if (res.status === "provider_error") {
+        await abandonExplanations(service, { ...operation, reason: "provider_failed" });
+        return NextResponse.json({ error: "AI service failed. The request may still count toward today's limit." }, { status: 502 });
+      }
+      const value = parseJsonText(res.text);
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        parsed = value as Partial<AIExplainResponse>;
+        break;
       }
     }
 
     if (!parsed) {
-      console.error("[ai/explain] Gemini response unparseable after retry:", lastError);
       await abandonExplanations(service, { ...operation, reason: "unparseable" });
       return NextResponse.json(
         { error: "AI returned an unexpected format." },
