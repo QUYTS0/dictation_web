@@ -7,6 +7,7 @@ import { shadowingRoundResultsKeys } from "@/lib/queries/shadowingRoundResults";
 import { videoLibraryKeys } from "@/lib/queries/videoLibrary";
 import { xpKeys } from "@/lib/queries/xp";
 import { achievementsKeys } from "@/lib/queries/achievements";
+import { leaderboardKeys } from "@/lib/queries/leaderboard";
 
 /**
  * Marks the account-wide learning views stale after a CONFIRMED write
@@ -29,6 +30,7 @@ export function invalidateLearningViews(
   void qc.invalidateQueries({ queryKey: dashboardKeys.week(userId) });
   void qc.invalidateQueries({ queryKey: xpKeys.xp(userId) });
   void qc.invalidateQueries({ queryKey: achievementsKeys.achievements(userId) });
+  void qc.invalidateQueries({ queryKey: leaderboardKeys.all(userId) });
   void qc.invalidateQueries({ queryKey: videoLibraryKeys.allForUser(userId) });
   void qc.invalidateQueries({ queryKey: historySessionsKeys.allForUser(userId) });
   for (const roundId of opts.roundIds ?? []) {

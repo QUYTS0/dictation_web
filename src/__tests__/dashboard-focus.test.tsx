@@ -250,8 +250,11 @@ describe("wide shell and layout", () => {
     await screen.findByTestId("your-progress");
     expect(screen.queryByRole("region", { name: "Progress summary" })).toBeNull();
     const main = screen.getByRole("main");
-    // The deck: a direct child of <main> until the league card (Phase 7) takes its right third.
-    expect(screen.getByTestId("vocabulary-card").parentElement).toBe(main);
+    // The deck shares a row with the league card (Phase 7); unavailable here, so the row is one column.
+    const deckRow = screen.getByTestId("dashboard-deck-row");
+    expect(deckRow.parentElement).toBe(main);
+    expect(deckRow).not.toHaveClass("lg:grid-cols-12");
+    expect(deckRow).toContainElement(screen.getByTestId("vocabulary-card"));
     // Diagnostics share a row with achievements (Phase 6); unavailable here, so the row is one column.
     const row = screen.getByTestId("dashboard-diagnostics-row");
     expect(row.parentElement).toBe(main);
@@ -382,13 +385,17 @@ describe("request contract (Option B)", () => {
     "GET /api/xp",
     // Achievements (Phase 6; unanswered here, so diagnostics take the row alone).
     "GET /api/achievements",
+    // This week's league (Phase 7; unanswered here, so the deck takes the row alone)
+    // and the profile (the welcome uses a public name when one is set).
+    "GET /api/leaderboard?scope=week",
+    "GET /api/profile",
   ];
-  const normalize = (c: string) => c.replace(/\?tz=.*$/, "");
+  const normalize = (c: string) => c.replace(/[?&]tz=.*$/, "");
 
   it.each([
     ["with a sentence candidate", [NEEDS]],
     ["without a candidate", [] as LibraryItem[]],
-  ])("cold load %s: exactly 8 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
+  ])("cold load %s: exactly 10 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");

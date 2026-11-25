@@ -17,6 +17,7 @@ import { ContinueLearningCard } from "./components/ContinueLearningCard";
 import { DashboardHero } from "./components/DashboardHero";
 import { FirstRunHero } from "./components/FirstRunHero";
 import { FocusCard } from "./components/FocusCard";
+import { LeagueCard } from "./components/LeagueCard";
 import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
 import { VocabularyDeck } from "./components/VocabularyDeck";
@@ -27,6 +28,8 @@ import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery, useDashboardW
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
 import { useXpQuery } from "@/lib/queries/xp";
 import { useAchievementsQuery } from "@/lib/queries/achievements";
+import { useLeaderboardQuery } from "@/lib/queries/leaderboard";
+import { useProfileQuery } from "@/lib/queries/profile";
 
 const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -50,7 +53,8 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
  *                                  last week's recap above it once a week
  *   1. What should I continue?   — "Pick up where you left off" (ONE item)
  *   2. What should I do next?    — "Next up" (the Focus decision)
- *   3. Words to review           — the review deck (graded in place)
+ *   3. Words to review           — the review deck (graded in place), beside
+ *                                  this week's league
  *   4. Am I making progress?     — Learning performance, then error diagnostics
  *                                  beside the achievements
  * A learner with nothing yet sees only the first-run hero. Browsing saved
@@ -75,6 +79,8 @@ function DashboardContent() {
   const weekQuery = useDashboardWeekQuery(userId);
   const xp = useXpQuery(userId).data;
   const achievementsQuery = useAchievementsQuery(userId);
+  const leagueQuery = useLeaderboardQuery(userId, "week");
+  const profile = useProfileQuery(userId).data;
   const continueQuery = useContinueLearningQuery(userId);
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
@@ -142,7 +148,8 @@ function DashboardContent() {
       </div>
     ) : null;
   const focusShown = focus.kind !== "hidden";
-  const name = user?.email?.split("@")[0] ?? "Learner";
+  // The public name when the learner chose one (Profile & preferences), else the email's local part.
+  const name = profile?.publicName ?? user?.email?.split("@")[0] ?? "Learner";
   // Nothing yet at all — no videos, no study sessions, no saved words — gets
   // the first-run hero and nothing else (plan §4.5.3). A learner who removed
   // every video but has history still gets the normal Dashboard. Unknown
@@ -153,6 +160,13 @@ function DashboardContent() {
   const summaryPending = !summary && !summaryQuery.isError;
   // Achievements: the case, a placeholder while loading, or nothing when
   // unavailable (e.g. migration 049 not applied) — never empty tiles.
+  // League: the card, a placeholder while loading, or nothing when unavailable (050 not applied).
+  const leagueSlot =
+    leagueQuery.data && userId ? (
+      <LeagueCard userId={userId} board={leagueQuery.data} />
+    ) : leagueQuery.isPending ? (
+      <div aria-busy="true" aria-label="Loading your league" className="min-h-[320px] animate-pulse rounded-2xl border border-line bg-white" />
+    ) : null;
   const achievementsSlot = achievementsQuery.data ? (
     <AchievementsCase tracks={achievementsQuery.data.tracks} />
   ) : achievementsQuery.isPending ? (
@@ -202,7 +216,7 @@ function DashboardContent() {
           ) : (
             <>
               {/* Last week's recap: first visit of a new league week only. */}
-              {userId && xp && <WeeklyRecapBanner userId={userId} xp={xp} />}
+              {userId && xp && <WeeklyRecapBanner userId={userId} xp={xp} leagueLastWeek={leagueQuery.data?.lastWeek ?? null} />}
 
               {/* Hero: welcome, streak status and the week; today's panel with "Start today's practice". */}
               {summaryPending ? (
@@ -237,9 +251,14 @@ function DashboardContent() {
                 </div>
               )}
 
-              {/* 3. The review deck. Full width until the league card (Phase 7)
-                  takes the right third; the deck adapts to its own width. */}
-              <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
+              {/* 3. The review deck (≈ 2/3) and the league card (≈ 1/3); the deck takes
+                  the row alone when the league is unavailable and adapts to its own width. */}
+              <div data-testid="dashboard-deck-row" className={clsx("grid items-stretch gap-4 sm:gap-5", leagueSlot && "lg:grid-cols-12")}>
+                <div className={clsx("min-w-0", leagueSlot && "lg:col-span-8")}>
+                  <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
+                </div>
+                {leagueSlot && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
+              </div>
 
               {/* 4. Learning performance — the canonical metrics, each its own card. */}
               {summaryQuery.isError && !summary ? (

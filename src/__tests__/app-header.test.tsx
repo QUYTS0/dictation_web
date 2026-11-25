@@ -51,7 +51,7 @@ describe("AppHeader width stability", () => {
     }
   });
 
-  it("navigation: Dashboard | My Learning | Vocabulary | Bookmarks | History; only the active one is marked current", () => {
+  it("navigation: Dashboard | My Learning | Vocabulary | Bookmarks | History | Leaderboard; only the active one is marked current", () => {
     const { unmount } = render(<AppHeader active="library" />);
     const nav = screen.getByRole("navigation");
     const links = Array.from(nav.querySelectorAll("a"));
@@ -61,6 +61,7 @@ describe("AppHeader width stability", () => {
       ["Vocabulary", "/vocabulary"],
       ["Bookmarks", "/bookmarks"],
       ["History", "/history"],
+      ["Leaderboard", "/leaderboard"],
     ]);
     expect(links.filter((a) => a.getAttribute("aria-current") === "page").map((a) => a.textContent)).toEqual(["My Learning"]);
     unmount();

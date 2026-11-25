@@ -20,6 +20,7 @@ const NAV_LINKS = [
   { key: "vocabulary", href: "/vocabulary", label: "Vocabulary" },
   { key: "bookmarks", href: "/bookmarks", label: "Bookmarks" },
   { key: "history", href: "/history", label: "History" },
+  { key: "leaderboard", href: "/leaderboard", label: "Leaderboard" },
 ] as const;
 
 type NavKey = (typeof NAV_LINKS)[number]["key"];
@@ -31,7 +32,7 @@ interface AppHeaderProps {
 
 /**
  * Shared app-shell header used by every signed-in page (dashboard, my
- * learning, vocabulary, bookmarks, history, results): brand, primary nav,
+ * learning, vocabulary, bookmarks, history, leaderboard, results): brand, primary nav,
  * and — for a signed-in learner — "New video", the streak pill, the XP pill
  * (from lg; hidden while XP is unavailable) and the account menu. The dictation/listening workspace uses its own compact
  * title-bar header instead (back button + progress label, zen-mode aware).

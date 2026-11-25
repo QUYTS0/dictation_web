@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { BookOpen, Flame, Headphones, Mic2, Target, Trophy } from "lucide-react";
 import type { AchievementTier, AchievementTierLevel, AchievementTrack, AchievementTrackId, AchievementUnlock } from "@/lib/types/achievements";
+import { leagueName } from "@/lib/leagues/tiers";
 
 /**
  * Presentation only (plan §3.4): names, icons and copy. Thresholds and what
@@ -22,6 +23,8 @@ export interface TrackInfo {
   format: (value: number) => string;
   /** How much is left to a threshold; defaults to `format`. */
   formatToGo?: (remaining: number) => string;
+  /** "9 days of 14 days" by default — how far the value is toward a threshold. */
+  describeProgress?: (value: number, threshold: number) => string;
 }
 
 export const TRACKS: Record<AchievementTrackId, TrackInfo> = {
@@ -66,8 +69,10 @@ export const TRACKS: Record<AchievementTrackId, TrackInfo> = {
     name: "League",
     icon: Trophy,
     metricLabel: "Highest league",
-    description: "The highest weekly league you've reached.",
-    format: (n) => String(n),
+    description: "The highest weekly league you've played in or moved up to.",
+    format: (n) => `${leagueName(n)} league`,
+    formatToGo: (n) => `${n} ${n === 1 ? "promotion" : "promotions"}`,
+    describeProgress: (value, threshold) => `${leagueName(value)} league now, ${leagueName(threshold)} league needed`,
   },
 };
 

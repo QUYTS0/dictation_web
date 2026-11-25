@@ -44,7 +44,8 @@ export function AchievementsCase({ tracks }: { tracks: AchievementTrack[] }) {
           const Icon = info.icon;
           const { current, next, pct } = trackStatus(t);
           const tierLabel = current ? TIER_NAMES[current.tier] : "Locked";
-          const progress = next ? `${info.format(t.value)} of ${info.format(next.threshold)} for ${TIER_NAMES[next.tier]}` : "every tier unlocked";
+          const toward = next ? (info.describeProgress ? info.describeProgress(t.value, next.threshold) : `${info.format(t.value)} of ${info.format(next.threshold)}`) : null;
+          const progress = next ? `${toward} for ${TIER_NAMES[next.tier]}` : "every tier unlocked";
           return (
             <li key={t.track}>
               <button
