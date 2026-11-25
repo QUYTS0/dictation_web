@@ -118,6 +118,31 @@ export interface DashboardSummary {
   recentVocabulary: Array<{ id: string; term: string; sentence_context: string; created_at: string }>;
 }
 
+/** One local calendar day of GET /api/dashboard/week. */
+export interface DashboardWeekDay {
+  /** YYYY-MM-DD in the viewer's timezone. */
+  date: string;
+  /** Any practice that day — the SAME day set as the streak (incl. word reviews). */
+  practiced: boolean;
+  /** Engaged seconds that day (fn_daily_activity, migration 047): the same
+   *  union rule as "Est. active practice". Word reviews carry no time. */
+  activeSec: number;
+}
+
+/** GET /api/dashboard/week: the hero's weekly track and Today's target, and
+ *  the 7-day bars. */
+export interface DashboardWeek {
+  timeZone: string;
+  today: string;
+  /** The Monday of the viewer's local week. */
+  weekStart: string;
+  /** Rolling, oldest first, ending with `today` (WEEK_ROLLING_DAYS days). */
+  days: DashboardWeekDay[];
+  goalMinutes: number;
+  /** No goal saved yet: `goalMinutes` is the app default. */
+  goalIsDefault: boolean;
+}
+
 /** GET /api/dashboard/mistake-example: the latest recorded mistake of one type. */
 export interface DashboardMistakeExample {
   attemptId: string;

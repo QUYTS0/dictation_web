@@ -51,13 +51,15 @@ export async function submitVocabularyReview(itemId: string, grade: ReviewGrade)
 
 /**
  * After a confirmed grade: the Vocabulary Bank and its counts, and — since
- * a review is a practice day (046) — the streak (header pill, footer) and
- * the Dashboard summary. The review queue itself is left alone (see above).
+ * a review is a practice day (046) — the streak (header pill, footer), the
+ * Dashboard summary and its weekly track (today's ✓). The review queue
+ * itself is left alone (see above).
  */
 export function invalidateAfterVocabularyReview(queryClient: QueryClient, userId: string | undefined) {
   invalidateVocabularyQueries(queryClient, userId);
   void queryClient.invalidateQueries({ queryKey: streakKeys.streak(userId) });
   void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.week(userId) });
 }
 
 async function fetchVocabularyItems(): Promise<VocabularyItem[]> {

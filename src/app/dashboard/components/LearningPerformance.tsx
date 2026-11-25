@@ -1,8 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import { BarChart3, Clock, Mic2, Target } from "lucide-react";
+import clsx from "clsx";
 import { formatAggregateScore } from "@/lib/practice/scoreFormat";
 import { formatDurationSeconds } from "@/lib/utils/time";
-import type { DashboardSummary } from "@/lib/types/learning";
+import { formatDayKey, formatDayMinutesLong, lastSevenDays } from "@/lib/dashboard/week";
+import type { DashboardSummary, DashboardWeek } from "@/lib/types/learning";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const clampPct = (pct: number) => Math.min(100, Math.max(0, pct));
@@ -23,9 +25,11 @@ interface Metric {
  * "Learning performance" — the three canonical outcome metrics, each its own
  * card and its own number (§6.8: never recomputed or blended here), plus the
  * non-zero video counts as one line. Descriptive only: no rankings, trends
- * or praise labels. Phase 4 adds the 7-day minute bars to the first card.
+ * or praise labels. The first card adds the last 7 local days' active time
+ * as bars (today highlighted) when the week is available — the same union
+ * rule as its total, per day.
  */
-export function LearningPerformance({ summary }: { summary: DashboardSummary }) {
+export function LearningPerformance({ summary, week }: { summary: DashboardSummary; week?: DashboardWeek }) {
   const { activeTime, sentenceAccuracy: acc, shadowing } = summary;
   const azure = shadowing.azure;
   const accuracyPct = acc.practiced > 0 ? Math.round((100 * acc.correct) / acc.practiced) : null;
@@ -102,6 +106,7 @@ export function LearningPerformance({ summary }: { summary: DashboardSummary }) 
                   {videos.join(" · ")}
                 </dd>
               )}
+              {m.key === "active" && week && <SevenDayBars week={week} />}
               {m.bar && (
                 <dd className="mt-auto h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden="true">
                   <div className={`h-full rounded-full ${m.bar.className}`} style={{ width: `${clampPct(m.bar.pct)}%` }} />
@@ -112,5 +117,27 @@ export function LearningPerformance({ summary }: { summary: DashboardSummary }) 
         })}
       </dl>
     </section>
+  );
+}
+
+/** The last 7 local days of active time, oldest first, today highlighted. */
+function SevenDayBars({ week }: { week: DashboardWeek }) {
+  const days = lastSevenDays(week);
+  const max = Math.max(...days.map((d) => d.activeSec), 0);
+  const label = `Active practice, last 7 days: ${days.map((d) => `${formatDayKey(d.date)} ${formatDayMinutesLong(d.activeSec)}`).join("; ")}`;
+  return (
+    <dd data-testid="progress-week-bars" className="mt-auto pt-1">
+      <div role="img" aria-label={label} className="flex h-8 items-end gap-1">
+        {days.map((d, i) => (
+          <div
+            key={d.date}
+            title={`${formatDayKey(d.date)}: ${formatDayMinutesLong(d.activeSec)}`}
+            className={clsx("flex-1 rounded-xs", d.activeSec <= 0 ? "bg-line" : i === days.length - 1 ? "bg-primary-600" : "bg-primary-600/25")}
+            style={{ height: d.activeSec > 0 && max > 0 ? `${Math.max(12, (100 * d.activeSec) / max)}%` : "2px" }}
+          />
+        ))}
+      </div>
+      <p className="mt-1.5 text-[11px] font-medium text-muted">Last 7 days</p>
+    </dd>
   );
 }

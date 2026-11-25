@@ -20,7 +20,7 @@ import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
 import { VocabularyDeck } from "./components/VocabularyDeck";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
-import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
+import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery, useDashboardWeekQuery } from "@/lib/queries/dashboard";
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
 
 const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -39,7 +39,8 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
 /**
  * The learner's home (.claude/dashboard-redesign-plan.md). It answers, in
  * this order:
- *   0. How am I doing today?     — the hero: welcome + streak status, and
+ *   0. How am I doing today?     — the hero: welcome, streak status, this
+ *                                  week's track, Today's target, and
  *                                  "Start today's practice" (a NEW video)
  *   1. What should I continue?   — "Pick up where you left off" (ONE item)
  *   2. What should I do next?    — "Next up" (the Focus decision)
@@ -64,6 +65,7 @@ function DashboardContent() {
 
   const summaryQuery = useDashboardSummaryQuery(userId);
   const summary = summaryQuery.data;
+  const weekQuery = useDashboardWeekQuery(userId);
   const continueQuery = useContinueLearningQuery(userId);
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
@@ -188,6 +190,8 @@ function DashboardContent() {
                 <DashboardHero
                   name={name}
                   summary={summary}
+                  week={weekQuery.data}
+                  weekPending={weekQuery.isPending}
                   addOpen={addOpen}
                   onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo("toggle"))}
                   addToggleRef={addToggleRef}
@@ -218,7 +222,7 @@ function DashboardContent() {
               {summaryQuery.isError && !summary ? (
                 <p className="text-sm text-red-600">Failed to load your progress. Please refresh and try again.</p>
               ) : summary ? (
-                <LearningPerformance summary={summary} />
+                <LearningPerformance summary={summary} week={weekQuery.data} />
               ) : (
                 <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-2xl border border-line bg-white" />
               )}

@@ -24,6 +24,7 @@ export function invalidateLearningViews(
   opts: { roundIds?: Array<string | null | undefined>; mistakes?: boolean } = {}
 ): void {
   void qc.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
+  void qc.invalidateQueries({ queryKey: dashboardKeys.week(userId) });
   void qc.invalidateQueries({ queryKey: videoLibraryKeys.allForUser(userId) });
   void qc.invalidateQueries({ queryKey: historySessionsKeys.allForUser(userId) });
   for (const roundId of opts.roundIds ?? []) {

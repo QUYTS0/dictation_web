@@ -41,10 +41,27 @@ export function localDayKey(instant: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(instant);
 }
 
+/** The calendar date `days` after (negative: before) a YYYY-MM-DD key —
+ *  pure date arithmetic, so no DST day can be skipped or repeated. */
+export function addDaysToKey(dayKey: string, days: number): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 /** The calendar date before a YYYY-MM-DD key (pure date arithmetic). */
 export function previousDayKey(dayKey: string): string {
+  return addDaysToKey(dayKey, -1);
+}
+
+/** 0 = Monday … 6 = Sunday for a YYYY-MM-DD key. */
+export function weekdayIndexMonday0(dayKey: string): number {
   const [y, m, d] = dayKey.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+  return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+}
+
+/** The Monday of the (Monday–Sunday) week a YYYY-MM-DD key falls in. */
+export function mondayOfKey(dayKey: string): string {
+  return addDaysToKey(dayKey, -weekdayIndexMonday0(dayKey));
 }
 
 /**

@@ -1,7 +1,8 @@
 # Dashboard redesign runbook — migrations 046+
 
-**Status:** `046` implemented and verified locally (route/component tests and real PostgreSQL on a
-disposable local server). **Nothing here is applied to the Supabase project or deployed.**
+**Status:** `046` and `047` implemented and verified locally (route/component tests and real
+PostgreSQL on a disposable local server). **Nothing here is applied to the Supabase project or
+deployed.** Apply them in order: `046`, then `047`.
 Plan: `.claude/dashboard-redesign-plan.md`. Later phases (`047` profile + daily activity, `048` XP,
 `049` achievements, `050` leagues) add their own sections here.
 
@@ -58,4 +59,63 @@ previous app version first (its review route writes `vocabulary_items` directly)
 npm install --no-save embedded-postgres@17.9.0-beta.17
 node scripts/localdb/start-embedded-postgres.mjs
 LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/vocabulary-review-log
+```
+
+## 047 — Profile preferences and active time per local day (Phase 4)
+
+### What ships
+
+| Area | What the learner gets | Source |
+|---|---|---|
+| Weekly consistency track | Mon–Sun of the viewer's local week in the hero: ✓ on days with any practice (the streak's own day set, word reviews included), the ember on today, active minutes under each day, and a details popover (date · minutes · Active) on practiced days. | `GET /api/dashboard/week` → `fn_activity_days` + `fn_daily_activity` |
+| Today's target | Today's active minutes against the daily goal, teal with "Goal met today ✓" once reached. | same route |
+| 7-day bars | The last 7 local days of active time under "Est. active practice". | same route |
+| Daily goal | 10 / 15 / 20 / 30 / 45 / 60 min, saved to the account (default 15). Set in **Profile & preferences** (account menu, or the slider icon next to Today's target). | `users.daily_goal_minutes`, `GET/PATCH /api/profile` |
+| Phase 7 groundwork | `users.public_name`, `users.leaderboard_hidden` and the generated nickname exist but nothing shows them yet. | `fn_my_profile`, `fn_update_my_profile` |
+
+Minutes per day use the same rule as "Est. active practice" (the union of engaged intervals, two
+tabs counted once), cut at each local midnight, so the days of a range add up to that total. A
+day with only word reviews gets its ✓ but 0 minutes: reviews aren't timed.
+
+### Deploy order
+
+1. **Apply `047`** (after `046`). It is idempotent; re-running it keeps every saved preference.
+2. **Then deploy the app.** If the app is deployed first, `/api/dashboard/week` and `/api/profile`
+   answer `503 learning_data_unavailable`: the hero leaves out the track and Today's target, the
+   7-day bars are left out, and Profile & preferences says it isn't available. Nothing else is
+   affected.
+
+### Verify after applying
+
+```sql
+-- The three columns and their checks:
+select column_name, data_type, is_nullable, column_default from information_schema.columns
+ where table_name = 'users' and column_name in ('daily_goal_minutes', 'public_name', 'leaderboard_hidden');
+select conname from pg_constraint where conrelid = 'users'::regclass and conname like 'users_%_check';
+-- users_daily_goal_minutes_check, users_public_name_check
+
+-- Grants: authenticated may execute the three reads/writes; the nickname helper is internal.
+select has_function_privilege('authenticated', 'fn_my_profile()', 'execute');                       -- true
+select has_function_privilege('authenticated', 'fn_update_my_profile(jsonb)', 'execute');          -- true
+select has_function_privilege('authenticated', 'fn_daily_activity(text,date,date)', 'execute');    -- true
+select has_function_privilege('anon',          'fn_daily_activity(text,date,date)', 'execute');    -- false
+select has_function_privilege('authenticated', 'fn_public_nickname(uuid)', 'execute');             -- false
+```
+
+Then open the Dashboard: the hero shows the weekly track and Today's target. Change the goal in
+Profile & preferences and check it stuck:
+`select daily_goal_minutes from users where id = '<your user id>';`
+
+### Rollback
+
+Deploy the previous app version first, then
+`drop function fn_daily_activity(text, date, date); drop function fn_update_my_profile(jsonb); drop function fn_my_profile(); drop function fn_public_nickname(uuid);`.
+Keep the columns: dropping them loses saved goals, and later phases (leagues) read the other two.
+
+### Local verification
+
+Same server as 046, then:
+
+```
+LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/profile-daily-activity
 ```

@@ -1,9 +1,12 @@
 "use client";
 
-import type { ReactNode, Ref } from "react";
+import { useRef, useState, type ReactNode, type Ref } from "react";
 import { Play } from "lucide-react";
-import type { DashboardSummary } from "@/lib/types/learning";
+import { ProfileDialog } from "@/components/ProfileDialog";
+import type { DashboardSummary, DashboardWeek } from "@/lib/types/learning";
 import { StreakStatusLine } from "./StreakStatusLine";
+import { TodayTarget } from "./TodayTarget";
+import { WeeklyTrack } from "./WeeklyTrack";
 
 /** The navy hero surface (reference "Approved DictaLearn" hero). */
 export const HERO_SURFACE_STYLE = {
@@ -15,6 +18,10 @@ export const HERO_SURFACE_STYLE = {
 interface DashboardHeroProps {
   name: string;
   summary: DashboardSummary | undefined;
+  /** The viewer's local days (track + target); undefined while loading or
+   *  unavailable — `weekPending` tells which. */
+  week: DashboardWeek | undefined;
+  weekPending: boolean;
   addOpen: boolean;
   onToggleAdd: () => void;
   addToggleRef: Ref<HTMLButtonElement>;
@@ -23,12 +30,18 @@ interface DashboardHeroProps {
 }
 
 /**
- * The returning learner's hero (plan §1, §4.5.1–2): welcome + streak status
- * on the left; on the right, today's panel. Phase 4 adds the weekly track and
- * today's target, Phase 5 the level bar. "Start today's practice" starts a
- * NEW video (an inline link box); resuming belongs to the Continue card.
+ * The returning learner's hero (plan §1, §4.5.1–2, §4.5.5): welcome, streak
+ * status and the weekly consistency track on the left; on the right, today's
+ * panel — Today's target, then "Start today's practice" (Phase 5 adds the
+ * level bar between them). The button starts a NEW video (an inline link
+ * box); resuming belongs to the Continue card. If the week can't be loaded
+ * (e.g. migration 047 not applied yet), the track and target are left out —
+ * never shown as zeros.
  */
-export function DashboardHero({ name, summary, addOpen, onToggleAdd, addToggleRef, addPanel }: DashboardHeroProps) {
+export function DashboardHero({ name, summary, week, weekPending, addOpen, onToggleAdd, addToggleRef, addPanel }: DashboardHeroProps) {
+  const [goalOpen, setGoalOpen] = useState(false);
+  const changeGoalRef = useRef<HTMLButtonElement>(null);
+
   return (
     <section
       data-testid="dashboard-welcome"
@@ -42,9 +55,19 @@ export function DashboardHero({ name, summary, addOpen, onToggleAdd, addToggleRe
             Welcome back, {name}
           </h1>
           <StreakStatusLine summary={summary} />
+          {week ? (
+            <WeeklyTrack week={week} />
+          ) : weekPending ? (
+            <div aria-hidden="true" data-testid="weekly-track-pending" className="h-[92px] max-w-lg animate-pulse rounded-lg bg-white/[0.04]" />
+          ) : null}
         </div>
 
         <div className="min-w-0 space-y-4 rounded-xl border border-white/10 bg-white/[0.04] p-5 lg:col-span-5">
+          {week ? (
+            <TodayTarget week={week} onChangeGoal={() => setGoalOpen(true)} changeGoalRef={changeGoalRef} />
+          ) : weekPending ? (
+            <div aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-white/[0.04]" />
+          ) : null}
           <button
             ref={addToggleRef}
             type="button"
@@ -59,6 +82,7 @@ export function DashboardHero({ name, summary, addOpen, onToggleAdd, addToggleRe
           {addOpen && addPanel}
         </div>
       </div>
+      {goalOpen && <ProfileDialog onClose={() => setGoalOpen(false)} returnFocusRef={changeGoalRef} />}
     </section>
   );
 }

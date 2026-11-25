@@ -2,15 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/auth";
+import { ProfileDialog } from "@/components/ProfileDialog";
 
 /**
- * Shows a "Sign in" button for guests, or a compact user avatar / email +
- * sign-out dropdown for authenticated users.
+ * Shows a "Sign in" button for guests, or a compact user avatar with a
+ * dropdown (email, "Profile & preferences", sign out) for signed-in users.
  */
 export default function UserButton() {
   const { user, loading, signOut, openAuthModal } = useAuth();
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const avatarButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -57,6 +60,7 @@ export default function UserButton() {
     <div className="flex items-center gap-2">
       <div className="relative" ref={containerRef}>
         <button
+          ref={avatarButtonRef}
           type="button"
           onClick={() => setOpen((prev) => !prev)}
           aria-haspopup="menu"
@@ -95,6 +99,16 @@ export default function UserButton() {
               role="menuitem"
               onClick={() => {
                 setOpen(false);
+                setProfileOpen(true);
+              }}
+              className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              Profile &amp; preferences
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
                 signOut();
               }}
               className="block w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
@@ -104,6 +118,8 @@ export default function UserButton() {
           </div>
         )}
       </div>
+      {/* The menu item that opened it is gone by then: focus returns to the avatar. */}
+      {profileOpen && <ProfileDialog onClose={() => setProfileOpen(false)} returnFocusRef={avatarButtonRef} />}
     </div>
   );
 }

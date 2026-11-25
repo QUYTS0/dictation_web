@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { ErrorType } from "@/lib/types";
-import type { DashboardMistakeExample, DashboardSummary } from "@/lib/types/learning";
+import type { DashboardMistakeExample, DashboardSummary, DashboardWeek } from "@/lib/types/learning";
 import { viewerTimeZone } from "@/lib/utils/streak";
 
 export type { DashboardSummary };
@@ -17,6 +17,7 @@ export const dashboardKeys = {
   errorPatterns: (userId: string | undefined) => ["dashboard-error-patterns", userId] as const,
   mistakeExamples: (userId: string | undefined) => ["dashboard-mistake-example", userId] as const,
   mistakeExample: (userId: string | undefined, errorType: ErrorType | null) => ["dashboard-mistake-example", userId, errorType] as const,
+  week: (userId: string | undefined) => ["dashboard-week", userId] as const,
 };
 
 /** The latest recorded mistake of the selected type (diagnostics panel). */
@@ -62,6 +63,27 @@ export function useDashboardSummaryQuery(userId: string | undefined) {
   return useQuery({
     queryKey: dashboardKeys.summary(userId),
     queryFn: fetchDashboardSummary,
+    enabled: !!userId,
+  });
+}
+
+/**
+ * The viewer's local days — the weekly track, Today's target and the 7-day
+ * bars. Its own read, so a missing migration 047 (503) hides only those.
+ */
+export function useDashboardWeekQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: dashboardKeys.week(userId),
+    queryFn: async (): Promise<DashboardWeek> => {
+      const res = await fetch(`/api/dashboard/week${streakQueryString()}`);
+      if (!res.ok) throw new Error("Failed to fetch this week");
+      const data = (await res.json()) as Partial<DashboardWeek> | null;
+      // An unexpected body hides the track and target (an error), never a crash.
+      if (!data || !Array.isArray(data.days) || typeof data.today !== "string" || typeof data.weekStart !== "string" || typeof data.goalMinutes !== "number") {
+        throw new Error("Unexpected week response");
+      }
+      return data as DashboardWeek;
+    },
     enabled: !!userId,
   });
 }

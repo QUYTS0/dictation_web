@@ -28,20 +28,36 @@ export function viewerTimeZoneFrom(url: string): string {
 }
 
 /**
+ * The practice days (YYYY-MM-DD) fn_activity_days returns: local dates per
+ * activity batch and per word review, UTC for history. The ONE day set
+ * behind the streak AND the Dashboard's weekly track ✓ marks.
+ */
+export async function loadActivityDays(
+  supabase: SupabaseClient
+): Promise<{ ok: true; days: string[]; utcFallbackDays: Set<string> } | { ok: false; response: NextResponse }> {
+  const { data, error } = await supabase.rpc("fn_activity_days");
+  if (error) return { ok: false, response: mapLearningReadError(error, "activity-days") };
+  const result = (data ?? {}) as { days?: string[]; utcFallbackDays?: string[] };
+  return {
+    ok: true,
+    days: Array.isArray(result.days) ? result.days : [],
+    utcFallbackDays: new Set(Array.isArray(result.utcFallbackDays) ? result.utcFallbackDays : []),
+  };
+}
+
+/**
  * The ONE streak source shared by the Dashboard and the practice header:
- * the activity dates fn_activity_days returns (local dates per activity
- * batch, UTC for history), counted back from the viewer's local today.
+ * the practice days (loadActivityDays) counted back from the viewer's local
+ * today.
  */
 export async function loadActivityStreak(
   supabase: SupabaseClient,
   timeZone: string,
   now: Date = new Date()
 ): Promise<{ ok: true; streak: ActivityStreak } | { ok: false; response: NextResponse }> {
-  const { data, error } = await supabase.rpc("fn_activity_days");
-  if (error) return { ok: false, response: mapLearningReadError(error, "activity-days") };
-  const result = (data ?? {}) as { days?: string[]; utcFallbackDays?: string[] };
-  const days = Array.isArray(result.days) ? result.days : [];
-  const fallback = new Set(Array.isArray(result.utcFallbackDays) ? result.utcFallbackDays : []);
+  const loaded = await loadActivityDays(supabase);
+  if (!loaded.ok) return loaded;
+  const { days, utcFallbackDays: fallback } = loaded;
   const today = localDayKey(now, timeZone);
   return {
     ok: true,
