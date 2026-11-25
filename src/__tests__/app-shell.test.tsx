@@ -98,12 +98,12 @@ describe("AppHeader (signed in)", () => {
     expect(calls.some((c) => c.includes("/api/streak") || c.includes("/api/xp"))).toBe(false);
   });
 
-  it("Phase 5: the XP pill reads '4,850 XP · Lvl 10', from lg up only", async () => {
+  it("Phase 5: the XP pill reads '4,850 XP · Lvl 10', from xl up only (no room in the one-row header below)", async () => {
     renderWithClient(<AppHeader active="dashboard" />);
     const pill = await screen.findByTestId("header-xp");
     expect(pill).toHaveAccessibleName("4,850 XP, level 10");
     expect(pill).toHaveTextContent("4,850 XP · Lvl 10");
-    expect(pill).toHaveClass("hidden", "lg:flex");
+    expect(pill).toHaveClass("hidden", "xl:flex");
   });
 
   it("Phase 5: XP unavailable (048 not applied) → no XP pill, the rest of the header unchanged", async () => {

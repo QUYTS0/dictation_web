@@ -240,7 +240,7 @@ function DashboardContent() {
               {(continueSlot || focusShown) && (
                 <div
                   data-testid="dashboard-actions"
-                  className={clsx("grid items-start gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
+                  className={clsx("grid grid-cols-1 items-start gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
                 >
                   {continueSlot && <div className={clsx("min-w-0", focusShown && "lg:col-span-8")}>{continueSlot}</div>}
                   {focusShown && (
@@ -253,7 +253,7 @@ function DashboardContent() {
 
               {/* 3. The review deck (≈ 2/3) and the league card (≈ 1/3); the deck takes
                   the row alone when the league is unavailable and adapts to its own width. */}
-              <div data-testid="dashboard-deck-row" className={clsx("grid items-stretch gap-4 sm:gap-5", leagueSlot && "lg:grid-cols-12")}>
+              <div data-testid="dashboard-deck-row" className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueSlot && "lg:grid-cols-12")}>
                 <div className={clsx("min-w-0", leagueSlot && "lg:col-span-8")}>
                   <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
                 </div>
@@ -271,7 +271,7 @@ function DashboardContent() {
 
               {/* 5. Error diagnostics (≈ 2/3) and achievements (≈ 1/3); diagnostics take
                   the row alone when achievements are unavailable. */}
-              <div data-testid="dashboard-diagnostics-row" className={clsx("grid items-start gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
+              <div data-testid="dashboard-diagnostics-row" className={clsx("grid grid-cols-1 items-start gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
                 <div className={clsx("min-w-0", achievementsSlot && "lg:col-span-8")}>
                   <NeedsAttentionCard userId={userId} patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
                 </div>

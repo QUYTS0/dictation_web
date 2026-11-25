@@ -14,7 +14,8 @@ function Avatar({ initials, isYou }: { initials: string; isYou: boolean }) {
     <span
       aria-hidden="true"
       className={clsx(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
+        // Below 360px the name needs the room; rank and name still identify the row.
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold max-[359px]:hidden",
         isYou ? "bg-primary-600 text-white" : "bg-surface text-ink ring-1 ring-line"
       )}
     >
@@ -89,7 +90,7 @@ export function LeagueWeekRows({ rows, userId, showZones = false }: { rows: Leag
               {r.isYou && <span className="ml-1 text-xs font-medium text-primary-600">(you)</span>}
               {showZones && ZONE_LABEL[r.zone] && <span className="sr-only">, {ZONE_LABEL[r.zone]}</span>}
             </span>
-            <span className="flex items-center gap-1 text-[11px] text-muted">
+            <span className="flex items-center gap-1 whitespace-nowrap text-[11px] text-muted">
               <Flame size={11} aria-hidden="true" className={clsx(r.streakDays > 0 ? "text-reward" : "text-muted")} />
               {r.streakDays} {r.streakDays === 1 ? "day" : "days"}
             </span>

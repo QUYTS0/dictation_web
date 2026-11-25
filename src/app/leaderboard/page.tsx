@@ -91,7 +91,7 @@ export default function LeaderboardPage() {
         ) : !board ? (
           <div aria-busy="true" aria-label="Loading the leaderboard" className="min-h-[320px] animate-pulse rounded-2xl border border-line bg-white" />
         ) : (
-          <div className="grid items-start gap-5 lg:grid-cols-12">
+          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
             <section aria-labelledby="week-heading" className={clsx(card, "lg:col-span-8")}>
               <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
                 <h2 id="week-heading" className="text-sm font-bold text-ink">

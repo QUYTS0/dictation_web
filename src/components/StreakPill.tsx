@@ -12,13 +12,17 @@ const dayLabel = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
 
 /**
  * The header's streak pill: consecutive local days with practice in any
- * mode. Opens a short explanation on hover, focus-click or tap; Escape or a
- * click outside closes it. The popover adds today's goal status and the
+ * mode. Hovering shows a short explanation; a click or tap keeps it open;
+ * Escape, a second click or a click outside closes it. The popover adds today's goal status and the
  * next streak milestone (the Flame Keeper thresholds, migration 049) —
  * loaded only once it's opened, and left out while unavailable.
  */
 export function StreakPill({ streakDays, userId }: { streakDays: number; userId?: string }) {
-  const [open, setOpen] = useState(false);
+  // "hover" closes when the pointer leaves; "pinned" (click/tap) stays open.
+  // A phone tap fires mouseenter and then click: with a plain toggle the
+  // click closed what the mouseenter had just opened, so a tap did nothing.
+  const [state, setState] = useState<"closed" | "hover" | "pinned">("closed");
+  const open = state !== "closed";
   // Fetched while open; a closed (disabled) query keeps its cached data.
   const week = useDashboardWeekQuery(userId, open).data;
   const flame = useAchievementsQuery(userId, open).data?.tracks.find((t) => t.track === "flame_keeper");
@@ -28,10 +32,10 @@ export function StreakPill({ streakDays, userId }: { streakDays: number; userId?
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (e: PointerEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!containerRef.current?.contains(e.target as Node)) setState("closed");
     };
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") setState("closed");
     };
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleEscape);
@@ -46,11 +50,16 @@ export function StreakPill({ streakDays, userId }: { streakDays: number; userId?
   const milestone = flame ? nextStreakMilestone(streakDays, flame) : undefined;
 
   return (
-    <div ref={containerRef} className="relative shrink-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <div
+      ref={containerRef}
+      className="relative shrink-0"
+      onMouseEnter={() => setState((s) => (s === "closed" ? "hover" : s))}
+      onMouseLeave={() => setState((s) => (s === "hover" ? "closed" : s))}
+    >
       <button
         type="button"
         data-testid="header-streak"
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => setState((s) => (s === "pinned" ? "closed" : "pinned"))}
         aria-expanded={open}
         aria-controls={popoverId}
         aria-label={`Daily streak: ${dayLabel(streakDays)}`}

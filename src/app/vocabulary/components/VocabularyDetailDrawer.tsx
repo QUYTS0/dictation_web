@@ -211,9 +211,9 @@ export function VocabularyDetailDrawer({
         role="dialog"
         aria-modal={isDesktop ? "false" : "true"}
         aria-label="Vocabulary details"
-        className="app-scrollbar fixed inset-0 z-[75] flex flex-col overflow-y-auto border border-white/60 bg-white/95 shadow-2xl backdrop-blur-xl sm:inset-6 sm:rounded-3xl lg:absolute lg:left-auto lg:right-4 lg:top-4 lg:bottom-4 lg:w-[420px] lg:max-w-[calc(100%-2rem)] lg:rounded-3xl xl:static xl:inset-auto xl:h-full xl:w-auto xl:max-w-none xl:min-h-0"
+        className="app-scrollbar fixed inset-0 z-[75] flex flex-col overflow-y-auto border border-line bg-white/95 shadow-2xl backdrop-blur-xl sm:inset-6 sm:rounded-2xl lg:absolute lg:left-auto lg:right-4 lg:top-4 lg:bottom-4 lg:w-[420px] lg:max-w-[calc(100%-2rem)] lg:rounded-2xl xl:static xl:inset-auto xl:h-full xl:w-auto xl:max-w-none xl:min-h-0"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-white/40 p-5">
+        <div className="flex items-start justify-between gap-3 border-b border-line p-5">
           <div className="flex min-w-0 items-start gap-3">
             {item.image_thumbnail_url && (
               // eslint-disable-next-line @next/next/no-img-element
@@ -224,10 +224,10 @@ export function VocabularyDetailDrawer({
               />
             )}
             <div className="min-w-0">
-              <h2 className="text-2xl font-bold text-slate-900">{displayTerm}</h2>
+              <h2 className="text-2xl font-bold text-ink">{displayTerm}</h2>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <VocabularyPronunciationButton item={item} />
-                {item.phonetic && <span className="text-xs text-slate-500">{item.phonetic}</span>}
+                {item.phonetic && <span className="text-xs text-muted">{item.phonetic}</span>}
                 {item.part_of_speech && (
                   <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-700">
                     {item.part_of_speech}
@@ -240,9 +240,9 @@ export function VocabularyDetailDrawer({
             type="button"
             onClick={onClose}
             aria-label="Close vocabulary details"
-            className="shrink-0 rounded-xl border border-white/60 bg-white/50 p-2 transition-colors hover:bg-white/80"
+            className="shrink-0 rounded-xl border border-line bg-white p-2 transition-colors hover:bg-surface"
           >
-            <X size={16} className="text-slate-500" />
+            <X size={16} className="text-muted" />
           </button>
         </div>
 
@@ -271,33 +271,33 @@ export function VocabularyDetailDrawer({
           ) : (
             <div className="flex flex-col gap-4">
               {item.translation ? (
-                <p className="text-lg font-medium leading-relaxed text-slate-700">{item.translation}</p>
+                <p className="text-lg font-medium leading-relaxed text-ink">{item.translation}</p>
               ) : null}
 
               {item.definition ? (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Definition</p>
-                  <p className="text-sm leading-relaxed text-slate-600">{item.definition}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted">Definition</p>
+                  <p className="text-sm leading-relaxed text-muted">{item.definition}</p>
                 </div>
               ) : null}
 
               {item.learning_pattern ? (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Pattern</p>
-                  <p className="text-sm leading-relaxed text-slate-600">{item.learning_pattern}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-muted">Pattern</p>
+                  <p className="text-sm leading-relaxed text-muted">{item.learning_pattern}</p>
                 </div>
               ) : null}
 
               {item.note ? (
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-500">📝 {item.note}</p>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">📝 {item.note}</p>
               ) : null}
 
               {canonicalFormDiffersFromSurface(item.canonical_form, item.term) && (
-                <p className="text-xs text-slate-400">In this sentence: {item.term}</p>
+                <p className="text-xs text-muted">In this sentence: {item.term}</p>
               )}
 
-              <div className="rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
-                <p className="text-sm italic leading-relaxed text-slate-500">&quot;{item.sentence_context}&quot;</p>
+              <div className="rounded-xl border border-line bg-surface p-3">
+                <p className="text-sm italic leading-relaxed text-muted">&quot;{item.sentence_context}&quot;</p>
               </div>
 
               {/* Review-timing status. A future "Mastery" concept (New/
@@ -306,12 +306,12 @@ export function VocabularyDetailDrawer({
                   could be Mastered *and* Due at once, so any future mastery
                   display belongs in its own sibling `border-t pt-4` section
                   below this one, never merged into it or into `status`. */}
-              <div className="flex items-center justify-between border-t border-white/40 pt-4">
+              <div className="flex items-center justify-between border-t border-line pt-4">
                 <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Status</p>
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted">Status</p>
                   <VocabularyStatusBadge item={item} />
                 </div>
-                <div className="text-right text-xs text-slate-400">
+                <div className="text-right text-xs text-muted">
                   {lastReviewed && <p>Last reviewed {lastReviewed}</p>}
                   {status === "new" && <p>Not reviewed yet</p>}
                   {status === "learning" && nextReview && <p>Next review {nextReview}</p>}
@@ -330,11 +330,11 @@ export function VocabularyDetailDrawer({
         </div>
 
         {mode === "view" && (
-          <div className="flex items-center gap-2 border-t border-white/40 p-5">
+          <div className="flex items-center gap-2 border-t border-line p-5">
             <button
               type="button"
               onClick={onEdit}
-              className="flex items-center gap-1.5 rounded-xl border border-white/60 bg-white/50 px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-white/80"
+              className="flex items-center gap-1.5 rounded-xl border border-line bg-white px-3 py-2 text-sm font-semibold text-muted transition-colors hover:bg-surface"
             >
               <Pencil size={14} />
               Edit
@@ -343,7 +343,7 @@ export function VocabularyDetailDrawer({
               type="button"
               onClick={onRequestDelete}
               disabled={isDeleting}
-              className="flex items-center gap-1.5 rounded-xl border border-white/60 bg-white/50 px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-red-50 disabled:opacity-40"
+              className="flex items-center gap-1.5 rounded-xl border border-line bg-white px-3 py-2 text-sm font-semibold text-muted transition-colors hover:bg-red-50 disabled:opacity-40"
             >
               <Trash2 size={14} />
               {isDeleting ? "Removing…" : "Delete"}

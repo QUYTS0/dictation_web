@@ -52,7 +52,7 @@ export function VocabularyCard({
       data-testid="vocab-card"
       data-item-id={item.id}
       className={clsx(
-        "group relative flex w-full max-w-[360px] flex-col gap-2 rounded-3xl border border-white/60 bg-white/40 p-4 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1",
+        "group relative flex w-full max-w-[360px] flex-col gap-2 rounded-2xl border border-line bg-white p-4 shadow-xs transition-all hover:-translate-y-1",
         isSelected && "ring-2 ring-primary-500",
         isChecked && "bg-primary-50/60",
         (isDeleting || isUpdating) && "pointer-events-none opacity-50"
@@ -64,7 +64,7 @@ export function VocabularyCard({
         aria-expanded={isSelected}
         aria-controls="vocabulary-detail-drawer"
         aria-label={`Open details for ${displayTerm}`}
-        className="absolute inset-0 z-0 cursor-pointer rounded-3xl focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
+        className="absolute inset-0 z-0 cursor-pointer rounded-2xl focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2"
       />
 
       <div className="flex items-start justify-between gap-2">
@@ -75,7 +75,7 @@ export function VocabularyCard({
             disabled={!isChecked && atSelectionCap}
             onChange={() => onToggleSelect(item.id)}
             aria-label={`Select ${displayTerm}`}
-            className="relative z-10 h-4 w-4 shrink-0 cursor-pointer rounded border-slate-300 text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
+            className="relative z-10 h-4 w-4 shrink-0 cursor-pointer rounded border-line text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
           />
           {item.image_thumbnail_url && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -87,7 +87,7 @@ export function VocabularyCard({
           )}
           <h3
             title={displayTerm}
-            className="truncate text-lg font-bold text-slate-900 transition-colors group-hover:text-primary-600"
+            className="truncate text-lg font-bold text-ink transition-colors group-hover:text-primary-600"
           >
             {displayTerm}
           </h3>
@@ -100,15 +100,15 @@ export function VocabularyCard({
       <VocabularyPronunciationButton item={item} />
 
       {item.translation ? (
-        <p className="truncate text-sm font-medium text-slate-700">{item.translation}</p>
+        <p className="truncate text-sm font-medium text-ink">{item.translation}</p>
       ) : null}
 
       {canonicalFormDiffersFromSurface(item.canonical_form, item.term) && (
-        <p className="truncate text-xs text-slate-400">In this sentence: {item.term}</p>
+        <p className="truncate text-xs text-muted">In this sentence: {item.term}</p>
       )}
 
-      <div className="rounded-xl border border-white/40 bg-white/30 p-2.5 shadow-inner">
-        <p className="line-clamp-2 text-sm italic leading-relaxed text-slate-500">
+      <div className="rounded-xl border border-line bg-surface p-2.5">
+        <p className="line-clamp-2 text-sm italic leading-relaxed text-muted">
           &quot;{item.sentence_context}&quot;
         </p>
       </div>

@@ -33,10 +33,10 @@ function coverageText(progress: HistoryRound["progress"]): string {
 function SessionRow({ s }: { s: HistoryVideoSession }) {
   const practiced = s.dictationSentences + s.shadowingSentences > 0;
   return (
-    <li className="flex flex-col gap-1 rounded-xl border border-white/60 bg-white/50 p-3 text-xs text-slate-600" data-testid={`history-session-${s.studySessionId}`}>
+    <li className="flex flex-col gap-1 rounded-xl border border-line bg-white p-3 text-xs text-muted" data-testid={`history-session-${s.studySessionId}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1 font-semibold text-slate-700">
-          <Calendar size={12} className="text-slate-400" />
+        <span className="flex items-center gap-1 font-semibold text-ink">
+          <Calendar size={12} className="text-muted" />
           {new Date(s.startedAt).toLocaleString()}
         </span>
         {s.modesUsed.map((m) => (
@@ -45,7 +45,7 @@ function SessionRow({ s }: { s: HistoryVideoSession }) {
           </span>
         ))}
         <span title="Engaged time, estimated from your activity">Est. active {s.activeSec > 0 ? formatDurationSeconds(s.activeSec) : "—"}</span>
-        <span className="text-slate-400" title="First to last activity — not practice time">
+        <span className="text-muted" title="First to last activity — not practice time">
           · span {formatDurationSeconds(s.elapsedSpanSec)}
         </span>
       </div>
@@ -86,10 +86,10 @@ function SessionsSection({
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
   return (
     <details
-      className="rounded-2xl border border-white/60 bg-white/30 p-3"
+      className="rounded-2xl border border-line bg-surface p-3"
       onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
     >
-      <summary className="cursor-pointer select-none text-sm font-semibold text-slate-700">
+      <summary className="cursor-pointer select-none text-sm font-semibold text-ink">
         {title} ({count})
       </summary>
       {open && (
@@ -102,9 +102,9 @@ function SessionsSection({
               </button>
             </p>
           ) : !query.data ? (
-            <p className="text-xs text-slate-500">Loading…</p>
+            <p className="text-xs text-muted">Loading…</p>
           ) : items.length === 0 ? (
-            <p className="text-xs text-slate-500">No study sessions recorded.</p>
+            <p className="text-xs text-muted">No study sessions recorded.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {items.map((s) => (
@@ -117,7 +117,7 @@ function SessionsSection({
               type="button"
               onClick={() => query.fetchNextPage()}
               disabled={query.isFetchingNextPage}
-              className="self-start rounded-lg border border-white/60 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-white/80 disabled:opacity-50"
+              className="self-start rounded-lg border border-line bg-white px-3 py-1 text-xs font-semibold text-muted hover:bg-surface disabled:opacity-50"
             >
               {query.isFetchingNextPage ? "Loading…" : "More sessions"}
             </button>
@@ -141,9 +141,9 @@ function SelectedRoundReport({ userId, roundId }: { userId: string; roundId: str
       </p>
     );
   }
-  if (!report.data?.round) return <p className="text-xs text-slate-500">Loading the round report…</p>;
+  if (!report.data?.round) return <p className="text-xs text-muted">Loading the round report…</p>;
   return (
-    <div className="report-light-theme rounded-2xl border border-white/60 bg-white/60 p-4" data-testid={`history-round-report-${roundId}`}>
+    <div className="report-light-theme rounded-2xl border border-line bg-white p-4" data-testid={`history-round-report-${roundId}`}>
       <RoundReportPanel
         report={report.data.round}
         dictationEvidence={report.data.dictationEvidence}
@@ -155,7 +155,7 @@ function SelectedRoundReport({ userId, roundId }: { userId: string; roundId: str
           <>
             {/* The same next-step table as the completion view (links here: no writes from History). */}
             <RoundActions report={report.data.round} newerActiveRound={report.data.newerActiveRound ?? null} hideViewReport />
-            <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-white">
+            <Link href={`/results/${roundId}`} className="inline-flex items-center gap-1.5 rounded-xl border border-line px-3 py-2 text-xs font-semibold text-primary-600 hover:bg-surface">
               <FileText size={14} /> Review report
             </Link>
           </>
@@ -192,13 +192,13 @@ function VideoDetails({
       </p>
     );
   }
-  if (!data) return <p className="text-xs text-slate-500">Loading…</p>;
+  if (!data) return <p className="text-xs text-muted">Loading…</p>;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-white/50 pt-3">
+    <div className="flex flex-col gap-3 border-t border-line pt-3">
       {data.rounds.length > 1 && (
         <div className="flex flex-col gap-1.5">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Rounds</p>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-muted">Rounds</p>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Choose a round">
             {data.rounds.map((r) => (
               <button
@@ -208,25 +208,25 @@ function VideoDetails({
                 onClick={() => onPick(r.roundId)}
                 className={clsx(
                   "rounded-xl border px-3 py-1.5 text-left text-xs",
-                  r.roundId === selectedId ? "border-primary-400 bg-primary-50 text-primary-700" : "border-white/60 bg-white/50 text-slate-600 hover:bg-white/80"
+                  r.roundId === selectedId ? "border-primary-400 bg-primary-50 text-primary-700" : "border-line bg-white text-muted hover:bg-surface"
                 )}
               >
                 <span className="font-semibold">Round {r.roundNumber}</span> · {roundStatusLabel(r)} · {coverageText(r.progress)}
               </button>
             ))}
           </div>
-          {data.hasMore && <p className="text-[11px] text-slate-400">Showing the 50 most recent rounds.</p>}
+          {data.hasMore && <p className="text-[11px] text-muted">Showing the 50 most recent rounds.</p>}
         </div>
       )}
 
       {selected && (
         <>
-          <p className="text-sm font-semibold text-slate-800" data-testid="history-selected-round">
+          <p className="text-sm font-semibold text-ink" data-testid="history-selected-round">
             Round {selected.roundNumber} — {roundStatusLabel(selected)}
           </p>
           <SelectedRoundReport userId={userId} roundId={selected.roundId} />
           {(selected.unattributedAnswers > 0 || selected.unattributedTakes > 0) && (
-            <p className="text-xs text-slate-500" data-testid="history-unattributed">
+            <p className="text-xs text-muted" data-testid="history-unattributed">
               Not grouped into a study session:{" "}
               {[
                 selected.unattributedAnswers > 0 ? pluralize(selected.unattributedAnswers, "answer") : null,
@@ -279,7 +279,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
   return (
     <article
       data-testid={`history-video-${video.videoId}`}
-      className="flex flex-col gap-3 rounded-3xl border border-white/60 bg-white/40 p-4 shadow-lg backdrop-blur-xl sm:p-5"
+      className="flex flex-col gap-3 rounded-2xl border border-line bg-white p-4 shadow-xs sm:p-5"
     >
       <div className="flex flex-col gap-4 sm:flex-row">
         <Link
@@ -299,13 +299,13 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
           </span>
         </Link>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <h3 className="font-bold leading-tight text-slate-900">{title}</h3>
+          <h3 className="font-bold leading-tight text-ink">{title}</h3>
           <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold">
             {r ? (
               <span
                 className={clsx(
                   "rounded-full px-2 py-0.5",
-                  r.status === "completed" ? "bg-emerald-50 text-emerald-600" : r.status === "active" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-500"
+                  r.status === "completed" ? "bg-emerald-50 text-emerald-600" : r.status === "active" ? "bg-amber-50 text-amber-700" : "bg-surface text-muted"
                 )}
               >
                 Round {r.roundNumber}: {roundStatusLabel(r)}
@@ -313,21 +313,21 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
             ) : (
               <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700">Listening only — no practice round</span>
             )}
-            {!video.inLibrary && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">Not in your Library</span>}
+            {!video.inLibrary && <span className="rounded-full bg-surface px-2 py-0.5 text-muted">Not in your Library</span>}
           </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
             <span className="flex items-center gap-1">
-              <Calendar size={13} className="text-slate-400" /> Last practiced {new Date(video.lastActivityAt).toLocaleDateString()}
+              <Calendar size={13} className="text-muted" /> Last practiced {new Date(video.lastActivityAt).toLocaleDateString()}
             </span>
             <span>
               {pluralize(video.sessionCount, "study session")} · {pluralize(video.roundCount, "round")}
             </span>
             <span className="flex items-center gap-1" title="Engaged time across all of this video's sessions, overlaps counted once — an estimate">
-              <Clock size={13} className="text-slate-400" /> Est. active {video.activeSec > 0 ? formatDurationSeconds(video.activeSec) : "—"} (all sessions)
+              <Clock size={13} className="text-muted" /> Est. active {video.activeSec > 0 ? formatDurationSeconds(video.activeSec) : "—"} (all sessions)
             </span>
           </div>
           {r && (
-            <p className="text-xs text-slate-700" data-testid="history-round-coverage">
+            <p className="text-xs text-ink" data-testid="history-round-coverage">
               Round {r.roundNumber} coverage: {coverageText(r.progress)}
             </p>
           )}
@@ -343,7 +343,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
             {r && (
               <Link
                 href={`/results/${picked ?? r.roundId}`}
-                className="inline-flex items-center gap-1 rounded-xl border border-white/60 bg-white/60 px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-white/80"
+                className="inline-flex items-center gap-1 rounded-xl border border-line bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-surface"
               >
                 <FileText size={13} /> Review report
               </Link>
@@ -358,7 +358,7 @@ export function HistoryVideoCard({ userId, video }: { userId: string; video: His
               type="button"
               aria-expanded={expanded}
               onClick={() => setExpanded((x) => !x)}
-              className="inline-flex items-center gap-1 rounded-xl border border-white/60 bg-white/50 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-white/80"
+              className="inline-flex items-center gap-1 rounded-xl border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-surface"
             >
               <ChevronDown size={13} className={clsx("transition-transform", expanded && "rotate-180")} />
               {expanded ? "Hide details" : "Rounds and sessions"}

@@ -60,9 +60,7 @@ function HistoryPageContent() {
   }, [videos, mistakes]);
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-page font-sans text-ink antialiased">
 
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="history" />
@@ -75,11 +73,11 @@ function HistoryPageContent() {
           )}
         >
           {loading ? (
-            <p className="text-sm text-slate-500">Loading…</p>
+            <p className="text-sm text-muted">Loading…</p>
           ) : !user ? (
-            <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Practice History</h1>
-              <p className="mt-2 text-sm text-slate-500">Sign in to track your dictation sessions and progress.</p>
+            <section className="rounded-2xl border border-line bg-white p-8 shadow-xs">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">Practice History</h1>
+              <p className="mt-2 text-sm text-muted">Sign in to track your dictation sessions and progress.</p>
               <button
                 onClick={openAuthModal}
                 className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -89,26 +87,26 @@ function HistoryPageContent() {
             </section>
           ) : (
             <>
-              <section className="flex flex-col items-start justify-between gap-6 border-b border-white/40 pb-6 md:flex-row md:items-end">
+              <section className="flex flex-col items-start justify-between gap-6 border-b border-line pb-6 md:flex-row md:items-end">
                 <div>
-                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">Practice History</h1>
-                  <p className="text-sm text-slate-500">Every video you have studied, across Dictation, Listening and Shadowing.</p>
+                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-ink">Practice History</h1>
+                  <p className="text-sm text-muted">Every video you have studied, across Dictation, Listening and Shadowing.</p>
                 </div>
                 <div className="flex w-full gap-4 md:w-auto">
-                  <div className="flex flex-1 items-center gap-3 rounded-2xl border border-white/60 bg-white/50 p-3 px-5 shadow-sm backdrop-blur-md md:flex-initial">
+                  <div className="flex flex-1 items-center gap-3 rounded-2xl border border-line bg-white p-3 px-5 shadow-sm md:flex-initial">
                     <ClockIcon className="text-primary-500" size={20} />
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Est. active time</p>
-                      <p className="text-lg font-black leading-none text-slate-800">
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-muted">Est. active time</p>
+                      <p className="text-lg font-black leading-none text-ink">
                         {dashboardData && dashboardData.activeTime.activeSec > 0 ? formatDurationSeconds(dashboardData.activeTime.activeSec) : "—"}
                       </p>
                     </div>
                   </div>
-                  <div className="flex flex-1 items-center gap-3 rounded-2xl border border-white/60 bg-white/50 p-3 px-5 shadow-sm backdrop-blur-md md:flex-initial">
+                  <div className="flex flex-1 items-center gap-3 rounded-2xl border border-line bg-white p-3 px-5 shadow-sm md:flex-initial">
                     <PlayCircle className="text-emerald-500" size={20} />
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Completed videos</p>
-                      <p className="text-lg font-black leading-none text-slate-800">{dashboardData ? dashboardData.completedVideos : "—"}</p>
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-muted">Completed videos</p>
+                      <p className="text-lg font-black leading-none text-ink">{dashboardData ? dashboardData.completedVideos : "—"}</p>
                     </div>
                   </div>
                 </div>
@@ -116,10 +114,10 @@ function HistoryPageContent() {
 
               <section className="flex flex-col gap-4" aria-labelledby="videos-heading">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 id="videos-heading" className="text-xl font-semibold tracking-tight text-slate-900">
+                  <h2 id="videos-heading" className="text-xl font-semibold tracking-tight text-ink">
                     Videos you studied
                   </h2>
-                  {videosTotal > 0 && <span className="text-xs text-slate-500">{videosTotal} video{videosTotal === 1 ? "" : "s"}</span>}
+                  {videosTotal > 0 && <span className="text-xs text-muted">{videosTotal} video{videosTotal === 1 ? "" : "s"}</span>}
                 </div>
                 {videosQuery.isError && !videosQuery.data ? (
                   <p className="text-sm text-red-600">
@@ -129,9 +127,9 @@ function HistoryPageContent() {
                     </button>
                   </p>
                 ) : !videosQuery.data ? (
-                  <p className="text-sm text-slate-500">Loading history…</p>
+                  <p className="text-sm text-muted">Loading history…</p>
                 ) : videos.length === 0 ? (
-                  <div className="rounded-3xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-lg backdrop-blur-xl">
+                  <div className="rounded-2xl border border-line bg-white p-4 text-sm text-muted shadow-xs">
                     No practice yet. Videos you add appear here once you start studying them.
                   </div>
                 ) : (
@@ -145,26 +143,26 @@ function HistoryPageContent() {
                   <button
                     onClick={() => videosQuery.fetchNextPage()}
                     disabled={videosQuery.isFetchingNextPage}
-                    className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
+                    className="self-center rounded-xl border border-line bg-white px-4 py-2 text-sm font-semibold text-muted shadow-sm transition-colors hover:bg-surface disabled:opacity-50"
                   >
                     {videosQuery.isFetchingNextPage ? "Loading…" : "Load more"}
                   </button>
                 )}
               </section>
 
-              <section className="flex flex-col gap-4 border-t border-white/40 pt-6 pb-12">
+              <section className="flex flex-col gap-4 border-t border-line pt-6 pb-12">
                 <div>
-                  <h2 className="mb-1 text-xl font-semibold tracking-tight text-slate-900">Mistakes</h2>
-                  <p className="text-sm text-slate-500">
+                  <h2 className="mb-1 text-xl font-semibold tracking-tight text-ink">Mistakes</h2>
+                  <p className="text-sm text-muted">
                     Revisit past mistakes across every session, filtered by video, date, or error type.
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/60 bg-white/40 p-3 shadow-sm backdrop-blur-md">
+                <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-white p-3 shadow-sm">
                   <select
                     value={filters.videoId}
                     onChange={(e) => updateFilters({ videoId: e.target.value })}
-                    className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
+                    className="rounded-lg border border-line bg-white px-2 py-1.5 text-xs font-medium text-ink outline-none"
                     aria-label="Filter by video"
                   >
                     <option value="">All videos</option>
@@ -177,7 +175,7 @@ function HistoryPageContent() {
                   <select
                     value={filters.errorType}
                     onChange={(e) => updateFilters({ errorType: e.target.value })}
-                    className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs font-medium text-slate-700 outline-none"
+                    className="rounded-lg border border-line bg-white px-2 py-1.5 text-xs font-medium text-ink outline-none"
                     aria-label="Filter by error type"
                   >
                     <option value="">All error types</option>
@@ -187,28 +185,28 @@ function HistoryPageContent() {
                       </option>
                     ))}
                   </select>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-muted">
                     From
                     <input
                       type="date"
                       value={filters.dateFrom}
                       onChange={(e) => updateFilters({ dateFrom: e.target.value })}
-                      className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
+                      className="rounded-lg border border-line bg-white px-2 py-1.5 text-xs text-ink outline-none"
                       aria-label="From date"
                     />
                   </label>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-muted">
                     To
                     <input
                       type="date"
                       value={filters.dateTo}
                       onChange={(e) => updateFilters({ dateTo: e.target.value })}
-                      className="rounded-lg border border-white/60 bg-white/60 px-2 py-1.5 text-xs text-slate-700 outline-none"
+                      className="rounded-lg border border-line bg-white px-2 py-1.5 text-xs text-ink outline-none"
                       aria-label="To date"
                     />
                   </label>
                   {mistakesTotal > 0 && (
-                    <span className="ml-auto text-xs text-slate-500">{mistakesTotal} mistake{mistakesTotal !== 1 ? "s" : ""}</span>
+                    <span className="ml-auto text-xs text-muted">{mistakesTotal} mistake{mistakesTotal !== 1 ? "s" : ""}</span>
                   )}
                 </div>
 
@@ -224,7 +222,7 @@ function HistoryPageContent() {
                     </button>
                   </p>
                 ) : mistakes.length === 0 && !mistakesQuery.isLoading ? (
-                  <div className="rounded-2xl border border-white/60 bg-white/50 p-4 text-sm text-slate-500 shadow-sm backdrop-blur-md">
+                  <div className="rounded-2xl border border-line bg-white p-4 text-sm text-muted shadow-sm">
                     No mistakes match these filters.
                   </div>
                 ) : (
@@ -232,7 +230,7 @@ function HistoryPageContent() {
                     {mistakes.map((item) => (
                       <div
                         key={item.id}
-                        className="rounded-xl border border-white/60 bg-white/50 p-3 shadow-sm backdrop-blur-md"
+                        className="rounded-xl border border-line bg-white p-3 shadow-sm"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <Link
@@ -242,18 +240,18 @@ function HistoryPageContent() {
                             {item.videoTitle ?? item.videoId}
                           </Link>
                           <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                            <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-medium text-muted">
                               {errorTypeLabel(item.errorType)}
                             </span>
-                            <span className="text-[11px] text-slate-400">
+                            <span className="text-[11px] text-muted">
                               {new Date(item.createdAt).toLocaleDateString()}
                             </span>
                           </div>
                         </div>
-                        <p className="mt-1 text-xs text-slate-400">Sentence {item.segmentIndex + 1}</p>
-                        <p className="text-sm text-slate-800">{item.expectedText}</p>
+                        <p className="mt-1 text-xs text-muted">Sentence {item.segmentIndex + 1}</p>
+                        <p className="text-sm text-ink">{item.expectedText}</p>
                         <p className="text-xs text-red-500">
-                          You typed: {item.userText || <span className="italic text-slate-400">nothing</span>}
+                          You typed: {item.userText || <span className="italic text-muted">nothing</span>}
                         </p>
                       </div>
                     ))}
@@ -264,7 +262,7 @@ function HistoryPageContent() {
                   <button
                     onClick={() => mistakesQuery.fetchNextPage()}
                     disabled={mistakesQuery.isFetchingNextPage}
-                    className="self-center rounded-xl border border-white/60 bg-white/50 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white/80 disabled:opacity-50"
+                    className="self-center rounded-xl border border-line bg-white px-4 py-2 text-sm font-semibold text-muted shadow-sm transition-colors hover:bg-surface disabled:opacity-50"
                   >
                     {mistakesQuery.isFetchingNextPage ? "Loading…" : "Load more"}
                   </button>
@@ -281,7 +279,7 @@ function HistoryPageContent() {
 
 function HistoryPageFallback() {
   return (
-    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-page font-sans text-ink antialiased">
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="history" />
         <main
@@ -291,7 +289,7 @@ function HistoryPageFallback() {
             PAGE_PADDING_CLASS.narrow
           )}
         >
-          <p className="text-sm text-slate-500">Loading…</p>
+          <p className="text-sm text-muted">Loading…</p>
         </main>
       </div>
     </div>

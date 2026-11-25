@@ -65,13 +65,13 @@ const STAT_METRICS: Array<{
     value: "new",
     label: "New",
     statsKey: "new",
-    icon: (isActive) => <Sparkles className={isActive ? "text-white" : "text-slate-500"} size={20} />,
+    icon: (isActive) => <Sparkles className={isActive ? "text-white" : "text-muted"} size={20} />,
   },
   {
     value: "learning",
     label: "Learning",
     statsKey: "learning",
-    icon: (isActive) => <Clock className={isActive ? "text-white" : "text-indigo-500"} size={20} />,
+    icon: (isActive) => <Clock className={isActive ? "text-white" : "text-primary-500"} size={20} />,
   },
   {
     value: "due",
@@ -126,10 +126,10 @@ function VocabularyMetricButton({
       aria-pressed={isActive}
       data-testid={`vocab-stat-${label.toLowerCase().replace(/\s+/g, "-")}`}
       className={clsx(
-        "flex flex-1 items-center gap-3 rounded-2xl border p-3 px-5 shadow-sm backdrop-blur-md transition-colors md:flex-initial",
+        "flex flex-1 items-center gap-3 rounded-2xl border p-3 px-5 shadow-xs transition-colors md:flex-initial",
         isActive
           ? "border-primary-600 bg-primary-600 text-white"
-          : "border-white/60 bg-white/50 text-slate-800 hover:bg-white/80"
+          : "border-line bg-white text-ink hover:bg-surface"
       )}
     >
       {icon}
@@ -137,7 +137,7 @@ function VocabularyMetricButton({
         <p
           className={clsx(
             "text-[10px] font-bold uppercase tracking-wide",
-            isActive ? "text-white/80" : "text-slate-500"
+            isActive ? "text-white/80" : "text-muted"
           )}
         >
           {label}
@@ -169,7 +169,7 @@ function VocabularyBulkBar({
         <button
           type="button"
           onClick={onClear}
-          className="text-sm font-semibold text-slate-500 hover:text-slate-700"
+          className="text-sm font-semibold text-muted hover:text-ink"
         >
           Clear selection
         </button>
@@ -199,8 +199,8 @@ function FilterPillGroup<T extends string>({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">{label}</span>
-      <div className="flex gap-1 rounded-full border border-white/60 bg-white/50 p-1">
+      <span className="text-[10px] font-bold uppercase tracking-widest text-muted">{label}</span>
+      <div className="flex gap-1 rounded-full border border-line bg-white p-1">
         {options.map((opt) => (
           <button
             key={opt.value}
@@ -209,7 +209,7 @@ function FilterPillGroup<T extends string>({
             aria-pressed={value === opt.value}
             className={clsx(
               "rounded-full px-3 py-1 text-xs font-semibold transition-colors",
-              value === opt.value ? "bg-primary-600 text-white" : "text-slate-600 hover:bg-white/80"
+              value === opt.value ? "bg-primary-600 text-white" : "text-muted hover:bg-surface"
             )}
           >
             {opt.label}
@@ -240,6 +240,12 @@ function FilterPillGroup<T extends string>({
  * scrollbar on top of the inner list's own overflow-y-auto scrollbar. Only
  * `h-dvh` + `overflow-hidden`, with no `flex-1`, keeps this div reliably
  * pinned to exactly one viewport regardless of body's own sizing.
+ *
+ * All of that applies from `lg` up only. On a phone or small tablet the
+ * header, toolbar and stats alone fill most of one viewport, leaving room
+ * for about one card, so below `lg` the page scrolls as a whole like every
+ * other page (the detail drawer is a fixed overlay there, so nothing
+ * depends on the inner scroll container).
  */
 export default function VocabularyPage() {
   const { user, loading, openAuthModal } = useAuth();
@@ -511,12 +517,12 @@ export default function VocabularyPage() {
   const modalSuspended = pendingDeleteConfirmation !== null;
 
   return (
-    <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+    <div className="relative flex min-h-dvh w-full flex-col bg-page font-sans text-ink antialiased lg:h-dvh lg:overflow-hidden">
 
       <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0">
+        {/* `contents` below lg so the sticky header sticks to the scrolling
+            page, not to this wrapper's own (header-sized) box. */}
+        <div className="contents lg:block lg:shrink-0">
           <AppHeader active="vocabulary" />
         </div>
 
@@ -528,9 +534,9 @@ export default function VocabularyPage() {
           )}
         >
         {loading ? null : !user ? (
-          <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Vocabulary Bank</h1>
-            <p className="mt-2 text-sm text-slate-500">Sign in to review and edit saved vocabulary items.</p>
+          <section className="rounded-2xl border border-line bg-white p-8 shadow-xs">
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">Vocabulary Bank</h1>
+            <p className="mt-2 text-sm text-muted">Sign in to review and edit saved vocabulary items.</p>
             <button
               onClick={openAuthModal}
               className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -540,9 +546,9 @@ export default function VocabularyPage() {
           </section>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col gap-6">
-            {/* Non-scrolling toolbar: hero, command strip, search/filter,
-                and the result count all stay fixed in the viewport — only
-                the list below scrolls. The user already knows they're in
+            {/* Non-scrolling toolbar (from lg): hero, command strip,
+                search/filter, and the result count all stay fixed in the
+                viewport — only the list below scrolls. The user already knows they're in
                 Vocabulary via the active AppHeader nav tab, so the page's
                 own heading is semantic-only (screen readers/document
                 structure), not a second visible label. */}
@@ -553,19 +559,19 @@ export default function VocabularyPage() {
                 <div>
                   {heroState.kind === "loading" ? (
                     <div data-testid="vocab-hero-loading">
-                      <div className="h-7 w-56 animate-pulse rounded-lg bg-slate-200/80" />
-                      <div className="mt-2 h-4 w-72 animate-pulse rounded-lg bg-slate-200/60" />
+                      <div className="h-7 w-56 animate-pulse rounded-lg bg-line" />
+                      <div className="mt-2 h-4 w-72 animate-pulse rounded-lg bg-line" />
                     </div>
                   ) : (
                     <>
-                      <p className="text-xl font-bold tracking-tight text-slate-900">
+                      <p className="text-xl font-bold tracking-tight text-ink">
                         {heroState.kind === "empty" && "Save your first word"}
                         {heroState.kind === "caughtUp" && "You're all caught up"}
                         {heroState.kind === "newOnly" && "Ready to learn something new"}
                         {heroState.kind === "due" &&
                           `${heroState.due} word${heroState.due === 1 ? "" : "s"} are due`}
                       </p>
-                      <p className="text-sm text-slate-500">
+                      <p className="text-sm text-muted">
                         {heroState.kind === "empty" &&
                           "Words you save during a listening session will appear here."}
                         {heroState.kind === "caughtUp" && "Nothing needs review right now."}
@@ -596,7 +602,7 @@ export default function VocabularyPage() {
                   <a
                     href="/api/vocabulary/export"
                     download
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-white/80 bg-white/60 px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur-xl transition-colors hover:text-primary-600"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-white px-4 py-2 text-sm font-semibold text-muted shadow-sm transition-colors hover:text-primary-600"
                   >
                     <Download size={16} />
                     Export
@@ -637,7 +643,7 @@ export default function VocabularyPage() {
                             type="button"
                             onClick={closeSearch}
                             aria-label="Close search"
-                            className="flex items-center gap-2 rounded-2xl border border-primary-200 bg-primary-50 px-4 py-3 font-semibold text-primary-600 shadow-md backdrop-blur-xl transition-colors"
+                            className="flex items-center gap-2 rounded-2xl border border-primary-200 bg-primary-50 px-4 py-3 font-semibold text-primary-600 shadow-xs transition-colors"
                           >
                             <X size={18} />
                           </button>
@@ -647,10 +653,10 @@ export default function VocabularyPage() {
                             onClick={() => setSearchOpen(true)}
                             aria-label={hasActiveSearch ? "Search (active)" : "Search"}
                             className={clsx(
-                              "relative flex items-center gap-2 rounded-2xl border px-4 py-3 font-semibold shadow-md backdrop-blur-xl transition-colors",
+                              "relative flex items-center gap-2 rounded-2xl border px-4 py-3 font-semibold shadow-xs transition-colors",
                               hasActiveSearch
                                 ? "border-primary-200 bg-primary-50 text-primary-600"
-                                : "border-white/80 bg-white/60 text-slate-600 hover:text-primary-600"
+                                : "border-line bg-white text-muted hover:text-primary-600"
                             )}
                           >
                             <Search size={18} />
@@ -668,10 +674,10 @@ export default function VocabularyPage() {
                           onClick={() => setFiltersOpen((v) => !v)}
                           aria-pressed={filtersOpen}
                           className={clsx(
-                            "flex items-center gap-2 rounded-2xl border px-4 py-3 font-semibold shadow-md backdrop-blur-xl transition-colors active:translate-y-px",
+                            "flex items-center gap-2 rounded-2xl border px-4 py-3 font-semibold shadow-xs transition-colors active:translate-y-px",
                             filtersOpen
                               ? "border-primary-200 bg-primary-50 text-primary-600"
-                              : "border-white/80 bg-white/60 text-slate-600 hover:text-primary-600"
+                              : "border-line bg-white text-muted hover:text-primary-600"
                           )}
                         >
                           <Filter size={18} />
@@ -685,8 +691,8 @@ export default function VocabularyPage() {
                 </div>
 
                 {searchOpen && (
-                  <div className="relative overflow-hidden rounded-2xl border border-white/60 bg-white/40 shadow-sm backdrop-blur-xl transition-all focus-within:ring-2 focus-within:ring-primary-500/30">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <div className="relative overflow-hidden rounded-2xl border border-line bg-white shadow-sm transition-all focus-within:ring-2 focus-within:ring-primary-500/30">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
                     <input
                       ref={searchInputRef}
                       type="text"
@@ -696,14 +702,14 @@ export default function VocabularyPage() {
                       onKeyDown={(e) => {
                         if (e.key === "Escape") closeSearch();
                       }}
-                      className="w-full bg-transparent py-3 pl-11 pr-10 font-medium text-slate-800 outline-none placeholder:text-slate-400"
+                      className="w-full bg-transparent py-3 pl-11 pr-10 font-medium text-ink outline-none placeholder:text-muted"
                     />
                     {searchInput && (
                       <button
                         type="button"
                         onClick={clearSearch}
                         aria-label="Clear search"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors hover:text-slate-600"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted transition-colors hover:text-muted"
                       >
                         <X size={16} />
                       </button>
@@ -712,7 +718,7 @@ export default function VocabularyPage() {
                 )}
 
                 {filtersOpen && (
-                  <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-white/60 bg-white/40 p-3 shadow-sm backdrop-blur-xl">
+                  <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-line bg-white p-3 shadow-sm">
                     <FilterPillGroup
                       label="Type"
                       options={TYPE_FILTER_OPTIONS}
@@ -723,7 +729,7 @@ export default function VocabularyPage() {
                       <button
                         type="button"
                         onClick={clearFilters}
-                        className="ml-auto flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-primary-600"
+                        className="ml-auto flex items-center gap-1 text-xs font-semibold text-muted hover:text-primary-600"
                       >
                         <X size={14} />
                         Clear filters
@@ -749,7 +755,7 @@ export default function VocabularyPage() {
               )}
 
               {isFiltering && items.length > 0 && (
-                <p className="text-xs font-medium text-slate-500">
+                <p className="text-xs font-medium text-muted">
                   {filteredItems.length} of {items.length} words
                 </p>
               )}
@@ -773,7 +779,7 @@ export default function VocabularyPage() {
             <div
               data-testid="vocabulary-workspace"
               className={clsx(
-                "relative grid min-h-0 flex-1 gap-6 grid-rows-[minmax(0,1fr)]",
+                "relative grid min-h-0 flex-1 gap-6 lg:grid-rows-[minmax(0,1fr)]",
                 selectedItem && "xl:grid-cols-[minmax(0,1fr)_420px]"
               )}
             >
@@ -789,14 +795,14 @@ export default function VocabularyPage() {
                 column. `scrollbar-gutter: stable` avoids the auto-fill
                 grid's column count flipping when a scrollbar appears. */}
             <div
-              className="app-scrollbar h-full min-h-0 overflow-y-auto overscroll-contain"
+              className="app-scrollbar lg:h-full lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain"
               style={{ scrollbarGutter: "stable" }}
             >
               <div className="p-1.5">
               {isTrueFirstLoad ? (
-                <p className="text-sm text-slate-500">Loading vocabulary…</p>
+                <p className="text-sm text-muted">Loading vocabulary…</p>
               ) : itemsQuery.isError && items.length === 0 ? (
-                <section className="flex items-center justify-between gap-3 rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-red-600 shadow-xl backdrop-blur-xl">
+                <section className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-white p-6 text-sm text-red-600 shadow-xs">
                   <span>Failed to load vocabulary.</span>
                   <button
                     type="button"
@@ -807,11 +813,11 @@ export default function VocabularyPage() {
                   </button>
                 </section>
               ) : items.length === 0 ? (
-                <section className="rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-slate-500 shadow-xl backdrop-blur-xl">
+                <section className="rounded-2xl border border-line bg-white p-6 text-sm text-muted shadow-xs">
                   No saved vocabulary yet.
                 </section>
               ) : filteredItems.length === 0 ? (
-                <section className="flex flex-col items-start gap-2 rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-slate-500 shadow-xl backdrop-blur-xl">
+                <section className="flex flex-col items-start gap-2 rounded-2xl border border-line bg-white p-6 text-sm text-muted shadow-xs">
                   No results match your search or filters.
                   <button
                     type="button"

@@ -144,7 +144,7 @@ export default function VocabularyReviewPage() {
                 <ReviewGradeButtons item={current} onGrade={(g) => void handleGrade(g)} busyGrade={submittingGrade} size="large" />
               </div>
             )}
-            <p className="text-xs text-muted">
+            <p className="text-xs text-muted pointer-coarse:hidden">
               Keys: <kbd className="font-mono">Space</kbd> flip · <kbd className="font-mono">1</kbd>–<kbd className="font-mono">4</kbd> rate
             </p>
           </>

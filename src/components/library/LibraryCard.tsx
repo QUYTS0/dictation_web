@@ -35,7 +35,7 @@ export function listeningText(item: LibraryItem): string | null {
 }
 
 const STATE_BADGE: Record<LibraryItem["state"], { label: string; className: string }> = {
-  not_started: { label: "Not started", className: "bg-slate-100 text-slate-600" },
+  not_started: { label: "Not started", className: "bg-surface text-muted" },
   in_progress: { label: "In progress", className: "bg-primary-50 text-primary-600" },
   completed: { label: "Practice complete", className: "bg-emerald-50 text-emerald-600" },
   listening: { label: "Listening", className: "bg-sky-50 text-sky-700" },
@@ -63,7 +63,7 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
   return (
     <article
       data-testid={`library-card-${item.videoId}`}
-      className="group flex flex-col gap-4 rounded-3xl border border-slate-200/70 bg-white/70 p-4 shadow-sm"
+      className="group flex flex-col gap-4 rounded-2xl border border-line bg-white p-4 shadow-sm"
     >
       <Link
         href={libraryPracticeHref(item)}
@@ -84,12 +84,12 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h3 className="line-clamp-2 font-semibold text-slate-900">{item.title ?? `Video ${item.videoId}`}</h3>
+          <h3 className="line-clamp-2 font-semibold text-ink">{item.title ?? `Video ${item.videoId}`}</h3>
           {onRemove && (
             <button
               type="button"
               onClick={() => onRemove(item)}
-              className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white hover:text-red-600"
+              className="shrink-0 rounded-lg p-1.5 text-muted transition-colors hover:bg-surface hover:text-red-600"
               aria-label={`Remove ${item.title ?? item.videoId} from your library`}
               title="Remove from library"
             >
@@ -107,16 +107,16 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
 
         {coverage && (
           <div data-testid="library-coverage">
-            <p className="text-xs text-slate-600">{coverage}</p>
+            <p className="text-xs text-muted">{coverage}</p>
             {ratio !== null && (
-              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-surface" aria-hidden="true">
                 <div className="h-full rounded-full bg-primary-500" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
               </div>
             )}
           </div>
         )}
         {accuracy && accuracy.practiced > 0 && item.state === "completed" && (
-          <p className="text-xs text-slate-500" data-testid="library-accuracy">
+          <p className="text-xs text-muted" data-testid="library-accuracy">
             Sentence accuracy {Math.round((100 * accuracy.correct) / accuracy.practiced)}% ({accuracy.correct}/{accuracy.practiced} latest answers)
           </p>
         )}
@@ -125,7 +125,7 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
             <Headphones size={12} /> {listening}
           </p>
         )}
-        <p className="text-[11px] text-slate-400">
+        <p className="text-[11px] text-muted">
           {item.state === "not_started" ? "Added" : "Last activity"} {new Date(item.state === "not_started" ? item.addedAt : item.lastActivityAt).toLocaleDateString()}
         </p>
 
@@ -139,7 +139,7 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
           {reviewRoundId && (
             <Link
               href={`/results/${reviewRoundId}`}
-              className="rounded-xl border border-white/60 bg-white/60 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-white"
+              className="rounded-xl border border-line bg-white px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-surface"
             >
               Review report
             </Link>

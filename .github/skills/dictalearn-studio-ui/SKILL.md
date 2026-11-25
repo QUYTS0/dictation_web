@@ -1,108 +1,137 @@
 ---
-name: frosted-glass-ui
-description: Advanced UI/UX engineering principles for creating modern, translucent, glassmorphic SaaS interfaces with comprehensive light (Frosted Glass) and dark mode (Obsidian Glass) integration.
+name: dictalearn-studio-ui
+description: The DictaLearn Studio (Calm Indigo) design system for this app — Tailwind tokens, fonts, surface and component recipes, motion and accessibility rules. Use it before creating or restyling any page, card, dialog or control. It replaces the old frosted-glass style.
 ---
 
-# Frosted Glass UI / Obsidian Glass UI
+# DictaLearn Studio UI (Calm Indigo)
 
-This skill document defines the design language, Tailwind CSS patterns, and animation principles required to build fluid, glassmorphic interfaces. This aesthetic pairs vibrant, solid underlays with semi-transparent, frosted panels to create depth, hierarchy, and a highly polished feel.
+The app's visual language since the dashboard redesign (`.claude/dashboard-redesign-plan.md`,
+decision D4). All tokens live in `src/app/globals.css` (`@theme`). The Dashboard
+(`src/app/dashboard/**`) and the shell (`src/components/AppHeader.tsx`, `AppFooter.tsx`) are the
+reference implementation: copy from them.
 
-## 1. The Core Philosophy
+## 1. Philosophy
 
-*   **Depth through Translucency**: Instead of relying solely on drop shadows, depth is achieved by stacking semi-transparent surfaces with background blur (`backdrop-blur`) over a colorful or gradient background.
-*   **Crisp Edges**: Glass panels must always have a subtle, bright border (a "specular highlight") to define edges against the blurred background.
-*   **Tactile Feedback**: Every interactive element should respond to user input—usually with a subtle vertical lift (`hover:-translate-y-1`) and scale, backed by smooth transitions.
-*   **Dual Identity**: "Frosted Glass" (Light) uses white translucency on light, cool-toned backgrounds. "Obsidian Glass" (Dark) uses dark slate translucency with very faint white borders on deep charcoal/navy backgrounds.
+- **Calm, solid surfaces.** White cards with a thin `line` border and a barely-there shadow, on
+  a light `page` background. Depth comes from hierarchy and spacing, not blur.
+- **One dark moment.** The navy hero (Dashboard) is the only dark surface on a page.
+- **Indigo means action.** `primary-*` for primary buttons, active nav and focus.
+  `success` (teal) = done or met; `reward` (amber) = streak, XP, "today"; `danger` = errors and
+  demotion. Use the signals sparingly.
+- **Numbers in mono.** Counts, XP, minutes and scores use `font-mono tabular-nums`.
 
-## 2. Color Palette & Typography
+## 2. Tokens
 
-### Base Colors
-*   **Primary/Accent**: Indigo (`indigo-500`, `indigo-600`). Used for primary actions, active navigation, and progress bars.
-*   **Success**: Emerald (`emerald-500`).
-*   **Warning/Streak**: Amber/Orange (`amber-500`, `orange-500`).
-*   **Text (Light)**: `text-slate-900` (Headings), `text-slate-500` (Body), `text-slate-400` (Muted/Sub-labels).
-*   **Text (Dark)**: `text-white` (Headings), `text-slate-300`/`text-slate-400` (Body).
+| Token | Hex | Use |
+| --- | --- | --- |
+| `page` | #F6F7FB | Page background (`bg-page`, set on `<body>`) |
+| `surface` | #F1F3FA | Secondary surfaces: insets, hovers, tab tracks, empty states |
+| `line` | #DDE3EF | Borders, dividers, progress tracks |
+| `ink` | #172033 | Primary text and headings |
+| `muted` | #6F7891 | Secondary text, labels, captions (on light surfaces only) |
+| `hero` / `hero-2` | #151B35 / #25285C | The navy hero, modal backdrop tint, dark chips |
+| `success` | #2FAE9B | Done, met, promotion zone |
+| `reward` | #EFB044 | Streak flame, today, the hero CTA |
+| `danger` | #DC6B70 | Errors, destructive actions, demotion zone |
+| `primary-50…900` | #EEF0FF … #5B5CE2 (600) … #2C2E78 | Brand indigo; `primary-600` is the default action color |
 
-### Typography Strategies
-*   **Font Family**: Primary sans-serif (`font-sans`), highly legible (e.g., Inter).
-*   **Micro-labels**: Use extreme contrast in size and weight for metadata (e.g., "Total Words", "Mastery").
-    *   *Recipe*: `text-[10px] font-black uppercase tracking-[0.2em] text-slate-500`
-*   **Headings**: Tight tracking (`tracking-tight`) with heavy weights (`font-bold`, `font-black`).
+Rules: use the token classes (`text-ink`, `border-line`, `bg-surface` …). Don't use raw hex,
+`slate-*` or `indigo-*` on light surfaces. On the navy hero, text is `text-white`,
+`text-slate-200`–`text-slate-400` (light slate is the documented exception there).
 
-## 3. Glass Material Recipes (Tailwind)
+## 3. Typography
 
-### Panels & Cards
-The foundation of the UI. Mix backgrounds, blurs, borders, and shadows.
+- `font-sans` = Plus Jakarta Sans and `font-mono` = JetBrains Mono, both self-hosted via
+  `next/font` in `src/app/layout.tsx` with the `vietnamese` subset (learner text is often
+  Vietnamese).
+- Page title: `text-2xl font-extrabold tracking-tight text-ink` (hero: `sm:text-3xl text-white`).
+- Section micro-label: `text-xs font-bold uppercase tracking-wider text-ink`, usually with a 16px
+  lucide icon in `text-primary-600`.
+- Body: `text-sm text-ink`; supporting: `text-xs leading-relaxed text-muted`.
+- Big metric: `font-mono text-3xl font-bold tracking-tight tabular-nums text-ink`.
 
-**Light Mode (Frosted Glass)**
-*   **Background**: `bg-white/40` to `bg-white/60` (depending on desired opacity).
-*   **Blur**: `backdrop-blur-md` or `backdrop-blur-xl`.
-*   **Border**: `border border-white/60` (critically important for the glass edge effect).
-*   **Shadow**: `shadow-lg` or `shadow-xl`.
+## 4. Surface recipes
 
-**Dark Mode (Obsidian Glass)**
-*   **Background**: `dark:bg-slate-800/40` or `dark:bg-slate-900/40`.
-*   **Border**: `dark:border-white/10` or `dark:border-white/5`.
+```tsx
+// Card (the default container)
+<section className="rounded-2xl border border-line bg-white p-5 shadow-xs">…</section>
 
-**Combined Example**:
-```html
-<div className="bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/60 dark:border-white/10 shadow-xl rounded-3xl p-6">
-  {/* Content */}
-</div>
+// Inset / secondary block inside a card
+<div className="rounded-xl bg-surface p-3">…</div>
+
+// Loading placeholder (same footprint as the card it replaces)
+<div aria-busy="true" aria-label="Loading …" className="min-h-[180px] animate-pulse rounded-2xl border border-line bg-white" />
+
+// The navy hero — use the shared style, don't re-invent the gradient
+import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
+<section className="relative overflow-hidden rounded-2xl p-6 text-white shadow-md md:p-8" style={HERO_SURFACE_STYLE}>
+  <div className="rounded-xl border border-white/10 bg-white/[0.04] p-5">…</div> {/* inner panel */}
+</section>
 ```
 
-### Inset & Depressed Surfaces
-Used for search bars, progress bar tracks, and inner content areas.
-*   **Light**: `bg-white/30 border-white/40 shadow-inner` or `bg-slate-200/50`.
-*   **Dark**: `dark:bg-slate-900/40 dark:border-white/5 dark:bg-slate-700/50`.
+- **Sticky header** is the one translucent surface: `bg-white/95 backdrop-blur-md border-b border-line`.
+- **Modals**: always `ModalDialog` (`src/components/ModalDialog.tsx`), which handles the backdrop
+  (`bg-hero/60 backdrop-blur-sm`), the focus trap, Escape and focus return. Panel:
+  `rounded-3xl border border-line bg-white p-6 shadow-2xl`.
+- **Popovers**: `rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink shadow-lg`
+  (on the hero, the dark popover in `StreakPill`).
+- **Page width**: `PAGE_WIDTH_CLASS.wide` + `PAGE_PADDING_CLASS.wide` (`src/lib/layout/pageWidth`).
+- **Two-column rows**: `grid grid-cols-1 items-start gap-4 sm:gap-5 lg:grid-cols-12` with
+  `lg:col-span-8` / `lg:col-span-4`. Keep `grid-cols-1`: without it the single phone column grows
+  to its widest content and the whole page scrolls sideways. A card whose width varies uses
+  container queries (`@container`, `@3xl:`).
+- **Header** (`AppHeader`): below `lg` the nav tabs get their own full-width row under the brand
+  (scrolling sideways on a phone); from `lg` they sit inline. Anything added to the header's
+  right-hand group must still fit at 1024px and 1280px; check with the browser, not by eye.
 
-## 4. Component Patterns
+## 5. Component recipes
 
-### Badges & Tiny Tags
-Used for displaying states, types (e.g., "Noun"), or quick stats. Do not use generic solid colors. Over-saturate the text, wash out the background.
-*   **Recipe**: `text-xs font-bold text-emerald-600 bg-emerald-100/50 border border-emerald-200/50 px-2 py-0.5 rounded-md`
-*   **Dark Mode**: `dark:text-emerald-400 dark:bg-emerald-500/10 dark:border-emerald-500/20`
+| Component | Classes |
+| --- | --- |
+| Primary button | `rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50` |
+| Secondary button | `rounded-lg border border-line bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-primary-100` |
+| Quiet button / link | `text-xs font-semibold text-primary-600 hover:text-primary-700` |
+| Hero CTA (amber) | `rounded-lg border border-reward/40 bg-reward px-3 py-2.5 text-sm font-semibold text-hero` |
+| Icon button | `rounded-lg p-1.5 text-muted hover:bg-surface hover:text-ink` + `aria-label` |
+| Input | `rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-primary-500 focus:ring-2 focus:ring-primary-500/30` |
+| Progress bar | track `h-1.5 w-full overflow-hidden rounded-full bg-line`, fill `h-full rounded-full bg-primary-600` (`bg-success` when met); mark the bar `aria-hidden` and give the number as text |
+| Segmented tabs | track `flex gap-1 rounded-lg bg-surface p-1 text-xs font-semibold`; tab `role="tab"`, selected `bg-white text-ink shadow-xs` |
+| Status chip | `rounded-full px-2 py-0.5 text-[11px] font-semibold` + a tinted pair (`bg-success/10 text-success`, `bg-primary-50 text-primary-700`, `bg-surface text-muted`) |
+| Ranked row | `flex items-center gap-2.5 rounded-xl border px-2.5 py-2`; the viewer's row `border-primary-500/40 bg-primary-50` |
+| Toast | `useToast()` (`src/components/ToastProvider.tsx`); `tone: "error"` for failures |
 
-### Interactive Progress Bars
-Progress bars shouldn't just be flat colors; they should glow or have depth.
-*   **Track**: `bg-slate-200/50 dark:bg-slate-700 rounded-full overflow-hidden shadow-inner flex`
-*   **Fill**: `bg-gradient-to-r from-indigo-400 to-indigo-600 rounded-full dark:shadow-[0_0_8px_rgba(79,70,229,0.4)]`
+## 6. Motion
 
-### Forms & Inputs
-Inputs should blend into the glass until focused.
-*   **Wrapper**: `relative bg-white/40 dark:bg-slate-900/40 backdrop-blur-xl border border-white/60 dark:border-white/10 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-indigo-500/30 transition-all`
-*   **Input Element**: `bg-transparent outline-none text-slate-800 dark:text-white placeholder:text-slate-400`
+- Subtle and purposeful: color/border transitions (`transition-colors`), progress width
+  transitions. Hover on cards changes the border (`hover:border-primary-500/40`), not a big lift.
+- Decorative keyframes (`animate-flame-subtle`, `animate-ember-*`) are defined in `globals.css`
+  under `prefers-reduced-motion: no-preference`. Add new ones the same way.
+- Celebrations use `ConfettiBurst`, which renders nothing under reduced motion. Always pair it
+  with a toast so nothing is lost.
 
-## 5. Animation & Interactions
+## 7. Accessibility
 
-1.  **Staggered In-App Entrances (`motion/react`)**:
-    Always load grids or lists with a slight vertical rise and opacity fade, staggered by index.
-    ```jsx
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.05 }}
-    >
-    ```
-2.  **Hover States (Lift & Glow)**:
-    Cards should lift off the canvas slightly.
-    `hover:-translate-y-1 transition-all duration-300`
-3.  **Group Hovers**:
-    Target inner elements when the parent card is hovered.
-    Wrapper: `group`
-    Title text: `group-hover:text-indigo-600 transition-colors`
-    Play Button inner icon: `group-hover:scale-110 transition-transform`
+- Real `<button>` / `<a>` elements with accessible names that carry the information; icons are
+  `aria-hidden`.
+- Popovers and disclosures: `aria-expanded` / `aria-controls`; open on hover, focus and tap;
+  Escape and a tap outside close them. A phone tap fires `mouseenter` and then `click`, so hover
+  must open a *temporary* state and click must *pin* it (see `StreakPill`, `WeeklyTrack`); a
+  plain click toggle closes what the tap just opened.
+- Touch screens: hide keyboard-only hints with `pointer-coarse:hidden` (and say "Tap" there).
+  Every page must work from 320px wide with no sideways scrolling.
+- Lists of ranked items are `<ol>`; tabs use `role="tablist"` / `tab` / `tabpanel`.
+- Contrast: `text-muted` only on `white` / `surface` / `page`. On `hero`, use white or light slate.
 
-## 6. Advanced Features: Zen Mode
+## Anti-patterns (don't)
 
-When implementing "Focus" or "Zen" modes that hide standard UI to highlight specific content:
-*   Use standard React state to trigger layout shifts.
-*   **Masking**: Hide headers, footers, and sidebars conditionally or animate them out via `AnimatePresence`.
-*   **Overlay**: Introduce a subtle, fixed background masking layer (`fixed inset-0 z-0 bg-slate-900/50 backdrop-blur-sm`).
-*   **Centering**: Shift main content using Flexbox layout alterations (`justify-center items-center`) combined with scale animations (`scale-105`).
-
-## Golden Rules / Anti-Patterns
-*   **DO NOT** use opaque flat white (`bg-white`) or flat dark (`bg-slate-900`) for primary cards. You destroy the glass illusion. Always use fractional opacities (e.g., `/40`).
-*   **DO NOT** forget the translucent white/transparent border on glass panels. Without the border, it just looks like a reduced-opacity overlay, not glass.
-*   **DO NOT** use default black drop shadows globally. Adjust shadow intensity.
-*   **DO NOT** leave text colors unadjusted for dark mode. `text-slate-900` is invisible on a dark frosted background. Always provide a `dark:text-white` or `dark:text-slate-300` counterpart.
+- Frosted glass: `bg-white/40`, `border-white/60`, `backdrop-blur-xl` cards, blurred
+  background blobs. Phase 8 removed it from the Dashboard, My Learning, Vocabulary, Bookmarks
+  and History. It still remains in the signed-out landing page (`src/app/page.tsx`), the
+  results page (`src/app/results/[sessionId]/page.tsx`), `src/components/report/AiAssessmentSection.tsx`
+  and `src/components/StatusCard.tsx`. Move those to the card recipe when you next touch them;
+  don't copy from them.
+- Raw colors on light surfaces: `text-slate-500`, `bg-indigo-50`, `#f4f7ff`. Use the tokens.
+- `dark:` variants. There is no dark theme yet; don't half-build one.
+- Staggered entrance animations on lists, or `hover:-translate-y-1` lifts on dense grids.
+- Fake data: zeros for unavailable metrics, XP in Learning performance, praise or advice in
+  diagnostics copy.

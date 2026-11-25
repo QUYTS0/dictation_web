@@ -193,7 +193,7 @@ export function VocabularyDeck({
               })}
             </ul>
             {remaining.length > MAX_CHIPS && <p className="text-xs text-muted">+{remaining.length - MAX_CHIPS} more</p>}
-            <p className="text-[11px] text-muted">
+            <p className="text-[11px] text-muted pointer-coarse:hidden">
               Keys: <kbd className="font-mono">Space</kbd> flip · <kbd className="font-mono">1</kbd>–<kbd className="font-mono">4</kbd> rate
             </p>
             <Link href="/vocabulary" className="inline-flex items-center gap-1 text-sm font-semibold text-primary-600 hover:text-primary-700">

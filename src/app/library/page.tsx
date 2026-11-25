@@ -68,19 +68,18 @@ function LibraryPageContent() {
   };
 
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f6f7fc] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-40 blur-[120px]" />
+    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-page font-sans text-ink antialiased">
 
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="library" />
 
         <main className={clsx("mx-auto flex w-full flex-1 flex-col gap-6 py-8", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
           {loading ? (
-            <p className="text-sm text-slate-500">Loading…</p>
+            <p className="text-sm text-muted">Loading…</p>
           ) : !user ? (
-            <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">My Learning</h1>
-              <p className="mt-2 text-sm text-slate-500">Sign in to see the videos you have saved and worked on.</p>
+            <section className="rounded-2xl border border-line bg-white p-8 shadow-xs">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">My Learning</h1>
+              <p className="mt-2 text-sm text-muted">Sign in to see the videos you have saved and worked on.</p>
               <button
                 onClick={openAuthModal}
                 className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -91,10 +90,10 @@ function LibraryPageContent() {
           ) : (
             <>
               <section className="flex flex-col gap-1">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
-                  My Learning {total > 0 && filter === "all" && <span className="text-lg font-medium text-slate-400">({total})</span>}
+                <h1 className="text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                  My Learning {total > 0 && filter === "all" && <span className="text-lg font-medium text-muted">({total})</span>}
                 </h1>
-                <p className="text-sm text-slate-500 sm:text-base">Your saved videos and learning progress.</p>
+                <p className="text-sm text-muted sm:text-base">Your saved videos and learning progress.</p>
               </section>
 
               <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter my learning">
@@ -107,7 +106,7 @@ function LibraryPageContent() {
                     onClick={() => updateView({ filter: f })}
                     className={clsx(
                       "rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
-                      filter === f ? "bg-primary-600 text-white" : "bg-white/70 text-slate-600 ring-1 ring-slate-200/70 hover:bg-white"
+                      filter === f ? "bg-primary-600 text-white" : "bg-white text-muted ring-1 ring-line hover:bg-surface"
                     )}
                   >
                     {label}
@@ -124,9 +123,9 @@ function LibraryPageContent() {
                   </button>
                 </p>
               ) : !libraryQuery.data ? (
-                <p className="text-sm text-slate-500">Loading your videos…</p>
+                <p className="text-sm text-muted">Loading your videos…</p>
               ) : items.length === 0 ? (
-                <div className="rounded-3xl border border-slate-200/70 bg-white/60 p-6 text-sm text-slate-500">
+                <div className="rounded-2xl border border-line bg-white p-6 text-sm text-muted">
                   {filter === "all" ? (
                     <>
                       You haven&apos;t saved any videos yet.{" "}
@@ -149,7 +148,7 @@ function LibraryPageContent() {
                 <button
                   onClick={() => libraryQuery.fetchNextPage()}
                   disabled={libraryQuery.isFetchingNextPage}
-                  className="self-center rounded-xl bg-white/70 px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200/70 transition-colors hover:bg-white disabled:opacity-50"
+                  className="self-center rounded-xl bg-white px-4 py-2 text-sm font-semibold text-muted ring-1 ring-line transition-colors hover:bg-surface disabled:opacity-50"
                 >
                   {libraryQuery.isFetchingNextPage ? "Loading…" : "Load more"}
                 </button>
@@ -177,7 +176,7 @@ function LibraryPageContent() {
 
 export default function LibraryPage() {
   return (
-    <Suspense fallback={<p className="p-8 text-sm text-slate-500">Loading…</p>}>
+    <Suspense fallback={<p className="p-8 text-sm text-muted">Loading…</p>}>
       <LibraryPageContent />
     </Suspense>
   );

@@ -9,8 +9,8 @@ const STATUS_LABEL: Record<VocabularyLearningStatus, string> = {
 };
 
 const STATUS_BADGE_CLASS: Record<VocabularyLearningStatus, string> = {
-  new: "bg-slate-100 text-slate-600",
-  learning: "bg-indigo-100 text-indigo-700",
+  new: "bg-surface text-muted",
+  learning: "bg-primary-100 text-primary-700",
   due: "bg-amber-100 text-amber-700",
 };
 

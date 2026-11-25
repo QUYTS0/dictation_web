@@ -19,7 +19,8 @@ This repository is a dictation web app built with Next.js, TypeScript, and Supab
 - Prefer improving information architecture before adding more UI complexity
 
 ## UI/UX rules
-- For authenticated users, the main experience should feel like a polished AI SaaS workspace
+- Follow the DictaLearn Studio (Calm Indigo) design system: `.github/skills/dictalearn-studio-ui/SKILL.md` (tokens, recipes, motion, accessibility) and `.github/instructions/frontend-ui.instructions.md` (layout and data-honesty rules). Do not reintroduce the old frosted-glass style
+- For authenticated users, the main experience should feel like a calm, polished learning studio
 - Primary actions must be visible without opening secondary menus
 - Do not hide core navigation such as Dashboard inside the avatar dropdown
 - The signed-in default page should clearly show:
@@ -29,19 +30,14 @@ This repository is a dictation web app built with Next.js, TypeScript, and Supab
 - Prefer strong visual hierarchy, generous spacing, rounded cards, and clear CTAs
 
 ## Signed-in experience rules
-- After sign-in, users should land on the main signed-in workspace by default
-- The signed-in workspace should prominently include:
-  - a YouTube URL input
-  - a Start Dictation CTA
-  - progress summary cards
-  - quick resume or recent activity
-  - recent mistakes
-  - recent vocabulary
+- After sign-in, users land on `/dashboard`
+- Starting a new video is always one step away: the header's **New video** dialog on every page, the Dashboard hero's **Start today's practice** link box, and the first-run hero for a learner with nothing yet. All three use `AddVideoForm`; don't add another URL input
+- The Dashboard shows, in this order: the hero (welcome, streak, weekly track, today's target, level), Continue learning | Next up, the review deck | league, Learning performance, Needs attention | achievements (see `frontend-ui.instructions.md`)
+- Metrics stay canonical and separate; unavailable data is hidden or shown as "—", never as zeros
 - Avoid splitting the signed-in experience into two weak pages if one stronger workspace page is better
 
 ## Navigation rules
-- Avatar dropdown should contain account-related actions only
-- Sign out belongs in the avatar dropdown
+- Avatar dropdown should contain account-related actions only: email, Profile & preferences, Sign out
 - Dashboard should be visible as part of the main signed-in layout or routing, not hidden as a secondary option
 - Avoid having multiple top-level screens with overlapping purposes unless their roles are clearly distinct
 

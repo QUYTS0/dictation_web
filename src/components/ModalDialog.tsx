@@ -72,7 +72,9 @@ export function ModalDialog({
   return createPortal(
     <div
       data-testid={backdropTestId}
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-hero/60 p-4 pt-[15vh] backdrop-blur-sm"
+      // overflow-y-auto: a dialog taller than a short phone screen scrolls
+      // instead of hiding its buttons below the fold.
+      className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto overscroll-contain bg-hero/60 p-4 pt-[10vh] backdrop-blur-sm sm:pt-[15vh]"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div

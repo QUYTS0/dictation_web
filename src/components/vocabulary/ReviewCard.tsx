@@ -66,7 +66,10 @@ export function ReviewCard({ item, mode, revealed, onFlip, size = "compact", cap
             </span>
           )}
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted">
-            <RotateCw size={12} aria-hidden="true" /> Click or press Space to flip
+            <RotateCw size={12} aria-hidden="true" />
+            {/* Touch screens have no Space key. */}
+            <span className="pointer-coarse:hidden">Click or press Space to flip</span>
+            <span className="hidden pointer-coarse:inline">Tap to flip</span>
           </span>
         </button>
       ) : (

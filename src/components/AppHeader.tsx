@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { Headphones, Plus } from "lucide-react";
@@ -34,8 +34,18 @@ interface AppHeaderProps {
  * Shared app-shell header used by every signed-in page (dashboard, my
  * learning, vocabulary, bookmarks, history, leaderboard, results): brand, primary nav,
  * and — for a signed-in learner — "New video", the streak pill, the XP pill
- * (from lg; hidden while XP is unavailable) and the account menu. The dictation/listening workspace uses its own compact
+ * (from xl; hidden while XP is unavailable) and the account menu. The dictation/listening workspace uses its own compact
  * title-bar header instead (back button + progress label, zen-mode aware).
+ *
+ * Layout by width (measured, not guessed: the six tabs need ~510px in the
+ * one-row header, ~630px at 2xl's larger text):
+ *  - below lg (phones, tablets): two rows; the tabs get their own full-width
+ *    row, which scrolls sideways only on a phone.
+ *  - lg: one row; "New video" is icon-only and the XP pill is hidden.
+ *  - xl: the XP pill and the "New video" label come back.
+ *  - 2xl: the larger tab text.
+ * If the row still runs short (long streak/XP numbers, browser zoom), the
+ * tabs scroll instead of pushing the account menu off the screen.
  */
 export default function AppHeader({ active }: AppHeaderProps) {
   const { user } = useAuth();
@@ -44,23 +54,57 @@ export default function AppHeader({ active }: AppHeaderProps) {
   const [addOpen, setAddOpen] = useState(false);
   // Kept here so closing and reopening the dialog keeps a half-typed link.
   const [addUrl, setAddUrl] = useState("");
+  const navRef = useRef<HTMLElement>(null);
+
+  // When the tabs scroll (a phone, or a squeezed one-row header), bring the
+  // current page's tab into view, e.g. "Leaderboard". A no-op when they fit.
+  useEffect(() => {
+    const nav = navRef.current;
+    const current = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!nav || !current || nav.scrollWidth <= nav.clientWidth) return;
+    const navBox = nav.getBoundingClientRect();
+    const tabBox = current.getBoundingClientRect();
+    nav.scrollLeft += tabBox.left - navBox.left - (navBox.width - tabBox.width) / 2;
+  }, [active]);
 
   return (
     <header className="sticky top-0 z-30 w-full border-b border-line bg-white/95 backdrop-blur-md">
-      <div className={clsx("mx-auto flex h-16 w-full items-center justify-between gap-4", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
-        <Link href="/" className="flex shrink-0 items-center gap-2.5">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-600 text-white shadow-sm" aria-hidden="true">
+      {/* One nav for every width: inline from lg; below lg it wraps onto its
+          own row under the brand, so phones and tablets keep every tab. */}
+      <div
+        className={clsx(
+          "mx-auto flex w-full flex-wrap items-center justify-between gap-x-3 sm:gap-x-4 lg:h-16 lg:flex-nowrap",
+          PAGE_WIDTH_CLASS.wide,
+          PAGE_PADDING_CLASS.wide
+        )}
+      >
+        {/* Compact on phones so the brand and the account buttons share one
+            row down to 360px; narrower than that, only the icon shows. */}
+        <Link href="/" className="flex h-14 shrink-0 items-center gap-2 sm:gap-2.5 lg:h-auto">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-600 text-white shadow-sm sm:h-10 sm:w-10" aria-hidden="true">
             <Headphones size={20} />
           </span>
-          <span>
-            <span className="block text-xl font-bold leading-none tracking-tight text-ink">
+          <span className="max-[359px]:sr-only">
+            <span className="block text-lg font-bold leading-none tracking-tight text-ink sm:text-xl">
               Dicta<span className="text-primary-600">Learn</span>
             </span>
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted">Studio</span>
           </span>
         </Link>
 
-        <nav aria-label="Primary" className="hidden items-center gap-0.5 md:flex xl:gap-1">
+        <nav
+          ref={navRef}
+          aria-label="Primary"
+          className={clsx(
+            // Below lg: a full-bleed row (the negative margins cancel
+            // PAGE_PADDING_CLASS.wide) that scrolls sideways if it must.
+            // Scrollbar hidden at every width.
+            "order-last -mx-4 flex w-[calc(100%+2rem)] items-center gap-1 overflow-x-auto px-4 pb-2.5 [scrollbar-width:none] sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 [&::-webkit-scrollbar]:hidden",
+            // lg+: inline between brand and actions; min-w-0 lets it give way
+            // (and scroll) before the account menu is pushed off-screen.
+            "lg:order-none lg:mx-0 lg:w-auto lg:min-w-0 lg:gap-0.5 lg:px-0 lg:py-1 2xl:gap-1"
+          )}
+        >
           {NAV_LINKS.map((link) => {
             const isActive = active === link.key;
             return (
@@ -69,7 +113,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
                 href={link.href}
                 aria-current={isActive ? "page" : undefined}
                 className={clsx(
-                  "whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs transition-colors xl:px-3.5 xl:text-sm",
+                  "shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors lg:px-2.5 lg:py-1.5 lg:text-xs 2xl:px-3.5 2xl:text-sm",
                   isActive ? "bg-primary-50 font-semibold text-primary-600" : "font-medium text-muted hover:bg-surface hover:text-ink"
                 )}
               >
@@ -89,7 +133,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
               className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-primary-50 px-2.5 py-1.5 text-xs font-semibold text-primary-600 transition-colors hover:border-primary-500/40 hover:bg-primary-100 sm:px-3"
             >
               <Plus size={14} strokeWidth={2.25} aria-hidden="true" />
-              <span className="hidden whitespace-nowrap sm:inline">New video</span>
+              <span className="hidden whitespace-nowrap sm:inline lg:hidden xl:inline">New video</span>
             </button>
           )}
           {user && streak && <StreakPill streakDays={streak.streakDays} userId={user.id} />}

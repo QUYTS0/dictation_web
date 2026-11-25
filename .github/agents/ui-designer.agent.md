@@ -55,11 +55,11 @@ The signed-in product should:
 - maintain a clean, premium, minimal visual feel
 
 ## Specific preference for this repo
-When improving the signed-in experience, prefer:
-- showing the main dashboard/workspace immediately after sign-in
-- placing the YouTube URL input and Start Dictation CTA at the top of that page
-- placing progress cards, recent mistakes, vocabulary, and resume sections below
-- removing Dashboard from the avatar dropdown if it is currently there
+The signed-in Dashboard was redesigned (`.claude/dashboard-redesign-plan.md`). When improving the signed-in experience:
+- follow the design system in `.github/skills/dictalearn-studio-ui/SKILL.md` and the layout and data-honesty rules in `.github/instructions/frontend-ui.instructions.md`
+- keep the Dashboard order: hero (with "Start today's practice") → Continue | Next up → review deck | league → Learning performance → Needs attention | achievements
+- keep "start a new video" in the header dialog, the hero link box and the first-run hero; don't add a separate URL input at the top
+- keep primary destinations in the header nav, not the avatar dropdown
 
 ## Constraints
 - Keep code modular and readable

@@ -32,11 +32,11 @@ export function VocabularyPronunciationButton({ item }: { item: VocabularyItem }
           "rounded-md border p-1 shadow-sm transition-colors",
           status === "playing"
             ? "border-primary-200 bg-primary-50 text-primary-600"
-            : "border-white/40 bg-white/50 text-slate-400 hover:text-primary-500"
+            : "border-line bg-white text-muted hover:text-primary-500"
         )}
       >
         {status === "loading" ? (
-          <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-primary-500" />
+          <span className="block h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-primary-500" />
         ) : (
           <Volume2 size={14} />
         )}

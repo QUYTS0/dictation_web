@@ -108,9 +108,7 @@ function BookmarksPageContent() {
   const isFiltering = searchInput.trim() !== "";
 
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-60 blur-[120px]" />
-      <div className="pointer-events-none absolute bottom-[10%] right-[0%] z-0 h-[40%] w-[40%] rounded-full bg-blue-200 opacity-60 blur-[120px]" />
+    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-page font-sans text-ink antialiased">
 
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="bookmarks" />
@@ -123,9 +121,9 @@ function BookmarksPageContent() {
           )}
         >
           {loading ? null : !user ? (
-            <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Bookmarks</h1>
-              <p className="mt-2 text-sm text-slate-500">Sign in to review the sentences you&apos;ve bookmarked.</p>
+            <section className="rounded-2xl border border-line bg-white p-8 shadow-xs">
+              <h1 className="text-2xl font-semibold tracking-tight text-ink">Bookmarks</h1>
+              <p className="mt-2 text-sm text-muted">Sign in to review the sentences you&apos;ve bookmarked.</p>
               <button
                 onClick={openAuthModal}
                 className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -137,27 +135,27 @@ function BookmarksPageContent() {
             <>
               <section className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
                 <div>
-                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-slate-900">Bookmarks</h1>
-                  <p className="text-sm text-slate-500">Jump back to sentences you&apos;ve marked across every video.</p>
+                  <h1 className="mb-1 text-2xl font-semibold tracking-tight text-ink">Bookmarks</h1>
+                  <p className="text-sm text-muted">Jump back to sentences you&apos;ve marked across every video.</p>
                 </div>
-                <div className="flex items-center gap-3 rounded-2xl border border-white/60 bg-white/50 p-3 px-5 shadow-sm backdrop-blur-md">
+                <div className="flex items-center gap-3 rounded-2xl border border-line bg-white p-3 px-5 shadow-sm">
                   <MapPin className="text-primary-500" size={20} />
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Total Bookmarks</p>
-                    <p className="text-lg font-black leading-none text-slate-800">{items.length}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-muted">Total Bookmarks</p>
+                    <p className="text-lg font-black leading-none text-ink">{items.length}</p>
                   </div>
                 </div>
               </section>
 
               <section className="flex gap-3">
-                <div className="relative flex-1 overflow-hidden rounded-2xl border border-white/60 bg-white/40 shadow-sm backdrop-blur-xl transition-all focus-within:ring-2 focus-within:ring-primary-500/30">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <div className="relative flex-1 overflow-hidden rounded-2xl border border-line bg-white shadow-sm transition-all focus-within:ring-2 focus-within:ring-primary-500/30">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={18} />
                   <input
                     type="text"
                     placeholder="Search bookmarked sentences or notes..."
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
-                    className="w-full bg-transparent py-3 pl-11 pr-4 font-medium text-slate-800 outline-none placeholder:text-slate-400"
+                    className="w-full bg-transparent py-3 pl-11 pr-4 font-medium text-ink outline-none placeholder:text-muted"
                   />
                 </div>
               </section>
@@ -165,9 +163,9 @@ function BookmarksPageContent() {
               {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
               {itemsQuery.isLoading ? (
-                <p className="text-sm text-slate-500">Loading bookmarks…</p>
+                <p className="text-sm text-muted">Loading bookmarks…</p>
               ) : itemsQuery.isError && items.length === 0 ? (
-                <section className="flex items-center justify-between gap-3 rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-red-600 shadow-xl backdrop-blur-xl">
+                <section className="flex items-center justify-between gap-3 rounded-2xl border border-line bg-white p-6 text-sm text-red-600 shadow-xs">
                   <span>Failed to load bookmarks.</span>
                   <button
                     type="button"
@@ -178,7 +176,7 @@ function BookmarksPageContent() {
                   </button>
                 </section>
               ) : items.length === 0 ? (
-                <section className="rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-slate-500 shadow-xl backdrop-blur-xl">
+                <section className="rounded-2xl border border-line bg-white p-6 text-sm text-muted shadow-xs">
                   No bookmarks yet.
                 </section>
               ) : (
@@ -196,12 +194,12 @@ function BookmarksPageContent() {
                     </p>
                   )}
                   {isFiltering && (
-                    <p className="text-xs font-medium text-slate-500">
+                    <p className="text-xs font-medium text-muted">
                       {filteredItems.length} of {items.length} bookmarks
                     </p>
                   )}
                   {filteredItems.length === 0 ? (
-                    <section className="flex flex-col items-start gap-2 rounded-3xl border border-white/60 bg-white/40 p-6 text-sm text-slate-500 shadow-xl backdrop-blur-xl">
+                    <section className="flex flex-col items-start gap-2 rounded-2xl border border-line bg-white p-6 text-sm text-muted shadow-xs">
                       No results match your search.
                       <button
                         type="button"
@@ -223,28 +221,28 @@ function BookmarksPageContent() {
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: idx * 0.05 }}
                             key={item.id}
-                            className="group flex h-full w-full max-w-[400px] flex-col rounded-3xl border border-white/60 bg-white/40 p-6 shadow-xl backdrop-blur-xl transition-all hover:-translate-y-1"
+                            className="group flex h-full w-full max-w-[400px] flex-col rounded-2xl border border-line bg-white p-6 shadow-xs transition-all hover:-translate-y-1"
                           >
                             <div className="mb-3 flex items-start justify-between gap-2">
                               <div>
-                                <h3 className="text-sm font-bold text-slate-900 transition-colors group-hover:text-primary-600">
+                                <h3 className="text-sm font-bold text-ink transition-colors group-hover:text-primary-600">
                                   {item.videoTitle ?? `Video ${item.video_id}`}
                                 </h3>
-                                <p className="mt-0.5 text-xs text-slate-500">Sentence {item.segment_index + 1}</p>
+                                <p className="mt-0.5 text-xs text-muted">Sentence {item.segment_index + 1}</p>
                               </div>
                               <button
                                 onClick={() => handleDelete(item.id)}
                                 disabled={isDeleting}
-                                className="rounded-xl border border-white/60 bg-white/50 p-2 transition-colors hover:bg-red-50 disabled:opacity-40"
+                                className="rounded-xl border border-line bg-white p-2 transition-colors hover:bg-red-50 disabled:opacity-40"
                                 aria-label={isDeleting ? `Removing bookmark` : `Remove bookmark`}
                               >
-                                <Trash2 size={16} className="text-slate-500" />
+                                <Trash2 size={16} className="text-muted" />
                               </button>
                             </div>
 
                             <div className="mb-4 flex-1">
-                              <div className="rounded-xl border border-white/40 bg-white/30 p-3 shadow-inner">
-                                <p className="line-clamp-3 text-sm italic leading-relaxed text-slate-500">
+                              <div className="rounded-xl border border-line bg-surface p-3">
+                                <p className="line-clamp-3 text-sm italic leading-relaxed text-muted">
                                   &quot;{item.sentence_text}&quot;
                                 </p>
                               </div>
@@ -256,20 +254,20 @@ function BookmarksPageContent() {
                                     placeholder="Optional note"
                                     autoFocus
                                     rows={2}
-                                    className="w-full min-w-0 resize-y rounded border border-slate-300 px-2 py-1 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                                    className="w-full min-w-0 resize-y rounded border border-line px-2 py-1 text-xs outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
                                   />
                                   <div className="flex items-center gap-1.5">
                                     <button
                                       onClick={handleUpdateNote}
                                       disabled={isSavingNote}
-                                      className="px-2 py-1 text-xs rounded border border-indigo-300 text-indigo-700 bg-indigo-50 disabled:opacity-50"
+                                      className="px-2 py-1 text-xs rounded border border-primary-300 text-primary-700 bg-primary-50 disabled:opacity-50"
                                     >
                                       {isSavingNote ? "Saving…" : "Save"}
                                     </button>
                                     <button
                                       onClick={cancelEdit}
                                       disabled={isSavingNote}
-                                      className="px-2 py-1 text-xs rounded border border-slate-300 text-slate-600 disabled:opacity-50"
+                                      className="px-2 py-1 text-xs rounded border border-line text-muted disabled:opacity-50"
                                     >
                                       Cancel
                                     </button>
@@ -278,14 +276,14 @@ function BookmarksPageContent() {
                               ) : (
                                 <button
                                   onClick={() => beginEdit(item)}
-                                  className="mt-3 block w-full whitespace-pre-wrap text-left text-xs font-medium text-slate-500 hover:text-primary-600"
+                                  className="mt-3 block w-full whitespace-pre-wrap text-left text-xs font-medium text-muted hover:text-primary-600"
                                 >
                                   {item.note ? `📝 ${item.note}` : "+ Add note"}
                                 </button>
                               )}
                             </div>
 
-                            <div className="mt-auto border-t border-white/40 pt-4">
+                            <div className="mt-auto border-t border-line pt-4">
                               <Link
                                 href={`/dictation/${item.video_id}?segment=${item.segment_index}`}
                                 className="inline-block text-xs font-semibold text-primary-600 underline hover:text-primary-700"
@@ -311,7 +309,7 @@ function BookmarksPageContent() {
 
 function BookmarksPageFallback() {
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f4f7ff] font-sans text-slate-900 antialiased">
+    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-page font-sans text-ink antialiased">
       <div className="relative z-10 flex flex-1 flex-col">
         <AppHeader active="bookmarks" />
         <main
@@ -321,7 +319,7 @@ function BookmarksPageFallback() {
             PAGE_PADDING_CLASS.wide
           )}
         >
-          <p className="text-sm text-slate-500">Loading…</p>
+          <p className="text-sm text-muted">Loading…</p>
         </main>
       </div>
     </div>

@@ -13,9 +13,16 @@
 @theme {
   --color-primary-50: #eef0ff;
   --color-primary-100: #dfe1fc;
+  /* 200–400 and 800–900 interpolated (the reference defines no others): code
+     already used primary-200/300/400/800, which produced no color before. */
+  --color-primary-200: #c7cbfa;
+  --color-primary-300: #a9acf4;
+  --color-primary-400: #8c8dee;
   --color-primary-500: #6f70e8;
   --color-primary-600: #5b5ce2;
   --color-primary-700: #494bc4;
+  --color-primary-800: #3a3c9e;
+  --color-primary-900: #2c2e78;
 
   --color-page: #f6f7fb;
   --color-surface: #f1f3fa;
