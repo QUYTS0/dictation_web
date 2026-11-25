@@ -65,6 +65,9 @@ describe("internal navigation stays inside the app shell (no new-tab / hard-code
     "components/report/RoundReportPanel.tsx",
     "app/dictation/[videoId]/components/PracticeReportView.tsx",
     "components/AppHeader.tsx",
+    "components/AddVideoForm.tsx",
+    "app/dashboard/components/DashboardHero.tsx",
+    "app/dashboard/components/FirstRunHero.tsx",
   ];
 
   it.each(filesToAudit)("%s has no window.open() call", (relPath) => {

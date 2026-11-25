@@ -95,6 +95,17 @@ describe("learning streak — local days, today in the viewer's zone", () => {
     expect(json).toMatchObject({ streakDays: 3, streakToday: "2026-10-02", streakTimeZone: "Asia/Ho_Chi_Minh", streakIncludesUtcFallback: false });
   });
 
+  it("streakActiveToday: true only when practice is recorded on the viewer's local today", async () => {
+    withDays(["2026-10-02", "2026-10-01"]);
+    expect(await (await GET(req("/api/dashboard/summary", "Asia/Ho_Chi_Minh"))).json()).toMatchObject({ streakDays: 2, streakActiveToday: true });
+    // Same data, viewed in UTC (still Oct 1 there): Oct 1 is today and practiced.
+    expect(await (await GET(req("/api/dashboard/summary", "UTC"))).json()).toMatchObject({ streakActiveToday: true });
+    withDays(["2026-10-01", "2026-09-30"]);
+    // Vietnam: today is Oct 2 with nothing yet → the streak stands on yesterday.
+    expect(await (await GET(req("/api/dashboard/summary", "Asia/Ho_Chi_Minh"))).json()).toMatchObject({ streakDays: 2, streakActiveToday: false });
+    expect(await (await GET_STREAK(req("/api/streak", "Asia/Ho_Chi_Minh"))).json()).toMatchObject({ streakDays: 2, streakActiveToday: false });
+  });
+
   it("latest practice yesterday (local) keeps the streak; a missing day ends it", async () => {
     withDays(["2026-10-01", "2026-09-30", "2026-09-28"]);
     expect((await (await GET(req("/api/dashboard/summary", "Asia/Ho_Chi_Minh"))).json()).streakDays).toBe(2);
@@ -130,6 +141,7 @@ describe("learning streak — local days, today in the viewer's zone", () => {
         streakDays: dash.streakDays,
         streakTimeZone: dash.streakTimeZone,
         streakToday: dash.streakToday,
+        streakActiveToday: dash.streakActiveToday,
         streakIncludesUtcFallback: dash.streakIncludesUtcFallback,
       });
     }

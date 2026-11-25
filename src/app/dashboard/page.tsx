@@ -4,7 +4,7 @@ import { KeyboardEvent, MouseEvent, Suspense, useEffect, useRef, useState } from
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { ArrowRight, Flame, Plus, X } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import AppFooter from "@/components/AppFooter";
 import { AddVideoForm } from "@/components/AddVideoForm";
@@ -13,9 +13,11 @@ import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { toFocusSource } from "@/lib/dashboard/selectFocus";
 import { useDashboardFocus } from "@/lib/dashboard/useDashboardFocus";
 import { ContinueLearningCard } from "./components/ContinueLearningCard";
+import { DashboardHero } from "./components/DashboardHero";
+import { FirstRunHero } from "./components/FirstRunHero";
 import { FocusCard } from "./components/FocusCard";
+import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
-import { ProgressSummary } from "./components/ProgressSummary";
 import { VocabularyCard } from "./components/VocabularyCard";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
@@ -35,13 +37,16 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
 }
 
 /**
- * The learner's home. It answers, in this order:
+ * The learner's home (.claude/dashboard-redesign-plan.md). It answers, in
+ * this order:
+ *   0. How am I doing today?     — the hero: welcome + streak status, and
+ *                                  "Start today's practice" (a NEW video)
  *   1. What should I continue?   — "Pick up where you left off" (ONE item)
  *   2. What should I do next?    — "Next up" (the Focus decision)
- *   3. Am I making progress?     — "Your progress", Vocabulary, Needs attention
- * Adding a video is a secondary, on-demand action. Browsing saved videos is
- * My Learning (/library); past activity is History. Every metric is its own
- * canonical number (§6.8), never recomputed or blended here.
+ *   3. Am I making progress?     — Learning performance, Vocabulary, Needs attention
+ * A learner with nothing yet sees only the first-run hero. Browsing saved
+ * videos is My Learning (/library); past activity is History. Every metric
+ * is its own canonical number (§6.8), never recomputed or blended here.
  */
 function DashboardContent() {
   const pathname = usePathname();
@@ -111,13 +116,13 @@ function DashboardContent() {
   // Learning when there is saved content but nothing unfinished, or nothing.
   const continueSlot =
     continueQuery.isError && !continueQuery.data ? (
-      <div className="rounded-3xl border border-slate-200/70 bg-white/60 p-5 text-sm text-red-600">Couldn&apos;t load your unfinished videos.</div>
+      <div className="rounded-2xl border border-line bg-white p-5 text-sm text-red-600">Couldn&apos;t load your unfinished videos.</div>
     ) : !continueQuery.data ? (
-      <div aria-busy="true" aria-label="Loading continue learning" className="min-h-[180px] animate-pulse rounded-3xl border border-primary-100 bg-primary-50/50" />
+      <div aria-busy="true" aria-label="Loading continue learning" className="min-h-[180px] animate-pulse rounded-2xl border border-line bg-white" />
     ) : continueTop ? (
       <ContinueLearningCard item={continueTop} />
     ) : summary && summary.libraryVideos > 0 ? (
-      <div data-testid="continue-empty" className="rounded-3xl border border-slate-200/70 bg-white/60 p-5 text-sm text-slate-600 sm:p-6">
+      <div data-testid="continue-empty" className="rounded-2xl border border-line bg-white p-5 text-sm text-muted shadow-xs sm:p-6">
         Nothing unfinished right now.{" "}
         <Link href="/library" className="inline-flex items-center gap-1 font-semibold text-primary-600 hover:text-primary-700">
           Browse My Learning <ArrowRight size={14} aria-hidden="true" />
@@ -126,22 +131,44 @@ function DashboardContent() {
     ) : null;
   const focusShown = focus.kind !== "hidden";
   const name = user?.email?.split("@")[0] ?? "Learner";
-  const streak = summary?.streakDays ?? 0;
+  // Nothing yet at all — no videos, no study sessions, no saved words — gets
+  // the first-run hero and nothing else (plan §4.5.3). A learner who removed
+  // every video but has history still gets the normal Dashboard. Unknown
+  // (summary failed) is never treated as "nothing yet".
+  const firstRun = !!summary && summary.libraryVideos === 0 && summary.activeTime.sessionCount === 0 && summary.vocabularyCount === 0;
+  const summaryPending = !summary && !summaryQuery.isError;
+
+  const addPanel = (
+    <section id="add-video" className="scroll-mt-24" aria-labelledby="add-video-heading" onKeyDown={onAddKeyDown}>
+      <div className="mb-2 flex items-center justify-between">
+        <h2 id="add-video-heading" className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+          Start a new video
+        </h2>
+        <button
+          type="button"
+          onClick={closeAddVideo}
+          aria-label="Close add a video"
+          className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <AddVideoForm url={url} onUrlChange={setUrl} variant="dark" layout="stacked" inputId="add-video-url" inputRef={addVideoInputRef} />
+    </section>
+  );
 
   return (
-    <div className="relative flex min-h-screen w-full flex-1 flex-col overflow-hidden bg-[#f6f7fc] font-sans text-slate-900 antialiased">
-      <div className="pointer-events-none absolute -left-[10%] -top-[10%] z-0 h-[40%] w-[40%] rounded-full bg-purple-200 opacity-40 blur-[120px]" />
-
-      <div className="relative z-10 flex flex-1 flex-col">
+    <div className="relative flex min-h-screen w-full flex-1 flex-col bg-page font-sans text-ink antialiased">
+      <div className="flex flex-1 flex-col">
         <AppHeader active="dashboard" />
 
-        <main className={clsx("mx-auto flex w-full flex-1 flex-col gap-6 py-8 sm:gap-8", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
+        <main className={clsx("mx-auto flex w-full flex-1 flex-col gap-8 py-8 sm:gap-10", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
           {loading ? (
-            <p className="text-sm text-slate-500">Loading…</p>
+            <p className="text-sm text-muted">Loading…</p>
           ) : !user ? (
-            <section className="rounded-3xl border border-white/60 bg-white/40 p-8 shadow-xl backdrop-blur-xl">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Dashboard</h1>
-              <p className="mt-2 text-sm text-slate-500">Sign in to see your progress and continue where you left off.</p>
+            <section className="rounded-2xl border border-line bg-white p-8 shadow-xs">
+              <h1 className="text-2xl font-bold tracking-tight text-ink">Dashboard</h1>
+              <p className="mt-2 text-sm text-muted">Sign in to see your progress and continue where you left off.</p>
               <button
                 onClick={openAuthModal}
                 className="mt-4 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
@@ -149,22 +176,23 @@ function DashboardContent() {
                 Sign in
               </button>
             </section>
+          ) : firstRun ? (
+            <FirstRunHero url={url} onUrlChange={setUrl} />
           ) : (
             <>
-              {/* Welcome + momentum: the streak sits with the heading, not floating away from it. */}
-              <section data-testid="dashboard-welcome" className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-                <div className="min-w-0">
-                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Welcome back, {name}</h1>
-                  <p className="mt-1 text-sm text-slate-500 sm:text-base">
-                    {!summary ? " " : streak > 0 ? `Ready to keep your ${streak}-day streak going?` : "Ready for today's practice?"}
-                  </p>
-                </div>
-                {streak > 0 && (
-                  <p data-testid="streak" className="inline-flex items-center gap-1.5 rounded-full bg-orange-50 px-3 py-1.5 text-sm font-semibold text-orange-600 ring-1 ring-orange-100">
-                    <Flame size={16} className="fill-orange-500/20" aria-hidden="true" /> {streak} {streak === 1 ? "day" : "days"}
-                  </p>
-                )}
-              </section>
+              {/* Hero: welcome + streak status, today's panel with "Start today's practice". */}
+              {summaryPending ? (
+                <div aria-busy="true" aria-label="Loading your dashboard" className="min-h-[148px] animate-pulse rounded-2xl bg-hero/90" />
+              ) : (
+                <DashboardHero
+                  name={name}
+                  summary={summary}
+                  addOpen={addOpen}
+                  onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo("toggle"))}
+                  addToggleRef={addToggleRef}
+                  addPanel={addPanel}
+                />
+              )}
 
               {/* 1 + 2. The primary resume action and the next action (≈ 2/3 : 1/3 on desktop). */}
               {(continueSlot || focusShown) && (
@@ -181,54 +209,17 @@ function DashboardContent() {
                 </div>
               )}
 
-              {/* Add Video — secondary, on demand: one URL field, no mode selection. */}
-              <div className="-mt-2 flex flex-col items-stretch gap-3 sm:items-end">
-                {!addOpen ? (
-                  <button
-                    ref={addToggleRef}
-                    type="button"
-                    onClick={() => openAddVideo("toggle")}
-                    aria-expanded={false}
-                    aria-controls="add-video"
-                    className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl px-3 py-2 text-sm font-semibold text-primary-700 transition-colors hover:bg-primary-50 sm:self-end"
-                  >
-                    <Plus size={16} aria-hidden="true" /> Add a video
-                  </button>
-                ) : (
-                  <section
-                    id="add-video"
-                    className="w-full scroll-mt-24 rounded-3xl border border-slate-200/70 bg-white/70 p-4 sm:max-w-2xl"
-                    aria-labelledby="add-video-heading"
-                    onKeyDown={onAddKeyDown}
-                  >
-                    <div className="mb-3 flex items-center justify-between">
-                      <h2 id="add-video-heading" className="text-sm font-semibold text-slate-900">
-                        Add a video
-                      </h2>
-                      <button
-                        type="button"
-                        onClick={closeAddVideo}
-                        aria-label="Close add a video"
-                        className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                    <AddVideoForm url={url} onUrlChange={setUrl} inputId="add-video-url" inputRef={addVideoInputRef} />
-                  </section>
-                )}
-              </div>
-
-              {/* 3. Your progress — one surface for the six canonical metrics. */}
+              {/* 3. Learning performance — the canonical metrics, each its own card. */}
               {summaryQuery.isError && !summary ? (
                 <p className="text-sm text-red-600">Failed to load your progress. Please refresh and try again.</p>
               ) : summary ? (
-                <ProgressSummary summary={summary} />
+                <LearningPerformance summary={summary} />
               ) : (
-                <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-3xl border border-slate-200/70 bg-white/50" />
+                <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-2xl border border-line bg-white" />
               )}
 
-              {/* 4. Vocabulary momentum + Needs attention. Stacked below lg. */}
+              {/* 4. Vocabulary momentum + Needs attention. Stacked below lg. Phase 3
+                  replaces both (deck + diagnostics) and moves them into the final order. */}
               <div className="grid items-stretch gap-4 sm:gap-5 lg:grid-cols-12" data-testid="dashboard-insights">
                 <div className="min-w-0 lg:col-span-7">
                   <VocabularyCard summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />

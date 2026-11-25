@@ -104,11 +104,17 @@ const summaryOf = (over: Partial<DashboardSummary> = {}): DashboardSummary => ({
   streakDays: 0,
   streakTimeZone: "UTC",
   streakToday: "2026-10-01",
+  streakActiveToday: false,
   streakIncludesUtcFallback: false,
   recentVocabulary: [],
   ...over,
 });
 const statsOf = (over: Partial<VocabularyStatsResponse> = {}): VocabularyStatsResponse => ({ total: 12, new: 0, learning: 12, due: 0, reviewable: 0, ...over });
+
+// A learner who removed every video but has practiced before: an empty
+// Library on the NORMAL Dashboard. (No videos, no sessions and no words at
+// all is the first-run Dashboard instead — see dashboard-hero.test.tsx.)
+const HISTORY_ONLY: DashboardSummary["activeTime"] = { activeSec: 600, trackedSince: "2026-09-01T00:00:00Z", sessionCount: 2 };
 
 const NEEDS = item("vNeeds", { correct: 5, practiced: 8 }); // 3 sentences need another look
 const CLEAN = item("vClean", { correct: 8, practiced: 8 });
@@ -247,14 +253,15 @@ describe("wide shell and layout", () => {
     for (const gone of ["dashboard-rail", "library-rail-grid", "library-grid"]) expect(screen.queryByTestId(gone)).toBeNull();
   });
 
-  it("DOM order: welcome → Continue → Next up → Add a video → Your progress → Vocabulary → Needs attention", async () => {
+  it("DOM order: hero (with 'Start today's practice') → Continue → Next up → Learning performance → Vocabulary → Needs attention", async () => {
     renderDashboard();
     const focus = await screen.findByTestId("dashboard-focus");
+    const hero = await screen.findByTestId("dashboard-welcome");
+    expect(within(hero).getByRole("button", { name: "Start today's practice" })).toBeInTheDocument();
     const order = [
-      screen.getByTestId("dashboard-welcome"),
+      hero,
       screen.getByTestId("continue-learning"),
       focus,
-      screen.getByRole("button", { name: "Add a video" }),
       screen.getByTestId("your-progress"),
       screen.getByTestId("vocabulary-card"),
       screen.getByTestId("needs-attention"),
@@ -266,18 +273,19 @@ describe("wide shell and layout", () => {
 });
 
 describe("welcome and Your progress", () => {
-  it("streak sits with the heading as momentum copy; no streak → no streak claim", async () => {
-    responses.summary = summaryOf({ streakDays: 12 });
+  it("the streak status sits under the heading; no streak → no streak claim (all states: dashboard-hero.test.tsx)", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    responses.summary = summaryOf({ streakDays: 12, streakActiveToday: true, streakToday: today });
     const first = renderDashboard();
     const welcome = await screen.findByTestId("dashboard-welcome");
-    await within(welcome).findByText("Ready to keep your 12-day streak going?");
-    expect(within(welcome).getByTestId("streak")).toHaveTextContent("12 days");
+    expect(within(welcome).getByRole("heading", { name: "Welcome back, learner" })).toBeInTheDocument();
+    expect(await within(welcome).findByTestId("streak-status")).toHaveTextContent("12-day streak · today is done");
     first.unmount();
-    responses.summary = summaryOf({ streakDays: 0 });
+    responses.summary = summaryOf({ streakDays: 0, streakToday: today });
     renderDashboard();
     const w2 = await screen.findByTestId("dashboard-welcome");
-    await within(w2).findByText("Ready for today's practice?");
-    expect(within(w2).queryByTestId("streak")).toBeNull();
+    expect(await within(w2).findByTestId("streak-status")).toHaveTextContent("Ready for today's practice?");
+    expect(w2.textContent).not.toMatch(/streak/i);
   });
 
   it("all six canonical values represented: three primary outcomes + non-zero video counts as one line", async () => {
@@ -452,7 +460,7 @@ describe("Add Video Focus (empty library)", () => {
   beforeEach(() => {
     responses.continue = page([], "continue");
     responses.library = page([]);
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0 });
+    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
     responses.vocab = statsOf({ total: 0, learning: 0 });
   });
 
@@ -487,23 +495,28 @@ describe("Add Video Focus (empty library)", () => {
     expect(document.activeElement).toBe(document.getElementById("add-video-url"));
   });
 
-  it("the secondary '+ Add a video' toggle expands the form and focuses the input; Escape collapses it, keeps the typed URL and returns focus to the toggle", async () => {
+  it("the hero's 'Start today's practice' opens the link box in place and focuses it; Escape collapses it, keeps the typed URL and returns focus to the button", async () => {
     const user = userEvent.setup();
     renderDashboard();
     await screen.findByTestId("your-progress");
     expect(document.getElementById("add-video")).toBeNull();
-    const toggle = screen.getByRole("button", { name: "Add a video" });
+    const toggle = within(screen.getByTestId("dashboard-welcome")).getByRole("button", { name: "Start today's practice" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     const input = document.getElementById("add-video-url") as HTMLInputElement;
+    expect(screen.getByTestId("dashboard-welcome")).toContainElement(input); // inside the hero, not elsewhere
     expect(document.activeElement).toBe(input);
-    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled(); // right under the toggle — no scroll jump
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled(); // right under the button — no scroll jump
     await user.type(input, "https://youtu.be/abc");
     await user.keyboard("{Escape}");
     expect(document.getElementById("add-video")).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Add a video" }));
-    await user.click(screen.getByRole("button", { name: "Add a video" }));
+    expect(document.activeElement).toBe(toggle);
+    await user.click(toggle);
     expect((document.getElementById("add-video-url") as HTMLInputElement).value).toBe("https://youtu.be/abc");
+    // Clicking the button again collapses it too.
+    await user.click(toggle);
+    expect(document.getElementById("add-video")).toBeNull();
     expect(calls.some((c) => !c.startsWith("GET "))).toBe(false);
   });
 
@@ -547,7 +560,7 @@ describe("progressive gating (independently delayed sources)", () => {
 
   it("no sentence action: pending vocabulary blocks the fallback (placeholder, no add-video, no nudge button)", async () => {
     responses.continue = page([], "continue");
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0 });
+    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
     const releaseVocab = gate("vocab");
     renderDashboard();
     await screen.findByTestId("your-progress"); // summary resolved
@@ -568,7 +581,7 @@ describe("progressive gating (independently delayed sources)", () => {
 
   it("no sentence/vocabulary action: the summary decides add-video vs hidden", async () => {
     responses.continue = page([], "continue");
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0 });
+    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
     const releaseSummary = gate("summary");
     renderDashboard();
     await screen.findByTestId("continue-learning").catch(() => undefined);

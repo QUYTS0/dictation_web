@@ -117,6 +117,7 @@ const SUMMARY: DashboardSummary = {
   streakDays: 2,
   streakTimeZone: "UTC",
   streakToday: "2026-10-01",
+  streakActiveToday: false,
   streakIncludesUtcFallback: false,
   recentVocabulary: [],
 };
@@ -189,7 +190,7 @@ describe("Continue Learning: one resume item", () => {
     expect(within(cont).getByTestId("continue-card-vProgress")).toBeInTheDocument();
     expect(screen.queryByTestId("continue-card-vListen")).toBeNull();
     expect(within(cont).getByTestId("continue-coverage")).toHaveTextContent("1/10 sentences practiced");
-    expect(within(cont).getByText("Shadowing")).toBeInTheDocument();
+    expect(within(cont).getByTestId("continue-meta")).toHaveTextContent(/^Shadowing/); // the last mode leads the meta line
     expect(within(cont).getByRole("link", { name: "Continue learning" })).toHaveAttribute("href", "/dictation/vProgress");
     expect(within(cont).getAllByRole("link").filter((a) => a.getAttribute("tabindex") !== "-1")).toHaveLength(1);
     expect(within(cont).queryByRole("link", { name: /report/i })).toBeNull(); // completedRoundCount 1 — still no report link here
@@ -218,7 +219,7 @@ describe("Add Video", () => {
     renderDashboard();
     await screen.findByTestId("continue-learning");
     expect(screen.queryByLabelText("YouTube URL")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Add a video" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start today's practice" }));
     expect(screen.queryByText("Dictation Practice")).toBeNull();
     expect(screen.queryByText("Listening Practice")).toBeNull();
     fireEvent.change(screen.getByLabelText("YouTube URL"), { target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } });

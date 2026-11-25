@@ -9,6 +9,9 @@ export interface ActivityStreak {
   streakTimeZone: string;
   /** The viewer's local date the streak was evaluated against. */
   streakToday: string;
+  /** Practice is already recorded on `streakToday` (the streak is safe for
+   *  today). False means the streak — if any — ends yesterday so far. */
+  streakActiveToday: boolean;
   /** Some day in the CURRENT streak is known only from a UTC-dated record
    *  (activity from before local dating, or sent without a timezone). */
   streakIncludesUtcFallback: boolean;
@@ -46,6 +49,7 @@ export async function loadActivityStreak(
       streakDays: computeStreakFromDays(days, today),
       streakTimeZone: timeZone,
       streakToday: today,
+      streakActiveToday: days.includes(today),
       streakIncludesUtcFallback: streakDayKeys(days, today).some((d) => fallback.has(d)),
     },
   };

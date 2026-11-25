@@ -25,8 +25,8 @@ export function mostCommonMistakeLine(patterns: ErrorPattern[]): string | null {
 
 export function NeedsAttentionCard({ patterns, loading }: { patterns: ErrorPattern[]; loading: boolean }) {
   return (
-    <section aria-labelledby="needs-attention-heading" data-testid="needs-attention" className="flex h-full flex-col rounded-3xl border border-slate-200/70 bg-white/60 p-5 sm:p-6">
-      <h2 id="needs-attention-heading" className="text-base font-semibold text-slate-900">
+    <section aria-labelledby="needs-attention-heading" data-testid="needs-attention" className="flex h-full flex-col rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6">
+      <h2 id="needs-attention-heading" className="text-base font-bold text-ink">
         Needs attention
       </h2>
       {loading ? (
@@ -43,8 +43,8 @@ export function NeedsAttentionCard({ patterns, loading }: { patterns: ErrorPatte
                   <span className="font-medium text-slate-700">{errorTypeLabel(p.errorType)}</span>
                   <span className="tabular-nums text-slate-400">{p.count}</span>
                 </div>
-                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-                  <div className="h-full rounded-full bg-primary-500/70" style={{ width: `${Math.min(100, Math.max(0, p.percentage))}%` }} />
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden="true">
+                  <div className="h-full rounded-full bg-primary-600" style={{ width: `${Math.min(100, Math.max(0, p.percentage))}%` }} />
                 </div>
               </li>
             ))}

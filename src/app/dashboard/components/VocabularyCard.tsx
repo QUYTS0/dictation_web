@@ -30,13 +30,13 @@ export function VocabularyCard({
   const reviewLine = stats && stats.reviewable > 0 ? vocabularyHeadline(stats.due > 0 ? "due" : "new", stats.due) : stats && stats.total > 0 ? "Nothing to review right now" : null;
 
   return (
-    <section aria-labelledby="vocabulary-heading" data-testid="vocabulary-card" className="flex h-full flex-col rounded-3xl border border-slate-200/70 bg-white/60 p-5 sm:p-6">
-      <h2 id="vocabulary-heading" className="text-base font-semibold text-slate-900">
+    <section aria-labelledby="vocabulary-heading" data-testid="vocabulary-card" className="flex h-full flex-col rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6">
+      <h2 id="vocabulary-heading" className="text-base font-bold text-ink">
         Vocabulary
       </h2>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-2xl font-semibold tracking-tight text-slate-900">
+          <p className="text-2xl font-bold tracking-tight text-ink">
             {saved} {saved === 1 ? "word" : "words"} saved
           </p>
           {reviewLine && (
@@ -48,7 +48,7 @@ export function VocabularyCard({
         {showReviewButton && (
           <Link
             href="/vocabulary/review"
-            className="rounded-xl bg-white px-3.5 py-2 text-sm font-semibold text-primary-700 shadow-sm ring-1 ring-primary-500/30 transition-colors hover:bg-primary-50"
+            className="rounded-xl border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-primary-600 transition-colors hover:border-primary-500/40 hover:bg-primary-50"
           >
             Start review
           </Link>
@@ -63,7 +63,7 @@ export function VocabularyCard({
           ))}
         </ul>
       ) : (
-        <p className="mt-4 text-sm text-slate-500">Words you save while practicing will appear here.</p>
+        <p className="mt-4 text-sm text-muted">Words you save while practicing will appear here.</p>
       )}
       <Link href="/vocabulary" className="mt-auto inline-flex items-center gap-1 self-start pt-5 text-sm font-semibold text-primary-600 hover:text-primary-700">
         View vocabulary <ArrowRight size={15} aria-hidden="true" />

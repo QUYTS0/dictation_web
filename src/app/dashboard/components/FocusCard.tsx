@@ -2,7 +2,7 @@
 
 import type { MouseEvent } from "react";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Target } from "lucide-react";
 import type { FocusResult } from "@/lib/dashboard/selectFocus";
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
@@ -13,7 +13,7 @@ export function vocabularyHeadline(variant: "due" | "new", due: number): string 
 }
 
 const ctaClass =
-  "inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-primary-700 shadow-sm ring-1 ring-primary-500/30 transition-colors hover:bg-primary-50";
+  "inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-primary-600 transition-colors hover:border-primary-500/40 hover:bg-primary-50";
 
 /**
  * "Next up" — the Focus decision (selectFocus) presented to the learner: one
@@ -30,7 +30,7 @@ export function FocusCard({ focus, onAddVideo }: { focus: FocusResult; onAddVide
         aria-busy="true"
         aria-label="Loading next up"
         data-testid="focus-pending"
-        className="min-h-[148px] animate-pulse rounded-3xl border border-slate-200/70 bg-white/60"
+        className="min-h-[148px] animate-pulse rounded-2xl border border-line bg-white"
       />
     );
   }
@@ -72,14 +72,17 @@ export function FocusCard({ focus, onAddVideo }: { focus: FocusResult; onAddVide
       aria-labelledby="focus-heading"
       data-testid="dashboard-focus"
       data-focus-kind={focus.kind}
-      className="flex flex-col gap-4 rounded-3xl border border-slate-200/70 bg-white/70 p-5 sm:p-6"
+      className="flex flex-col gap-4 rounded-2xl border border-line bg-white p-5 shadow-xs"
     >
-      <p className="text-sm font-semibold text-slate-500">Next up</p>
+      <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-ink">
+        <Target size={16} className="text-primary-600" aria-hidden="true" />
+        Next up
+      </p>
       <div className="min-w-0">
-        <h2 id="focus-heading" className="text-lg font-semibold leading-snug text-slate-900">
+        <h2 id="focus-heading" className="text-lg font-bold leading-snug text-ink">
           {headline}
         </h2>
-        <p className="mt-1 text-sm text-slate-500">{detail}</p>
+        <p className="mt-1 text-sm text-muted">{detail}</p>
       </div>
       <div>{cta}</div>
     </section>

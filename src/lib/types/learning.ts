@@ -111,6 +111,8 @@ export interface DashboardSummary {
   /** The zone "today" was evaluated in (viewer's, UTC fallback). */
   streakTimeZone: string;
   streakToday: string;
+  /** Practice is already recorded on `streakToday` (the streak is safe today). */
+  streakActiveToday: boolean;
   /** A day of the current streak is known only from a UTC-dated record. */
   streakIncludesUtcFallback: boolean;
   recentVocabulary: Array<{ id: string; term: string; sentence_context: string; created_at: string }>;

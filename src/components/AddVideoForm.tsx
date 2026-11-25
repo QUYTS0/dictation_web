@@ -58,6 +58,8 @@ interface AddVideoFormProps {
   onUrlChange: (url: string) => void;
   /** `light` for white surfaces (dialog), `dark` for the navy hero. */
   variant?: "light" | "dark";
+  /** `stacked` keeps the button under the field (narrow panels). */
+  layout?: "row" | "stacked";
   inputId?: string;
   inputRef?: Ref<HTMLInputElement>;
   autoFocus?: boolean;
@@ -67,7 +69,7 @@ interface AddVideoFormProps {
  * The one "add a video" form: a single URL field, no mode choice. Used by
  * the header's New Video dialog (every page) and the Dashboard.
  */
-export function AddVideoForm({ url, onUrlChange, variant = "light", inputId, inputRef, autoFocus }: AddVideoFormProps) {
+export function AddVideoForm({ url, onUrlChange, variant = "light", layout = "row", inputId, inputRef, autoFocus }: AddVideoFormProps) {
   const { submit, adding, error, clearError } = useAddVideo();
   const generatedId = useId();
   const id = inputId ?? `add-video-url-${generatedId}`;
@@ -81,7 +83,7 @@ export function AddVideoForm({ url, onUrlChange, variant = "light", inputId, inp
           e.preventDefault();
           void submit(url);
         }}
-        className="flex flex-col gap-3 sm:flex-row"
+        className={clsx("flex flex-col gap-3", layout === "row" && "sm:flex-row")}
       >
         <div className="relative flex flex-1 items-center">
           <Video className={clsx("absolute left-4", dark ? "text-slate-400" : "text-muted")} size={20} aria-hidden="true" />

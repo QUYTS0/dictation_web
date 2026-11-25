@@ -239,7 +239,7 @@ Query hooks go in `src/lib/queries/{dashboard,profile,xp,achievements,leaderboar
 | `DashboardHero.tsx`, `StreakStatusLine.tsx`, `WeeklyTrack.tsx`, `DayDetailsPopover.tsx`, `ActiveEmber.tsx` | welcome row | Mon–Sun of the viewer's local week; future days are empty dots. Per-day value = XP (Phase 5); minutes are shown until then. Hosts the hero link box. |
 | `FirstRunHero.tsx` | — | §4.5.3. |
 | `ContinueLearningCard.tsx` | same | 3 bars + resume point; keep test ids `continue-learning`, `continue-card-*`, `continue-coverage`, `continue-listening`. |
-| `FocusCard.tsx` | same | Restyle only. Its "Add a video" CTA opens `AddVideoDialog`, replacing the scroll-to-input logic. |
+| `FocusCard.tsx` | same | Restyle only. Its "Add a video" CTA opens the **hero link box** (scrolls it into view and focuses the field), so the page has one form. *(Implemented in Phase 2; originally planned as opening `AddVideoDialog`.)* |
 | `VocabularyDeck.tsx` | `VocabularyCard.tsx` | Queue from `GET /api/vocabulary/review` (20-item batch). The flip is a real `<button>`, and the back side is announced (`aria-live`). Grades advance optimistically and roll back with a toast on error. Empty state: saved count + recent chips + "View vocabulary". Keeps the dedup rule (`page.tsx:136`) for the header "Start full review" button. Modes and shortcuts in §4.5.4. |
 | `LeagueCard.tsx` | — | States: member / not joined / hidden / loading / error. One-time notice (localStorage) for D7: "You appear as Learner 4F2A2. Change your name or hide yourself in Preferences." |
 | `LearningPerformance.tsx` | `ProgressSummary.tsx` | Keep test ids `your-progress`, `progress-active`, `progress-accuracy`, `progress-pronunciation`, `progress-videos`. |
@@ -269,14 +269,16 @@ One line under "Welcome back", chosen from the summary's `streakDays` and `strea
 | Streak 0 | "Ready for today's practice?" |
 | Active today | "12-day streak · today is done ✓" |
 | Not active today, before 18:00 | "Keep your 12-day streak going today." |
-| Not active today, from 18:00 | "Your 12-day streak ends at midnight. One sentence or one word review keeps it going." |
+| Not active today, from 18:00 | Phase 2: "Your 12-day streak ends at midnight. Any practice today keeps it going." Phase 3 (once word reviews count, D9): "… One sentence or one word review keeps it going." |
+| Summary is from an earlier local day (page left open past midnight) | "Ready for today's practice?" (no claim until it refetches) |
 
 It updates when the summary refetches (after practice or review); no timer is needed beyond re-evaluating the clock on window focus.
 
 #### 4.5.3 First-run dashboard — Phase 2
 
 - Shown when the learner has **nothing yet**: `libraryVideos === 0 && activeTime.sessionCount === 0 && vocabularyCount === 0`. A learner who removed all their videos but has history still gets the normal dashboard.
-- `FirstRunHero`: heading, `AddVideoForm` (dark variant, autofocused), and three steps: ① Listen → ② Type what you hear → ③ Repeat aloud.
+- `FirstRunHero`: heading, `AddVideoForm` (dark variant), and three steps: ① Listen → ② Type what you hear → ③ Repeat aloud. The field is **not** autofocused: on page load that would skip the heading for screen-reader users and pop the keyboard on phones.
+- While the summary loads, the hero is a placeholder, so a brand-new learner never sees a premature "Welcome back".
 - All other cards (Continue, Next up, deck, league, performance, diagnostics, achievements) are hidden until there's data. The header stays the same.
 - This also satisfies the `.github/instructions/frontend-ui.instructions.md` rule about a prominent link input, at the moment it matters most.
 
@@ -297,9 +299,9 @@ It updates when the summary refetches (after practice or review); no timer is ne
 
 #### 4.5.6 Resume point on the Continue card — Phase 2
 
-- "Resume at sentence {round.currentSegmentIndex + 1} of {requiredSentenceCount}". Segment indexes are 0-based and shown +1, as Bookmarks does (`src/app/bookmarks/page.tsx:232`).
-- Check during implementation that `requiredSentenceCount` counts the same segment list as `currentSegmentIndex`. If not, show "Resume at sentence 13" without the total.
-- Hidden for Listening-only items (no round).
+- "Resume at sentence {round.currentSegmentIndex + 1}". Segment indexes are 0-based and shown +1, as Bookmarks does (`src/app/bookmarks/page.tsx:232`).
+- **No total.** Checked in Phase 2: `required_sentence_count` counts only eligible sentences (`text_normalized <> ''`, `037:40`), while `currentSegmentIndex` indexes every segment, so "13 of 58" could be wrong.
+- Hidden for Listening-only items (no round) and for an untouched round (index 0, nothing practiced).
 
 #### 4.5.7 Celebrations — Phase 5 (Monday recap gains the league result in Phase 7)
 
@@ -312,9 +314,9 @@ Each phase ends with `npm run lint`, `npm run build`, `npm test` green, and is s
 
 | Phase | Scope | Backend | Size |
 |---|---|---|---|
-| **1. Visual foundation** | Tokens, fonts, AppHeader restyle, `AddVideoForm` + `AddVideoDialog`, streak pill, AppFooter, ToastProvider, `ConfettiBurst` move + reduced motion | none | M |
-| **2. Dashboard re-layout (existing data)** | Hero (welcome + streak status line + link box; target, level and track values hidden), first-run dashboard, Continue with 3 bars + resume point, Next up, Learning performance (no bars yet), new grid order | `streakActiveToday` (no SQL) | M |
-| **3. Deck, diagnostics, review log** | VocabularyDeck with inline grading, Fill the gap / Meaning modes and shortcuts (also on `/vocabulary/review`); Needs attention with example panel and History link; vocabulary reviews logged and counted in the streak (D9) | 046, `mistake-example` route, review route change | M–L |
+| **1. Visual foundation** ✅ *done 2026-11-25* | Tokens, fonts, AppHeader restyle, `AddVideoForm` + `AddVideoDialog`, streak pill, AppFooter (Dashboard, My Learning, History, Bookmarks, Results; not the fixed-viewport Vocabulary page), ToastProvider, `ConfettiBurst` move + reduced motion | none | M |
+| **2. Dashboard re-layout (existing data)** ✅ *done 2026-11-25* | Hero (welcome + streak status line + link box; target, level and track not shown yet), first-run dashboard, Continue with 3 bars + resume point, Next up, Learning performance (no bars yet). **Interim order:** hero → Continue \| Next up → Learning performance → Vocabulary \| Needs attention (today's 7/5 pair, restyled). Phase 3 moves the deck above performance and diagnostics below it. | `streakActiveToday` (no SQL) | M |
+| **3. Deck, diagnostics, review log** | VocabularyDeck with inline grading, Fill the gap / Meaning modes and shortcuts (also on `/vocabulary/review`); Needs attention with example panel and History link; vocabulary reviews logged and counted in the streak (D9), and the streak line's urgent wording updated to mention word reviews; final section order | 046, `mistake-example` route, review route change | M–L |
 | **4. Daily activity + goal** | Weekly track ✓ and minutes, day popover (minutes), Today's target, 7-day bars, Profile dialog (goal) | 047, `week` + `profile` routes | M |
 | **5. XP and levels** | XP pill, hero level bar, per-day XP on the weekly track, full day popover, goal/level celebrations, Monday recap (XP part) | 048, `xp` route | M |
 | **6. Achievements** | Trophy case, detail dialog, unlock toasts, streak-milestone popover | 049, `achievements` route | M |
