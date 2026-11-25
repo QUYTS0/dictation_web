@@ -30,7 +30,8 @@ export function streakStatus(s: StreakFields, now: Date): { tone: StreakTone; te
   const n = s.streakDays;
   if (s.streakActiveToday) return { tone: "done", text: `${n}-day streak · today is done` };
   if (localHour(now, s.streakTimeZone) < STREAK_URGENT_HOUR) return { tone: "nudge", text: `Keep your ${n}-day streak going today.` };
-  return { tone: "urgent", text: `Your ${n}-day streak ends at midnight. Any practice today keeps it going.` };
+  // Since migration 046 a vocabulary review is a practice day too (D9).
+  return { tone: "urgent", text: `Your ${n}-day streak ends at midnight. One sentence or one word review keeps it going.` };
 }
 
 export function StreakStatusLine({ summary }: { summary: DashboardSummary | undefined }) {

@@ -703,6 +703,9 @@ export type ReviewGrade = "again" | "hard" | "good" | "easy";
 export interface VocabularyReviewSubmitRequest {
   itemId: string;
   grade: ReviewGrade;
+  /** The viewer's IANA timezone: decides which local day the review counts
+   *  for in the streak (migration 046). Optional; absent/invalid → UTC day. */
+  timeZone?: string;
 }
 
 export interface VocabularyReviewSubmitResponse {

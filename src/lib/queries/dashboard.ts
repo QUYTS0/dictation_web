@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type { ErrorType } from "@/lib/types";
-import type { DashboardSummary } from "@/lib/types/learning";
+import type { DashboardMistakeExample, DashboardSummary } from "@/lib/types/learning";
 import { viewerTimeZone } from "@/lib/utils/streak";
 
 export type { DashboardSummary };
@@ -15,7 +15,22 @@ export interface DashboardErrorPatterns {
 export const dashboardKeys = {
   summary: (userId: string | undefined) => ["dashboard-summary", userId] as const,
   errorPatterns: (userId: string | undefined) => ["dashboard-error-patterns", userId] as const,
+  mistakeExamples: (userId: string | undefined) => ["dashboard-mistake-example", userId] as const,
+  mistakeExample: (userId: string | undefined, errorType: ErrorType | null) => ["dashboard-mistake-example", userId, errorType] as const,
 };
+
+/** The latest recorded mistake of the selected type (diagnostics panel). */
+export function useDashboardMistakeExampleQuery(userId: string | undefined, errorType: ErrorType | null) {
+  return useQuery({
+    queryKey: dashboardKeys.mistakeExample(userId, errorType),
+    queryFn: async (): Promise<DashboardMistakeExample | null> => {
+      const res = await fetch(`/api/dashboard/mistake-example?errorType=${encodeURIComponent(errorType ?? "")}`);
+      if (!res.ok) throw new Error("Failed to load an example");
+      return ((await res.json()) as { example: DashboardMistakeExample | null }).example;
+    },
+    enabled: !!userId && !!errorType,
+  });
+}
 
 /** `?tz=<browser IANA zone>` — the streak's "today" is the viewer's local
  *  date. Shared by the Dashboard and the practice header (useStreak). */

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { mapLearningReadError } from "@/lib/supabase/learningReadErrors";
 import { computeNextReview, type ReviewGrade } from "@/lib/utils/srs";
+import { isValidTimeZone } from "@/lib/utils/streak";
 import type { VocabularyItem, VocabularyReviewSubmitRequest } from "@/lib/types";
 
 const REVIEW_BATCH_SIZE = 20;
@@ -52,7 +54,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body: VocabularyReviewSubmitRequest = await request.json();
-    const { itemId, grade } = body;
+    const { itemId, grade, timeZone } = body;
 
     if (!itemId || !VALID_GRADES.includes(grade)) {
       return NextResponse.json(
@@ -97,24 +99,23 @@ export async function POST(request: NextRequest) {
       now
     );
 
-    const { data, error } = await supabase
-      .from("vocabulary_items")
-      .update({
-        interval_days: next.intervalDays,
-        ease_factor: next.easeFactor,
-        repetitions: next.repetitions,
-        next_review_at: next.nextReviewAt.toISOString(),
-        last_reviewed_at: now.toISOString(),
-      })
-      .eq("id", itemId)
-      .eq("user_id", user.id)
-      .select("*")
-      .single();
+    // One transaction: the item's SRS update + its vocabulary_reviews row
+    // (migration 046), so a review always counts toward the streak exactly
+    // once. The review's day is decided in the viewer's timezone; an absent
+    // or invalid zone is stored as null (UTC fallback), never an error.
+    const { data, error } = await supabase.rpc("fn_record_vocabulary_review", {
+      p_item_id: itemId,
+      p_grade: grade,
+      p_interval_days: next.intervalDays,
+      p_ease_factor: next.easeFactor,
+      p_repetitions: next.repetitions,
+      p_next_review_at: next.nextReviewAt.toISOString(),
+      p_time_zone: isValidTimeZone(timeZone) ? timeZone : null,
+    });
 
-    if (error || !data) {
-      console.error("[vocabulary/review] update error:", error);
-      return NextResponse.json({ error: "Failed to update review state" }, { status: 500 });
-    }
+    if (error) return mapLearningReadError(error, "vocabulary/review", "046");
+    // null: the item vanished (or changed owner) between the read and the write.
+    if (!data) return NextResponse.json({ error: "Vocabulary item not found" }, { status: 404 });
 
     return NextResponse.json({ item: data as VocabularyItem });
   } catch (err) {

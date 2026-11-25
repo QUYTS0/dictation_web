@@ -155,7 +155,7 @@ describe("streakStatus (plan §4.5.2)", () => {
   it(`not practiced yet: a nudge before ${STREAK_URGENT_HOUR}:00 local, the urgent line from then on`, () => {
     expect(streakStatus(base, morning)).toEqual({ tone: "nudge", text: "Keep your 12-day streak going today." });
     expect(streakStatus(base, evening).tone).toBe("urgent");
-    expect(streakStatus(base, evening).text).toBe("Your 12-day streak ends at midnight. Any practice today keeps it going.");
+    expect(streakStatus(base, evening).text).toBe("Your 12-day streak ends at midnight. One sentence or one word review keeps it going.");
     // 17:59 local is still a nudge; 18:00 local is urgent.
     expect(streakStatus(base, new Date("2026-11-25T10:59:00Z")).tone).toBe("nudge");
     expect(streakStatus(base, new Date("2026-11-25T11:00:00Z")).tone).toBe("urgent");

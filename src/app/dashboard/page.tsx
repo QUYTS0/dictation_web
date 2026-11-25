@@ -18,7 +18,7 @@ import { FirstRunHero } from "./components/FirstRunHero";
 import { FocusCard } from "./components/FocusCard";
 import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
-import { VocabularyCard } from "./components/VocabularyCard";
+import { VocabularyDeck } from "./components/VocabularyDeck";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
@@ -43,7 +43,8 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
  *                                  "Start today's practice" (a NEW video)
  *   1. What should I continue?   — "Pick up where you left off" (ONE item)
  *   2. What should I do next?    — "Next up" (the Focus decision)
- *   3. Am I making progress?     — Learning performance, Vocabulary, Needs attention
+ *   3. Words to review           — the review deck (graded in place)
+ *   4. Am I making progress?     — Learning performance, then error diagnostics
  * A learner with nothing yet sees only the first-run hero. Browsing saved
  * videos is My Learning (/library); past activity is History. Every metric
  * is its own canonical number (§6.8), never recomputed or blended here.
@@ -209,7 +210,11 @@ function DashboardContent() {
                 </div>
               )}
 
-              {/* 3. Learning performance — the canonical metrics, each its own card. */}
+              {/* 3. The review deck. Full width until the league card (Phase 7)
+                  takes the right third; the deck adapts to its own width. */}
+              <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
+
+              {/* 4. Learning performance — the canonical metrics, each its own card. */}
               {summaryQuery.isError && !summary ? (
                 <p className="text-sm text-red-600">Failed to load your progress. Please refresh and try again.</p>
               ) : summary ? (
@@ -218,16 +223,8 @@ function DashboardContent() {
                 <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-2xl border border-line bg-white" />
               )}
 
-              {/* 4. Vocabulary momentum + Needs attention. Stacked below lg. Phase 3
-                  replaces both (deck + diagnostics) and moves them into the final order. */}
-              <div className="grid items-stretch gap-4 sm:gap-5 lg:grid-cols-12" data-testid="dashboard-insights">
-                <div className="min-w-0 lg:col-span-7">
-                  <VocabularyCard summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
-                </div>
-                <div className="min-w-0 lg:col-span-5">
-                  <NeedsAttentionCard patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
-                </div>
-              </div>
+              {/* 5. Error diagnostics. Full width until achievements (Phase 6) take the right third. */}
+              <NeedsAttentionCard userId={userId} patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
             </>
           )}
         </main>

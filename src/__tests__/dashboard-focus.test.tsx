@@ -162,6 +162,10 @@ beforeEach(() => {
               ? "continue"
               : "library"
             : null;
+    // The review deck's batch and the diagnostics example (Phase 3) — not
+    // part of Focus; plain answers here.
+    if (url.startsWith("/api/vocabulary/review")) return json({ items: [] });
+    if (url.startsWith("/api/dashboard/mistake-example")) return json({ example: null });
     if (!source) return json({}, 404);
     const g = gates[source];
     if (g) await g;
@@ -241,19 +245,21 @@ describe("wide shell and layout", () => {
     expect(screen.queryByTestId("dashboard-actions")).toBeNull();
   });
 
-  it("no six metric cards, no Library, no rail, no sticky; insights row is 7/12 + 5/12 and stacks below lg", async () => {
+  it("no six metric cards, no Library, no rail, no sticky; the deck and diagnostics are full-width sections that size themselves (container queries)", async () => {
     renderDashboard();
     await screen.findByTestId("your-progress");
     expect(screen.queryByRole("region", { name: "Progress summary" })).toBeNull();
-    const insights = screen.getByTestId("dashboard-insights");
-    expect(insights).toHaveClass("grid", "lg:grid-cols-12");
-    expect(screen.getByTestId("vocabulary-card").parentElement).toHaveClass("lg:col-span-7");
-    expect(screen.getByTestId("needs-attention").parentElement).toHaveClass("lg:col-span-5");
+    const main = screen.getByRole("main");
+    // Direct children of <main> until their right-hand partners arrive (league: Phase 7, achievements: Phase 6).
+    expect(screen.getByTestId("vocabulary-card").parentElement).toBe(main);
+    expect(screen.getByTestId("needs-attention").parentElement).toBe(main);
+    expect(screen.getByTestId("vocabulary-card")).toHaveClass("@container");
+    expect(screen.getByTestId("needs-attention")).toHaveClass("@container");
     expect(document.querySelector('[class*="sticky"]')).toBeNull();
-    for (const gone of ["dashboard-rail", "library-rail-grid", "library-grid"]) expect(screen.queryByTestId(gone)).toBeNull();
+    for (const gone of ["dashboard-rail", "library-rail-grid", "library-grid", "dashboard-insights"]) expect(screen.queryByTestId(gone)).toBeNull();
   });
 
-  it("DOM order: hero (with 'Start today's practice') → Continue → Next up → Learning performance → Vocabulary → Needs attention", async () => {
+  it("DOM order: hero (with 'Start today's practice') → Continue → Next up → review deck → Learning performance → Needs attention", async () => {
     renderDashboard();
     const focus = await screen.findByTestId("dashboard-focus");
     const hero = await screen.findByTestId("dashboard-welcome");
@@ -262,8 +268,8 @@ describe("wide shell and layout", () => {
       hero,
       screen.getByTestId("continue-learning"),
       focus,
-      screen.getByTestId("your-progress"),
       screen.getByTestId("vocabulary-card"),
+      screen.getByTestId("your-progress"),
       screen.getByTestId("needs-attention"),
     ];
     for (let i = 1; i < order.length; i++) {
@@ -327,7 +333,23 @@ describe("Needs attention (existing error-pattern data, descriptive only)", () =
     await within(card).findByText("Wrong form is your most common recorded mistake.");
     expect(within(card).getAllByRole("listitem")).toHaveLength(3);
     expect(card.textContent).not.toMatch(/improv|better|worse|because|AI|should|try /i);
-    expect(within(card).queryByRole("link")).toBeNull();
+    // The one link is factual navigation to those mistakes in History (Phase 3), not advice.
+    expect(within(card).getAllByRole("link")).toHaveLength(1);
+    expect(within(card).getByRole("link", { name: "Review wrong form mistakes" })).toHaveAttribute("href", "/history?errorType=wrong_form");
+  });
+
+  it("selecting a type shows its meaning and latest example, and retargets the History link", async () => {
+    errorPatterns = { total: 9, patterns: [{ errorType: "wrong_form", count: 5, percentage: 56 }, { errorType: "missing_word", count: 4, percentage: 44 }] };
+    renderDashboard();
+    const card = await screen.findByTestId("needs-attention");
+    const missing = await within(card).findByRole("button", { name: /Missing word/ });
+    expect(within(card).getByRole("button", { name: /Wrong form/ })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(missing);
+    expect(missing).toHaveAttribute("aria-pressed", "true");
+    expect(within(card).getByTestId("mistake-example-panel")).toHaveTextContent("Your answer has fewer words than the sentence");
+    expect(within(card).getByRole("link", { name: "Review missing word mistakes" })).toHaveAttribute("href", "/history?errorType=missing_word");
+    await waitFor(() => expect(calls).toContain("GET /api/dashboard/mistake-example?errorType=missing_word"));
+    expect(await within(card).findByText("No example to show for this type yet.")).toBeInTheDocument();
   });
 
   it("a tie never names a single 'most common' type", async () => {
@@ -346,13 +368,16 @@ describe("request contract (Option B)", () => {
     "GET /api/videos/library?filter=continue&offset=0&limit=1",
     "GET /api/dashboard/error-patterns",
     "GET /api/vocabulary/stats",
+    // The review deck's current batch (Phase 3). No mistake example here:
+    // with no recorded mistakes there is no type to show one for.
+    "GET /api/vocabulary/review",
   ];
   const normalize = (c: string) => c.replace(/\?tz=.*$/, "");
 
   it.each([
     ["with a sentence candidate", [NEEDS]],
     ["without a candidate", [] as LibraryItem[]],
-  ])("cold load %s: exactly 4 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
+  ])("cold load %s: exactly 5 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");

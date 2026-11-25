@@ -62,3 +62,11 @@ export function computeNextReview(
     nextReviewAt: new Date(now.getTime() + intervalDays * DAY_MS),
   };
 }
+
+/** Short label for a review interval, as shown on grade buttons: "today", "1d", "6d", "3mo", "1y". */
+export function formatReviewInterval(intervalDays: number): string {
+  if (intervalDays <= 0) return "today";
+  if (intervalDays < 30) return `${Math.round(intervalDays)}d`;
+  if (intervalDays < 365) return `${Math.round(intervalDays / 30)}mo`;
+  return `${Math.round(intervalDays / 365)}y`;
+}

@@ -1,12 +1,64 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { VocabularyItem, VocabularyStatsResponse, VocabularyUpdateRequest } from "@/lib/types";
+import type { ReviewGrade, VocabularyItem, VocabularyStatsResponse, VocabularyUpdateRequest } from "@/lib/types";
+import { dashboardKeys } from "@/lib/queries/dashboard";
+import { streakKeys } from "@/lib/queries/streak";
+import { viewerTimeZone } from "@/lib/utils/streak";
 
 export const vocabularyKeys = {
   items: (userId: string | undefined) => ["vocabulary-items", userId] as const,
   stats: (userId: string | undefined) => ["vocabulary-stats", userId] as const,
+  reviewQueue: (userId: string | undefined) => ["vocabulary-review-queue", userId] as const,
 };
+
+/**
+ * The current review batch (GET /api/vocabulary/review: up to 20 items
+ * admissible now, `next_review_at` ascending). Not refetched on focus: a
+ * session works through the batch it loaded, and graded items leave it
+ * locally — a refetch mid-session would reshuffle the cards under the
+ * learner. A fresh batch is loaded on the next visit (staleTime 60s).
+ */
+export function useVocabularyReviewQueueQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: vocabularyKeys.reviewQueue(userId),
+    queryFn: async (): Promise<VocabularyItem[]> => {
+      const res = await fetch("/api/vocabulary/review");
+      if (!res.ok) throw new Error("Failed to load review items");
+      const data = (await res.json()) as { items?: VocabularyItem[] };
+      return data.items ?? [];
+    },
+    enabled: !!userId,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Grades one review (POST /api/vocabulary/review) with the viewer's
+ * timezone, which decides the local day the review counts for in the streak
+ * (migration 046). Throws with the server's message on failure.
+ */
+export async function submitVocabularyReview(itemId: string, grade: ReviewGrade): Promise<VocabularyItem> {
+  const res = await fetch("/api/vocabulary/review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ itemId, grade, timeZone: viewerTimeZone() ?? undefined }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string; item?: VocabularyItem };
+  if (!res.ok || !data.item) throw new Error(data.error || "Failed to save review.");
+  return data.item;
+}
+
+/**
+ * After a confirmed grade: the Vocabulary Bank and its counts, and — since
+ * a review is a practice day (046) — the streak (header pill, footer) and
+ * the Dashboard summary. The review queue itself is left alone (see above).
+ */
+export function invalidateAfterVocabularyReview(queryClient: QueryClient, userId: string | undefined) {
+  invalidateVocabularyQueries(queryClient, userId);
+  void queryClient.invalidateQueries({ queryKey: streakKeys.streak(userId) });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
+}
 
 async function fetchVocabularyItems(): Promise<VocabularyItem[]> {
   const res = await fetch("/api/vocabulary");

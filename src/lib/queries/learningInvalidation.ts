@@ -34,5 +34,6 @@ export function invalidateLearningViews(
   if (opts.mistakes) {
     void qc.invalidateQueries({ queryKey: historyMistakesKeys.allForUser(userId) });
     void qc.invalidateQueries({ queryKey: dashboardKeys.errorPatterns(userId) });
+    void qc.invalidateQueries({ queryKey: dashboardKeys.mistakeExamples(userId) });
   }
 }

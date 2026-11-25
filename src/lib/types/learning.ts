@@ -118,6 +118,18 @@ export interface DashboardSummary {
   recentVocabulary: Array<{ id: string; term: string; sentence_context: string; created_at: string }>;
 }
 
+/** GET /api/dashboard/mistake-example: the latest recorded mistake of one type. */
+export interface DashboardMistakeExample {
+  attemptId: string;
+  expectedText: string;
+  userText: string;
+  createdAt: string;
+  videoId: string | null;
+  videoTitle: string | null;
+  /** The attempt's saved explanation (migration 043), or null — never generated here. */
+  explanation: string | null;
+}
+
 export interface HistorySession {
   studySessionId: string;
   videoId: string;
