@@ -35,12 +35,17 @@ import { ToastProvider, useToast } from "@/components/ToastProvider";
 import { ConfettiBurst } from "@/components/ConfettiBurst";
 
 let streakDays = 12;
+let xpResponse: { status: number; body: unknown } = { status: 200, body: {} };
 let resolveResponse: { status: number; body: unknown } = { status: 200, body: { status: "ok", videoId: "dQw4w9WgXcQ" } };
 const calls: string[] = [];
 
 beforeEach(() => {
   authUser = { id: "user-1", email: "learner@example.test" } as User;
   streakDays = 12;
+  xpResponse = {
+    status: 200,
+    body: { totalXp: 4850, level: 10, levelStartXp: 4500, nextLevelXp: 5500, todayXp: 0, days: [], lastLeagueWeek: { weekStart: "2026-11-16", xp: 0, activeSec: 0, wordsReviewed: 0 } },
+  };
   resolveResponse = { status: 200, body: { status: "ok", videoId: "dQw4w9WgXcQ" } };
   calls.length = 0;
   push.mockReset();
@@ -52,6 +57,7 @@ beforeEach(() => {
     if (url.startsWith("/api/streak")) {
       return json(200, { streakDays, streakTimeZone: "UTC", streakToday: "2026-11-25", streakIncludesUtcFallback: false });
     }
+    if (url.startsWith("/api/xp")) return json(xpResponse.status, xpResponse.body);
     if (url.startsWith("/api/video/resolve")) return json(resolveResponse.status, resolveResponse.body);
     return json(404, {});
   }) as jest.Mock;
@@ -83,12 +89,30 @@ describe("AppHeader (signed in)", () => {
     expect(screen.getByText("Practice in any mode today to start a streak.")).toBeInTheDocument();
   });
 
-  it("guests get neither New video nor a streak pill, and no streak request", () => {
+  it("guests get neither New video nor a streak or XP pill, and no streak or XP request", () => {
     authUser = null;
     renderWithClient(<AppHeader active="dashboard" />);
     expect(screen.queryByRole("button", { name: "New video" })).toBeNull();
     expect(screen.queryByTestId("header-streak")).toBeNull();
-    expect(calls.some((c) => c.includes("/api/streak"))).toBe(false);
+    expect(screen.queryByTestId("header-xp")).toBeNull();
+    expect(calls.some((c) => c.includes("/api/streak") || c.includes("/api/xp"))).toBe(false);
+  });
+
+  it("Phase 5: the XP pill reads '4,850 XP · Lvl 10', from lg up only", async () => {
+    renderWithClient(<AppHeader active="dashboard" />);
+    const pill = await screen.findByTestId("header-xp");
+    expect(pill).toHaveAccessibleName("4,850 XP, level 10");
+    expect(pill).toHaveTextContent("4,850 XP · Lvl 10");
+    expect(pill).toHaveClass("hidden", "lg:flex");
+  });
+
+  it("Phase 5: XP unavailable (048 not applied) → no XP pill, the rest of the header unchanged", async () => {
+    xpResponse = { status: 503, body: { code: "learning_data_unavailable" } };
+    renderWithClient(<AppHeader active="dashboard" />);
+    await screen.findByTestId("header-streak");
+    await waitFor(() => expect(calls.some((c) => c.includes("/api/xp"))).toBe(true));
+    await act(async () => {});
+    expect(screen.queryByTestId("header-xp")).toBeNull();
   });
 });
 

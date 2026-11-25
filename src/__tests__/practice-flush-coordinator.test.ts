@@ -260,7 +260,7 @@ describe("PracticeFlushCoordinator", () => {
     expect(keys()).toEqual(['["video-library","user-a"]']);
   });
 
-  it("Phase 6: a navigation flush invalidates Dashboard (incl. its week), Library and History — only after the write succeeded, only for its own user", async () => {
+  it("Phase 6: a navigation flush invalidates Dashboard (incl. its week), XP, Library and History — only after the write succeeded, only for its own user", async () => {
     const { fetchMock, coordinator, invalidate } = setup();
     let answer!: (r: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (answer = r)));
@@ -276,6 +276,8 @@ describe("PracticeFlushCoordinator", () => {
       '["dashboard-week","user-a"]',
       '["history-sessions","user-a"]',
       '["video-library","user-a"]',
+      // Phase 5: XP is calculated from the activity just recorded.
+      '["xp","user-a"]',
     ]);
   });
 

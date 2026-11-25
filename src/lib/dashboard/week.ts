@@ -1,5 +1,7 @@
 import type { DashboardWeek, DashboardWeekDay } from "@/lib/types/learning";
+import type { XpDay } from "@/lib/types/xp";
 import { addDaysToKey } from "@/lib/utils/streak";
+import { formatXp } from "@/lib/xp/levels";
 
 export const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
@@ -83,4 +85,25 @@ export function formatDayMinutesLong(activeSec: number): string {
 export function formatDayKey(dayKey: string, opts: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" }): string {
   const [y, m, d] = dayKey.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * A practiced day's details (plan §4.5.5): its active time and what it held
+ * — Dictation sentences, Shadowing sentences, words reviewed (first
+ * occurrences, from the XP events) — then its XP. Zero values are left out;
+ * a day with nothing to list is "Active". Without XP (unavailable), only
+ * the time and "Active" (the Phase 4 content).
+ */
+export function dayDetails(day: DashboardWeekDay, xpDay: XpDay | undefined): { parts: string[]; xpLabel: string | null } {
+  const a = xpDay?.activity;
+  const parts = [
+    day.activeSec > 0 ? formatDayMinutesLong(day.activeSec) : null,
+    a && a.dictationSentences > 0 ? count(a.dictationSentences, "Dictation sentence", "Dictation sentences") : null,
+    a && a.shadowingSentences > 0 ? count(a.shadowingSentences, "Shadowing sentence", "Shadowing sentences") : null,
+    a && a.wordsReviewed > 0 ? count(a.wordsReviewed, "word reviewed", "words reviewed") : null,
+  ].filter((p): p is string => !!p);
+  if (parts.length === (day.activeSec > 0 ? 1 : 0)) parts.push("Active");
+  return { parts, xpLabel: xpDay && xpDay.xp > 0 ? `+${formatXp(xpDay.xp)} XP` : null };
 }

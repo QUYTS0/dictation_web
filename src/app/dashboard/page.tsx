@@ -19,9 +19,12 @@ import { FocusCard } from "./components/FocusCard";
 import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
 import { VocabularyDeck } from "./components/VocabularyDeck";
+import { WeeklyRecapBanner } from "./components/WeeklyRecapBanner";
+import { useDashboardCelebrations } from "./components/useDashboardCelebrations";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery, useDashboardWeekQuery } from "@/lib/queries/dashboard";
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
+import { useXpQuery } from "@/lib/queries/xp";
 
 const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -40,8 +43,9 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
  * The learner's home (.claude/dashboard-redesign-plan.md). It answers, in
  * this order:
  *   0. How am I doing today?     — the hero: welcome, streak status, this
- *                                  week's track, Today's target, and
- *                                  "Start today's practice" (a NEW video)
+ *                                  week's track, Today's target, level, and
+ *                                  "Start today's practice" (a NEW video);
+ *                                  last week's recap above it once a week
  *   1. What should I continue?   — "Pick up where you left off" (ONE item)
  *   2. What should I do next?    — "Next up" (the Focus decision)
  *   3. Words to review           — the review deck (graded in place)
@@ -66,6 +70,7 @@ function DashboardContent() {
   const summaryQuery = useDashboardSummaryQuery(userId);
   const summary = summaryQuery.data;
   const weekQuery = useDashboardWeekQuery(userId);
+  const xp = useXpQuery(userId).data;
   const continueQuery = useContinueLearningQuery(userId);
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
@@ -139,6 +144,8 @@ function DashboardContent() {
   // every video but has history still gets the normal Dashboard. Unknown
   // (summary failed) is never treated as "nothing yet".
   const firstRun = !!summary && summary.libraryVideos === 0 && summary.activeTime.sessionCount === 0 && summary.vocabularyCount === 0;
+  // Goal met / level up (once per browser); a first-run learner has neither yet.
+  const celebrationBurst = useDashboardCelebrations(firstRun ? undefined : userId, weekQuery.data, xp);
   const summaryPending = !summary && !summaryQuery.isError;
 
   const addPanel = (
@@ -183,7 +190,10 @@ function DashboardContent() {
             <FirstRunHero url={url} onUrlChange={setUrl} />
           ) : (
             <>
-              {/* Hero: welcome + streak status, today's panel with "Start today's practice". */}
+              {/* Last week's recap: first visit of a new league week only. */}
+              {userId && xp && <WeeklyRecapBanner userId={userId} xp={xp} />}
+
+              {/* Hero: welcome, streak status and the week; today's panel with "Start today's practice". */}
               {summaryPending ? (
                 <div aria-busy="true" aria-label="Loading your dashboard" className="min-h-[148px] animate-pulse rounded-2xl bg-hero/90" />
               ) : (
@@ -192,6 +202,8 @@ function DashboardContent() {
                   summary={summary}
                   week={weekQuery.data}
                   weekPending={weekQuery.isPending}
+                  xp={xp}
+                  celebrationBurst={celebrationBurst}
                   addOpen={addOpen}
                   onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo("toggle"))}
                   addToggleRef={addToggleRef}

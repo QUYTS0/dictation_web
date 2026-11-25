@@ -7,8 +7,10 @@ import { Headphones, Plus } from "lucide-react";
 import UserButton from "@/components/UserButton";
 import { AddVideoDialog } from "@/components/AddVideoDialog";
 import { StreakPill } from "@/components/StreakPill";
+import { XpPill } from "@/components/XpPill";
 import { useAuth } from "@/context/auth";
 import { useStreakQuery } from "@/lib/queries/streak";
+import { useXpQuery } from "@/lib/queries/xp";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 
 const NAV_LINKS = [
@@ -30,13 +32,14 @@ interface AppHeaderProps {
 /**
  * Shared app-shell header used by every signed-in page (dashboard, my
  * learning, vocabulary, bookmarks, history, results): brand, primary nav,
- * and — for a signed-in learner — "New video", the streak pill and the
- * account menu. The dictation/listening workspace uses its own compact
+ * and — for a signed-in learner — "New video", the streak pill, the XP pill
+ * (from lg; hidden while XP is unavailable) and the account menu. The dictation/listening workspace uses its own compact
  * title-bar header instead (back button + progress label, zen-mode aware).
  */
 export default function AppHeader({ active }: AppHeaderProps) {
   const { user } = useAuth();
   const streak = useStreakQuery(user?.id).data;
+  const xp = useXpQuery(user?.id).data;
   const [addOpen, setAddOpen] = useState(false);
   // Kept here so closing and reopening the dialog keeps a half-typed link.
   const [addUrl, setAddUrl] = useState("");
@@ -89,6 +92,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
             </button>
           )}
           {user && streak && <StreakPill streakDays={streak.streakDays} />}
+          {user && xp && <XpPill totalXp={xp.totalXp} level={xp.level} />}
           <UserButton />
         </div>
       </div>

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type { ReviewGrade, VocabularyItem, VocabularyStatsResponse, VocabularyUpdateRequest } from "@/lib/types";
 import { dashboardKeys } from "@/lib/queries/dashboard";
 import { streakKeys } from "@/lib/queries/streak";
+import { xpKeys } from "@/lib/queries/xp";
 import { viewerTimeZone } from "@/lib/utils/streak";
 
 export const vocabularyKeys = {
@@ -52,14 +53,15 @@ export async function submitVocabularyReview(itemId: string, grade: ReviewGrade)
 /**
  * After a confirmed grade: the Vocabulary Bank and its counts, and — since
  * a review is a practice day (046) — the streak (header pill, footer), the
- * Dashboard summary and its weekly track (today's ✓). The review queue
- * itself is left alone (see above).
+ * Dashboard summary and its weekly track (today's ✓), and XP (048). The
+ * review queue itself is left alone (see above).
  */
 export function invalidateAfterVocabularyReview(queryClient: QueryClient, userId: string | undefined) {
   invalidateVocabularyQueries(queryClient, userId);
   void queryClient.invalidateQueries({ queryKey: streakKeys.streak(userId) });
   void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
   void queryClient.invalidateQueries({ queryKey: dashboardKeys.week(userId) });
+  void queryClient.invalidateQueries({ queryKey: xpKeys.xp(userId) });
 }
 
 async function fetchVocabularyItems(): Promise<VocabularyItem[]> {

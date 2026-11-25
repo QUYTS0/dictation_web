@@ -4,7 +4,9 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import clsx from "clsx";
 import { Check } from "lucide-react";
 import type { DashboardWeek } from "@/lib/types/learning";
-import { formatDayKey, formatDayMinutesLong, formatDayMinutesShort, weeklyTrack, type TrackDay } from "@/lib/dashboard/week";
+import type { XpDay, XpSummary } from "@/lib/types/xp";
+import { dayDetails, formatDayKey, formatDayMinutesLong, formatDayMinutesShort, weeklyTrack, type TrackDay } from "@/lib/dashboard/week";
+import { formatXp } from "@/lib/xp/levels";
 import { ActiveEmber } from "./ActiveEmber";
 
 type OpenDay = { index: number; pinned: boolean } | null;
@@ -12,25 +14,37 @@ type OpenDay = { index: number; pinned: boolean } | null;
 /** Where a day's popover sits so the first/last columns stay inside the hero. */
 const POPOVER_ALIGN = ["left-0", "left-0", "left-1/2 -translate-x-1/2", "left-1/2 -translate-x-1/2", "left-1/2 -translate-x-1/2", "right-0", "right-0"];
 
-function dayStatusText(day: TrackDay): string {
+function dayStatusText(day: TrackDay, xpDay: XpDay | undefined): string {
   if (day.state === "future") return "upcoming";
   if (!day.practiced) return day.state === "today" ? "no practice yet" : "no practice";
-  return day.activeSec > 0 ? `practiced, ${formatDayMinutesLong(day.activeSec)}` : "practiced";
+  return ["practiced", day.activeSec > 0 ? formatDayMinutesLong(day.activeSec) : null, xpDay && xpDay.xp > 0 ? `+${formatXp(xpDay.xp)} XP` : null]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** Under a day: its XP ("+85") when XP is available, else its minutes. */
+function dayValueLabel(day: TrackDay, xpDay: XpDay | undefined, hasXp: boolean): string {
+  if (day.state === "future") return "";
+  if (!hasXp) return formatDayMinutesShort(day.activeSec);
+  return xpDay && xpDay.xp > 0 ? `+${formatXp(xpDay.xp)}` : "—";
 }
 
 /**
  * The hero's Weekly consistency track (plan §1, §4.5.5): Monday–Sunday of the
  * viewer's local week. ✓ = any practice that day (the streak's own day set,
  * word reviews included); the ember marks today; later days are plain dots.
- * Under each day: its active minutes (Phase 5 swaps in XP).
+ * Under each day: the XP earned that day (its active minutes while XP is
+ * unavailable).
  *
  * A practiced day is a button with a details popover — hover (mouse), focus
  * (keyboard) or tap/click (pins it open); Escape, leaving or tapping outside
- * closes it. Phase 4 shows the date, the minutes and "Active"; zero values
- * are left out. Inactive and future days have no popover.
+ * closes it. It shows the date, the active time, the Dictation and
+ * Shadowing sentences and words reviewed, and the day's XP; zero values are
+ * left out. Inactive and future days have no popover.
  */
-export function WeeklyTrack({ week }: { week: DashboardWeek }) {
+export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary }) {
   const { days, activeCount, todayIndex } = weeklyTrack(week);
+  const xpByDate = new Map((xp?.days ?? []).map((d) => [d.date, d]));
   const [open, setOpen] = useState<OpenDay>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const baseId = useId();
@@ -84,10 +98,12 @@ export function WeeklyTrack({ week }: { week: DashboardWeek }) {
         <ol ref={listRef} aria-label="This week, Monday to Sunday" className="relative grid grid-cols-7">
           {days.map((day, i) => {
             const isToday = day.state === "today";
-            const date = formatDayKey(day.date);
-            const label = `${isToday ? `Today, ${date}` : date}: ${dayStatusText(day)}`;
-            const popoverId = `${baseId}-day-${i}`;
             const isOpen = open?.index === i;
+            const date = formatDayKey(day.date);
+            const xpDay = xpByDate.get(day.date);
+            const label = `${isToday ? `Today, ${date}` : date}: ${dayStatusText(day, xpDay)}`;
+            const details = isOpen ? dayDetails(day, xpDay) : null;
+            const popoverId = `${baseId}-day-${i}`;
             const marker = isToday ? (
               <ActiveEmber size={24} />
             ) : day.state === "done" ? (
@@ -142,10 +158,10 @@ export function WeeklyTrack({ week }: { week: DashboardWeek }) {
                     isToday ? "font-medium text-reward" : day.practiced ? "text-slate-400" : "text-slate-600"
                   )}
                 >
-                  {day.state === "future" ? "" : formatDayMinutesShort(day.activeSec)}
+                  {dayValueLabel(day, xpDay, !!xp)}
                 </span>
 
-                {isOpen && (
+                {details && (
                   <div
                     id={popoverId}
                     data-testid="day-details"
@@ -155,7 +171,8 @@ export function WeeklyTrack({ week }: { week: DashboardWeek }) {
                     )}
                   >
                     <p className="font-semibold">{isToday ? `Today · ${date}` : date}</p>
-                    <p className="mt-0.5 text-muted">{[day.activeSec > 0 ? formatDayMinutesLong(day.activeSec) : null, "Active"].filter(Boolean).join(" · ")}</p>
+                    <p className="mt-0.5 text-muted">{details.parts.join(" · ")}</p>
+                    {details.xpLabel && <p className="mt-1 font-mono font-bold text-primary-600">{details.xpLabel}</p>}
                   </div>
                 )}
               </li>

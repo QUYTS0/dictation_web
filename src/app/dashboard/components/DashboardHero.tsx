@@ -2,8 +2,11 @@
 
 import { useRef, useState, type ReactNode, type Ref } from "react";
 import { Play } from "lucide-react";
+import { ConfettiBurst } from "@/components/ConfettiBurst";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import type { DashboardSummary, DashboardWeek } from "@/lib/types/learning";
+import type { XpSummary } from "@/lib/types/xp";
+import { LevelProgress } from "./LevelProgress";
 import { StreakStatusLine } from "./StreakStatusLine";
 import { TodayTarget } from "./TodayTarget";
 import { WeeklyTrack } from "./WeeklyTrack";
@@ -22,6 +25,10 @@ interface DashboardHeroProps {
    *  unavailable — `weekPending` tells which. */
   week: DashboardWeek | undefined;
   weekPending: boolean;
+  /** XP and level; undefined while loading or unavailable (bar left out). */
+  xp: XpSummary | undefined;
+  /** Key of a celebration confetti burst while it plays, else null. */
+  celebrationBurst: number | null;
   addOpen: boolean;
   onToggleAdd: () => void;
   addToggleRef: Ref<HTMLButtonElement>;
@@ -31,14 +38,25 @@ interface DashboardHeroProps {
 
 /**
  * The returning learner's hero (plan §1, §4.5.1–2, §4.5.5): welcome, streak
- * status and the weekly consistency track on the left; on the right, today's
- * panel — Today's target, then "Start today's practice" (Phase 5 adds the
- * level bar between them). The button starts a NEW video (an inline link
- * box); resuming belongs to the Continue card. If the week can't be loaded
- * (e.g. migration 047 not applied yet), the track and target are left out —
- * never shown as zeros.
+ * status and the weekly consistency track (XP per day) on the left; on the
+ * right, today's panel — Today's target, the level bar, then "Start today's
+ * practice". The button starts a NEW video (an inline link box); resuming
+ * belongs to the Continue card. If the week or XP can't be loaded (e.g.
+ * migration 047 / 048 not applied yet), their parts are left out — never
+ * shown as zeros. Goal-met and level-up confetti plays inside the hero.
  */
-export function DashboardHero({ name, summary, week, weekPending, addOpen, onToggleAdd, addToggleRef, addPanel }: DashboardHeroProps) {
+export function DashboardHero({
+  name,
+  summary,
+  week,
+  weekPending,
+  xp,
+  celebrationBurst,
+  addOpen,
+  onToggleAdd,
+  addToggleRef,
+  addPanel,
+}: DashboardHeroProps) {
   const [goalOpen, setGoalOpen] = useState(false);
   const changeGoalRef = useRef<HTMLButtonElement>(null);
 
@@ -56,7 +74,7 @@ export function DashboardHero({ name, summary, week, weekPending, addOpen, onTog
           </h1>
           <StreakStatusLine summary={summary} />
           {week ? (
-            <WeeklyTrack week={week} />
+            <WeeklyTrack week={week} xp={xp} />
           ) : weekPending ? (
             <div aria-hidden="true" data-testid="weekly-track-pending" className="h-[92px] max-w-lg animate-pulse rounded-lg bg-white/[0.04]" />
           ) : null}
@@ -68,6 +86,7 @@ export function DashboardHero({ name, summary, week, weekPending, addOpen, onTog
           ) : weekPending ? (
             <div aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-white/[0.04]" />
           ) : null}
+          {xp && <LevelProgress xp={xp} />}
           <button
             ref={addToggleRef}
             type="button"
@@ -82,6 +101,7 @@ export function DashboardHero({ name, summary, week, weekPending, addOpen, onTog
           {addOpen && addPanel}
         </div>
       </div>
+      {celebrationBurst !== null && <ConfettiBurst key={celebrationBurst} />}
       {goalOpen && <ProfileDialog onClose={() => setGoalOpen(false)} returnFocusRef={changeGoalRef} />}
     </section>
   );

@@ -374,13 +374,15 @@ describe("request contract (Option B)", () => {
     // The hero's weekly track and Today's target (Phase 4; unanswered here,
     // so the hero leaves them out).
     "GET /api/dashboard/week",
+    // XP and level (Phase 5; unanswered here, so the hero leaves them out).
+    "GET /api/xp",
   ];
   const normalize = (c: string) => c.replace(/\?tz=.*$/, "");
 
   it.each([
     ["with a sentence candidate", [NEEDS]],
     ["without a candidate", [] as LibraryItem[]],
-  ])("cold load %s: exactly 6 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
+  ])("cold load %s: exactly 7 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");

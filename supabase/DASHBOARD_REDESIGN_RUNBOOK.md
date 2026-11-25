@@ -1,10 +1,11 @@
 # Dashboard redesign runbook — migrations 046+
 
-**Status:** `046` and `047` implemented and verified locally (route/component tests and real
-PostgreSQL on a disposable local server). **Nothing here is applied to the Supabase project or
-deployed.** Apply them in order: `046`, then `047`.
-Plan: `.claude/dashboard-redesign-plan.md`. Later phases (`047` profile + daily activity, `048` XP,
-`049` achievements, `050` leagues) add their own sections here.
+**Status:** `046`, `047` and `048` implemented and verified locally (route/component tests and real
+PostgreSQL on a disposable local server). Whether each is applied to the Supabase project is not
+tracked here: check with `npx supabase migration list`. Apply them in order, each **before** the
+app version that needs it: `046`, `047`, then `048`.
+Plan: `.claude/dashboard-redesign-plan.md`. Later phases (`049` achievements, `050` leagues) add
+their own sections here.
 
 ## 046 — Vocabulary review log; reviews count toward the streak (Phase 3)
 
@@ -118,4 +119,70 @@ Same server as 046, then:
 
 ```
 LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/profile-daily-activity
+```
+
+## 048 — XP and levels, calculated (Phase 5)
+
+### What ships
+
+| Area | What the learner gets | Source |
+|---|---|---|
+| XP | A total calculated from the practice already recorded — existing learners get XP for their past practice. Nothing is stored or awarded. | `fn_my_xp` → `GET /api/xp` |
+| Levels | "Level N": level L starts at 50·L·(L−1) XP (2 at 100, 5 at 1,000, 10 at 4,500). Derived in the app from the total. | `src/lib/xp/levels.ts` |
+| Header | "4,850 XP · Lvl 10" pill (from `lg` widths). | same route |
+| Hero | Level bar; XP under each day of the weekly track; full day details (time, Dictation and Shadowing sentences, words reviewed, XP). | same route |
+| Celebrations | Confetti + toast on the first Dashboard visit after the daily goal is met or a level is gained, once per browser (toast only under reduced motion). | localStorage |
+| Monday recap | "Last week: 1,240 XP · 96 min · 41 words reviewed" above the hero, on the first visit of a league week (Monday 00:00 UTC), dismissible. | same route |
+
+Rules v1 (each pays its **first** occurrence only): +10 first valid Dictation answer per sentence and
+round, +5 first correct one; +10 first valid Shadowing take per sentence and round, +5 first with
+Azure pronunciation ≥ 80; +1 per whole minute of newly covered Listening per study session; +3 first
+review of a word per local day (max 60 XP a day); +50 verified round completion; +10 per active
+local day. The daily goal earns nothing. The local-day rules use the learner's most recently
+recorded browser timezone (UTC if none), so a total is the same in every view.
+
+### Expected side effects
+
+- **Every existing learner gets XP at once**, calculated from their history — expected and truthful.
+- **Totals can move a little** when practice records change (a deleted round, a re-evaluated
+  Shadowing take) or when a learner starts practicing in a new timezone (the day-based rules
+  re-date). A rules change would also rewrite totals; bump `rulesVersion` and announce it.
+- **Read cost:** each `/api/xp` call recomputes the learner's whole history (the header asks on
+  every signed-in page, cached for a minute). Fine at the current scale; see plan §7.
+
+### Deploy order
+
+1. **Apply `048`** (after `047`). Reads only, no table changes; re-running it is harmless.
+2. **Then deploy the app.** If the app is deployed first, `/api/xp` answers
+   `503 learning_data_unavailable`: the XP pill, level bar, per-day XP, level-up celebrations and
+   the Monday recap are left out, and the weekly track shows minutes as in Phase 4. Goal-met
+   celebrations still work. Nothing else is affected.
+
+### Verify after applying
+
+```sql
+select has_function_privilege('authenticated', 'fn_my_xp(text)', 'execute');                         -- true
+select has_function_privilege('anon',          'fn_my_xp(text)', 'execute');                         -- false
+select has_function_privilege('authenticated', 'fn_xp_events(uuid,text)', 'execute');                 -- false
+select has_function_privilege('authenticated', 'fn_xp_time_zone(uuid)', 'execute');                   -- false
+select has_function_privilege('authenticated', 'fn_active_seconds_between(uuid,timestamptz,timestamptz)', 'execute'); -- false
+
+-- One learner's events by source (SQL editor runs as the owner):
+select source, count(*), sum(amount) from fn_xp_events('<user id>', fn_xp_time_zone('<user id>')) group by source order by source;
+```
+
+Then open the Dashboard: the header pill and the hero's level bar show the same total.
+
+### Rollback
+
+Deploy the previous app version first, then
+`drop function fn_my_xp(text); drop function fn_xp_events(uuid, text); drop function fn_xp_time_zone(uuid); drop function fn_active_seconds_between(uuid, timestamptz, timestamptz);`.
+Nothing is lost: XP is never stored.
+
+### Local verification
+
+Same server as 046, then:
+
+```
+LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/xp-levels
 ```
