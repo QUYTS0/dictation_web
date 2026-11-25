@@ -30,6 +30,8 @@ jest.mock("next/link", () => {
     );
   };
 });
+// The app shell (header + footer, incl. its streak request) is covered by app-shell.test.tsx.
+jest.mock("@/components/AppFooter", () => ({ __esModule: true, default: () => null }));
 jest.mock("@/components/AppHeader", () => function AppHeader() {
   return null;
 });

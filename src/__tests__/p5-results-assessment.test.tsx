@@ -13,6 +13,8 @@ let currentUser: { id: string } | null = { id: "user-A" };
 jest.mock("@/context/auth", () => ({ useAuth: () => ({ user: currentUser, loading: false, openAuthModal: jest.fn() }) }));
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: jest.fn() }), useSearchParams: () => new URLSearchParams() }));
 jest.mock("next/link", () => ({ __esModule: true, default: ({ children }: { children: React.ReactNode }) => <span>{children}</span> }));
+// The app shell (header + footer, incl. its streak request) is covered by app-shell.test.tsx.
+jest.mock("@/components/AppFooter", () => ({ __esModule: true, default: () => null }));
 jest.mock("@/components/AppHeader", () => ({ __esModule: true, default: () => null }));
 jest.mock("@/components/VocabularySaveButton", () => ({ __esModule: true, default: () => null }));
 jest.mock("@/components/report/RoundActions", () => ({ RoundActions: () => null }));

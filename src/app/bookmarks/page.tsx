@@ -7,6 +7,7 @@ import { clsx } from "clsx";
 import { MapPin, Search, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import AppHeader from "@/components/AppHeader";
+import AppFooter from "@/components/AppFooter";
 import { useAuth } from "@/context/auth";
 import { usePersistedViewState } from "@/hooks/usePersistedViewState";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
@@ -302,6 +303,7 @@ function BookmarksPageContent() {
             </>
           )}
         </main>
+        <AppFooter />
       </div>
     </div>
   );

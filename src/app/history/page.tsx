@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import { History as ClockIcon, PlayCircle } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
+import AppFooter from "@/components/AppFooter";
 import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
@@ -272,6 +273,7 @@ function HistoryPageContent() {
             </>
           )}
         </main>
+        <AppFooter />
       </div>
     </div>
   );

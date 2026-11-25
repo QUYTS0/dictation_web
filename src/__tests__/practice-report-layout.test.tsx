@@ -48,7 +48,7 @@ jest.mock("next/link", () => {
 jest.mock("@/components/UserButton", () => function UserButton() {
   return null;
 });
-jest.mock("@/app/dictation/[videoId]/components/ConfettiBurst", () => ({ ConfettiBurst: () => <div data-testid="confetti" /> }));
+jest.mock("@/components/ConfettiBurst", () => ({ ConfettiBurst: () => <div data-testid="confetti" /> }));
 /** The microphone recorder, scriptable per test (status / finished clip). */
 const mockRecorder: {
   set: ((patch: Record<string, unknown>) => void) | null;

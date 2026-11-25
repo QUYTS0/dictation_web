@@ -1,5 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
+
+// The header now reads auth + the streak query; these width/nav tests run as
+// a guest, so no request is made. Signed-in behavior: app-shell.test.tsx.
+jest.mock("@/context/auth", () => ({
+  useAuth: () => ({ user: null, loading: false, openAuthModal: jest.fn() }),
+}));
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+}));
+
+const render = (ui: React.ReactElement) =>
+  rtlRender(<QueryClientProvider client={new QueryClient()}>{ui}</QueryClientProvider>);
 
 jest.mock("next/link", () => {
   return function MockLink({

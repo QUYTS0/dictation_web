@@ -41,7 +41,7 @@ export default function UserButton() {
     return (
       <button
         onClick={openAuthModal}
-        className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
+        className="px-4 py-1.5 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
       >
         Sign in
       </button>
@@ -74,7 +74,7 @@ export default function UserButton() {
               className="w-9 h-9 rounded-full cursor-pointer border-2 border-slate-200"
             />
           ) : (
-            <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-bold cursor-pointer select-none">
+            <div className="w-9 h-9 rounded-full bg-primary-600 text-white flex items-center justify-center text-sm font-bold cursor-pointer select-none ring-2 ring-white shadow-sm">
               {initials}
             </div>
           )}

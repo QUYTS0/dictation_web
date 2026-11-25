@@ -6,6 +6,7 @@ import { useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-que
 import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
+import AppFooter from "@/components/AppFooter";
 import VocabularySaveButton from "@/components/VocabularySaveButton";
 import AIFeedbackCard from "@/components/AIFeedbackCard";
 import { RoundReportPanel, parseReportSection } from "@/components/report/RoundReportPanel";
@@ -328,6 +329,7 @@ function RoundResults({ sessionId }: { sessionId: string }) {
             </>
           )}
         </main>
+        <AppFooter />
       </div>
     </div>
   );

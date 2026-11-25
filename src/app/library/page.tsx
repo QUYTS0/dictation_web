@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { useQueryClient } from "@tanstack/react-query";
 import AppHeader from "@/components/AppHeader";
+import AppFooter from "@/components/AppFooter";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { LibraryCard } from "@/components/library/LibraryCard";
 import { useAuth } from "@/context/auth";
@@ -156,6 +157,7 @@ function LibraryPageContent() {
             </>
           )}
         </main>
+        <AppFooter />
       </div>
 
       {pendingRemoval && (

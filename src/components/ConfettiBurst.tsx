@@ -16,13 +16,24 @@ interface Piece {
   drift: number;
 }
 
-/** A one-shot confetti burst celebrating a great session. Purely decorative, non-interactive. */
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * A one-shot confetti burst celebrating a great session (practice page) or a
+ * reached goal / level (Dashboard). Purely decorative, non-interactive, and
+ * renders nothing for viewers who ask for reduced motion — callers pair it
+ * with a toast or text, so nothing is lost.
+ */
 export function ConfettiBurst() {
   const [pieces, setPieces] = useState<Piece[]>([]);
 
   // Randomized in an effect rather than during render, since generating it inline
   // (even memoized) calls the impure Math.random while React is rendering.
   useEffect(() => {
+    if (prefersReducedMotion()) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPieces(
       Array.from({ length: PIECE_COUNT }, (_, id) => ({

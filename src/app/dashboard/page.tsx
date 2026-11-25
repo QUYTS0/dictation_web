@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, MouseEvent, Suspense, useEffect, useRef, useState } from "react";
+import { KeyboardEvent, MouseEvent, Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Flame, Plus, Video, X } from "lucide-react";
+import { ArrowRight, Flame, Plus, X } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
+import AppFooter from "@/components/AppFooter";
+import { AddVideoForm } from "@/components/AddVideoForm";
 import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { toFocusSource } from "@/lib/dashboard/selectFocus";
@@ -18,9 +19,7 @@ import { ProgressSummary } from "./components/ProgressSummary";
 import { VocabularyCard } from "./components/VocabularyCard";
 import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery } from "@/lib/queries/dashboard";
-import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
-import { isValidYouTubeUrl } from "@/lib/utils/url";
 
 const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -45,14 +44,10 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
  * canonical number (§6.8), never recomputed or blended here.
  */
 function DashboardContent() {
-  const router = useRouter();
   const pathname = usePathname();
-  const queryClient = useQueryClient();
   const { user, loading, openAuthModal } = useAuth();
   const userId = user?.id;
   const [url, setUrl] = useState("");
-  const [addError, setAddError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   // Focus hand-offs across the disclosure's mount/unmount: what to do with
   // the input once the form mounts, and returning focus to the toggle on close.
@@ -78,34 +73,6 @@ function DashboardContent() {
     }
   }, [addOpen]);
 
-  const handleAdd = async (e: FormEvent) => {
-    e.preventDefault();
-    setAddError(null);
-    const trimmed = url.trim();
-    if (!trimmed) return setAddError("Please paste a YouTube URL.");
-    if (!isValidYouTubeUrl(trimmed)) return setAddError("That doesn't look like a valid YouTube URL.");
-    setAdding(true);
-    try {
-      const res = await fetch("/api/video/resolve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.status !== "ok") {
-        setAddError(data.message ?? "Failed to add the video. Please try again.");
-        return;
-      }
-      if (userId) invalidateLearningViews(queryClient, userId);
-      // The practice page chooses the mode (saved last mode, else Dictation).
-      router.push(`/dictation/${data.videoId}`);
-    } catch {
-      setAddError("Network error. Please check your connection and try again.");
-    } finally {
-      setAdding(false);
-    }
-  };
-
   const openAddVideo = (how: "toggle" | "scroll") => {
     if (addOpen) return focusAddVideoInputEl(addVideoInputRef.current, how); // already open: just bring it into view
     pendingInputFocus.current = how;
@@ -115,10 +82,9 @@ function DashboardContent() {
   const closeAddVideo = () => {
     returnFocusToToggle.current = true;
     setAddOpen(false);
-    setAddError(null);
   };
   const onAddKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !adding) {
+    if (e.key === "Escape") {
       e.preventDefault();
       closeAddVideo();
     }
@@ -248,32 +214,7 @@ function DashboardContent() {
                         <X size={16} />
                       </button>
                     </div>
-                    <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row">
-                      <div className="relative flex flex-1 items-center">
-                        <Video className="absolute left-4 text-slate-400" size={20} aria-hidden="true" />
-                        <input
-                          id="add-video-url"
-                          ref={addVideoInputRef}
-                          type="text"
-                          value={url}
-                          onChange={(e) => {
-                            setUrl(e.target.value);
-                            setAddError(null);
-                          }}
-                          placeholder="Paste a YouTube URL"
-                          aria-label="YouTube URL"
-                          className="w-full rounded-xl border border-slate-200 bg-white py-3 pr-4 pl-12 text-base text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-primary-500/30"
-                        />
-                      </div>
-                      <button
-                        type="submit"
-                        disabled={adding}
-                        className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-primary-600 px-6 py-3 font-medium text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {adding ? "Adding…" : "Add video"} {!adding && <ArrowRight size={18} aria-hidden="true" />}
-                      </button>
-                    </form>
-                    {addError && <p className="mt-3 text-sm text-red-600">⚠ {addError}</p>}
+                    <AddVideoForm url={url} onUrlChange={setUrl} inputId="add-video-url" inputRef={addVideoInputRef} />
                   </section>
                 )}
               </div>
@@ -299,6 +240,7 @@ function DashboardContent() {
             </>
           )}
         </main>
+        <AppFooter />
       </div>
     </div>
   );

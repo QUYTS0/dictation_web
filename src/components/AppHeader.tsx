@@ -1,18 +1,23 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
-import { BookOpen, Headphones, History, LayoutDashboard, Library, MapPin } from "lucide-react";
+import { Headphones, Plus } from "lucide-react";
 import UserButton from "@/components/UserButton";
+import { AddVideoDialog } from "@/components/AddVideoDialog";
+import { StreakPill } from "@/components/StreakPill";
+import { useAuth } from "@/context/auth";
+import { useStreakQuery } from "@/lib/queries/streak";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 
 const NAV_LINKS = [
-  { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "dashboard", href: "/dashboard", label: "Dashboard" },
   // The user's Library (saved videos and their state), shown as "My Learning".
-  { key: "library", href: "/library", label: "My Learning", icon: Library },
-  { key: "vocabulary", href: "/vocabulary", label: "Vocabulary", icon: BookOpen },
-  { key: "bookmarks", href: "/bookmarks", label: "Bookmarks", icon: MapPin },
-  { key: "history", href: "/history", label: "History", icon: History },
+  { key: "library", href: "/library", label: "My Learning" },
+  { key: "vocabulary", href: "/vocabulary", label: "Vocabulary" },
+  { key: "bookmarks", href: "/bookmarks", label: "Bookmarks" },
+  { key: "history", href: "/history", label: "History" },
 ] as const;
 
 type NavKey = (typeof NAV_LINKS)[number]["key"];
@@ -23,47 +28,71 @@ interface AppHeaderProps {
 }
 
 /**
- * Shared app-shell header (logo + primary nav + UserButton) used by every
- * signed-in page (dashboard, my learning, vocabulary, bookmarks, history). The dictation/listening
- * workspace pages use their own compact title-bar header instead, since
- * that's a distinct pattern (back button + progress label, zen-mode aware).
+ * Shared app-shell header used by every signed-in page (dashboard, my
+ * learning, vocabulary, bookmarks, history, results): brand, primary nav,
+ * and — for a signed-in learner — "New video", the streak pill and the
+ * account menu. The dictation/listening workspace uses its own compact
+ * title-bar header instead (back button + progress label, zen-mode aware).
  */
 export default function AppHeader({ active }: AppHeaderProps) {
+  const { user } = useAuth();
+  const streak = useStreakQuery(user?.id).data;
+  const [addOpen, setAddOpen] = useState(false);
+  // Kept here so closing and reopening the dialog keeps a half-typed link.
+  const [addUrl, setAddUrl] = useState("");
+
   return (
-    <header className="sticky top-0 z-10 w-full border-b border-white/40 bg-white/30 py-4 backdrop-blur-md">
-      <div className={clsx("mx-auto flex w-full items-center justify-between", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
-            <Headphones size={18} />
-          </div>
-          <span className="text-lg font-semibold tracking-tight text-slate-900">DictaLearn</span>
+    <header className="sticky top-0 z-30 w-full border-b border-line bg-white/95 backdrop-blur-md">
+      <div className={clsx("mx-auto flex h-16 w-full items-center justify-between gap-4", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
+        <Link href="/" className="flex shrink-0 items-center gap-2.5">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-600 text-white shadow-sm" aria-hidden="true">
+            <Headphones size={20} />
+          </span>
+          <span>
+            <span className="block text-xl font-bold leading-none tracking-tight text-ink">
+              Dicta<span className="text-primary-600">Learn</span>
+            </span>
+            <span className="text-[11px] font-medium uppercase tracking-wide text-muted">Studio</span>
+          </span>
         </Link>
-        <div className="flex items-center gap-4">
-          <nav className="hidden items-center gap-1 rounded-full border border-white/60 bg-white/40 p-1 shadow-sm backdrop-blur-md md:flex">
-            {NAV_LINKS.map((link) => {
-              const Icon = link.icon;
-              const isActive = active === link.key;
-              return (
-                <Link
-                  key={link.key}
-                  href={link.href}
-                  aria-current={isActive ? "page" : undefined}
-                  className={clsx(
-                    "flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-semibold transition-colors",
-                    isActive
-                      ? "bg-primary-600 text-white shadow-sm"
-                      : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
-                  )}
-                >
-                  <Icon size={16} />
-                  {link.label}
-                </Link>
-              );
-            })}
-          </nav>
+
+        <nav aria-label="Primary" className="hidden items-center gap-0.5 md:flex xl:gap-1">
+          {NAV_LINKS.map((link) => {
+            const isActive = active === link.key;
+            return (
+              <Link
+                key={link.key}
+                href={link.href}
+                aria-current={isActive ? "page" : undefined}
+                className={clsx(
+                  "whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs transition-colors xl:px-3.5 xl:text-sm",
+                  isActive ? "bg-primary-50 font-semibold text-primary-600" : "font-medium text-muted hover:bg-surface hover:text-ink"
+                )}
+              >
+                {link.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {user && (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              aria-haspopup="dialog"
+              aria-label="New video"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-primary-50 px-2.5 py-1.5 text-xs font-semibold text-primary-600 transition-colors hover:border-primary-500/40 hover:bg-primary-100 sm:px-3"
+            >
+              <Plus size={14} strokeWidth={2.25} aria-hidden="true" />
+              <span className="hidden whitespace-nowrap sm:inline">New video</span>
+            </button>
+          )}
+          {user && streak && <StreakPill streakDays={streak.streakDays} />}
           <UserButton />
         </div>
       </div>
+      {addOpen && <AddVideoDialog url={addUrl} onUrlChange={setAddUrl} onClose={() => setAddOpen(false)} />}
     </header>
   );
 }

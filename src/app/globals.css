@@ -1,25 +1,139 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+/*
+ * Design tokens — the "Approved DictaLearn (Calm Indigo)" palette
+ * (.claude/dashboard-redesign-plan.md §4.1). The primary scale is remapped
+ * app-wide; the named tokens are used by the redesigned shell and Dashboard.
+ */
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f6f7fb;
+  --foreground: #172033;
 }
 
 @theme {
-  --color-primary-50: #eef2ff;
-  --color-primary-100: #e0e7ff;
-  --color-primary-500: #6366f1;
-  --color-primary-600: #4f46e5;
-  --color-primary-700: #4338ca;
+  --color-primary-50: #eef0ff;
+  --color-primary-100: #dfe1fc;
+  --color-primary-500: #6f70e8;
+  --color-primary-600: #5b5ce2;
+  --color-primary-700: #494bc4;
+
+  --color-page: #f6f7fb;
+  --color-surface: #f1f3fa;
+  --color-line: #dde3ef;
+  --color-ink: #172033;
+  --color-muted: #6f7891;
+  --color-hero: #151b35;
+  --color-hero-2: #25285c;
+  --color-success: #2fae9b;
+  --color-reward: #efb044;
+  --color-danger: #dc6b70;
+}
+
+/* Fonts come from next/font (src/app/layout.tsx), self-hosted at build time,
+   including the Vietnamese subset used by translations. */
+@theme inline {
+  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-family: var(--font-sans);
+}
+
+/*
+ * Streak flame and "today" ember marker (ported from the reference design).
+ * Decorative only, so they never move for viewers who ask for reduced motion.
+ */
+@keyframes flameSubtle {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scale(1.06) translateY(-0.5px);
+    opacity: 1;
+  }
+}
+@keyframes emberHeatDrift {
+  0%,
+  100% {
+    transform: scale(0.96) rotate(0deg);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.08) rotate(3deg);
+    opacity: 1;
+  }
+}
+@keyframes emberThermalBreathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+@keyframes emberLivingPulse {
+  0%,
+  100% {
+    transform: scale(0.97);
+    filter: brightness(0.96);
+  }
+  50% {
+    transform: scale(1.03);
+    filter: brightness(1.05);
+  }
+}
+@keyframes emberShimmer {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: rotate(0deg) scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(6deg) scale(1.04);
+  }
+}
+@keyframes emberHeartGlow {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .animate-flame-subtle {
+    animation: flameSubtle 3.5s ease-in-out infinite;
+    transform-origin: center bottom;
+  }
+  .animate-ember-heat-drift {
+    animation: emberHeatDrift 4.2s ease-in-out infinite;
+  }
+  .animate-ember-thermal-breathe {
+    animation: emberThermalBreathe 3.4s ease-in-out infinite;
+  }
+  .animate-ember-living-pulse {
+    animation: emberLivingPulse 2.8s ease-in-out infinite;
+  }
+  .animate-ember-shimmer {
+    animation: emberShimmer 3.8s ease-in-out infinite;
+  }
+  .animate-ember-heart-glow {
+    animation: emberHeartGlow 2.5s ease-in-out infinite;
+  }
 }
 
 /* Thin, neutral scrollbar for the light app theme — a light-palette

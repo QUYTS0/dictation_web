@@ -42,7 +42,7 @@ import { useAutoAdvancePreference } from "./useAutoAdvancePreference";
 import { usePracticeModePreference } from "./usePracticeModePreference";
 import { useSubtitleVisibilityPreference } from "./useSubtitleVisibilityPreference";
 import { useInputModePreference } from "./useInputModePreference";
-import { useStreak } from "./useStreak";
+import { useStreakQuery } from "@/lib/queries/streak";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { useLessonCapture } from "./useLessonCapture";
 import { useDictationSession } from "./useDictationSession";
@@ -61,7 +61,7 @@ import { getTranscriptErrorMessage } from "@/lib/youtubeCaptions/errors";
 import { splitSentenceIntoWords } from "./helpers";
 import { deriveEvaluationUiState, feedbackFor, weakestMetric } from "./evaluationFeedback";
 
-import { ConfettiBurst } from "./components/ConfettiBurst";
+import { ConfettiBurst } from "@/components/ConfettiBurst";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { KeyboardShortcutsButton } from "./components/KeyboardShortcutsButton";
 import { TranscriptDownloadMenu } from "./components/TranscriptDownloadMenu";
@@ -156,7 +156,7 @@ export default function DictationPage({ params }: PageProps) {
   const { autoAdvance, setAutoAdvance } = useAutoAdvancePreference();
   const { practiceMode, setPracticeMode } = usePracticeModePreference();
   const { subtitleVisibility, setOriginalVisibility, setTranslationVisibility } = useSubtitleVisibilityPreference();
-  const { streakDays } = useStreak(user);
+  const streakDays = useStreakQuery(user?.id).data?.streakDays ?? 0;
 
   const workspaceInputRef = useRef<HTMLInputElement>(null);
   const previousShowVideoRef = useRef(showVideo);
