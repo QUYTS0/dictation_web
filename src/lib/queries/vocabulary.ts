@@ -5,6 +5,7 @@ import type { ReviewGrade, VocabularyItem, VocabularyStatsResponse, VocabularyUp
 import { dashboardKeys } from "@/lib/queries/dashboard";
 import { streakKeys } from "@/lib/queries/streak";
 import { xpKeys } from "@/lib/queries/xp";
+import { achievementsKeys } from "@/lib/queries/achievements";
 import { viewerTimeZone } from "@/lib/utils/streak";
 
 export const vocabularyKeys = {
@@ -53,8 +54,9 @@ export async function submitVocabularyReview(itemId: string, grade: ReviewGrade)
 /**
  * After a confirmed grade: the Vocabulary Bank and its counts, and — since
  * a review is a practice day (046) — the streak (header pill, footer), the
- * Dashboard summary and its weekly track (today's ✓), and XP (048). The
- * review queue itself is left alone (see above).
+ * Dashboard summary and its weekly track (today's ✓), XP (048) and
+ * achievements (049: the streak track). The review queue itself is left
+ * alone (see above).
  */
 export function invalidateAfterVocabularyReview(queryClient: QueryClient, userId: string | undefined) {
   invalidateVocabularyQueries(queryClient, userId);
@@ -62,6 +64,7 @@ export function invalidateAfterVocabularyReview(queryClient: QueryClient, userId
   void queryClient.invalidateQueries({ queryKey: dashboardKeys.summary(userId) });
   void queryClient.invalidateQueries({ queryKey: dashboardKeys.week(userId) });
   void queryClient.invalidateQueries({ queryKey: xpKeys.xp(userId) });
+  void queryClient.invalidateQueries({ queryKey: achievementsKeys.achievements(userId) });
 }
 
 async function fetchVocabularyItems(): Promise<VocabularyItem[]> {

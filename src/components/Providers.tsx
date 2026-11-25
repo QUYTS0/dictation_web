@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { AuthProvider } from "@/context/auth";
+import { AchievementUnlockNotifier } from "@/components/AchievementUnlockNotifier";
 import { NavigationFlushObserver } from "@/components/NavigationFlushObserver";
 import { ToastProvider } from "@/components/ToastProvider";
 import { practiceFlushCoordinator } from "@/lib/practiceFlushCoordinator";
@@ -31,6 +32,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <ToastProvider>
           <NavigationFlushObserver />
+          <AchievementUnlockNotifier />
           {children}
         </ToastProvider>
       </AuthProvider>

@@ -1,11 +1,10 @@
 # Dashboard redesign runbook — migrations 046+
 
-**Status:** `046`, `047` and `048` implemented and verified locally (route/component tests and real
+**Status:** `046`–`049` implemented and verified locally (route/component tests and real
 PostgreSQL on a disposable local server). Whether each is applied to the Supabase project is not
 tracked here: check with `npx supabase migration list`. Apply them in order, each **before** the
-app version that needs it: `046`, `047`, then `048`.
-Plan: `.claude/dashboard-redesign-plan.md`. Later phases (`049` achievements, `050` leagues) add
-their own sections here.
+app version that needs it: `046`, `047`, `048`, then `049`.
+Plan: `.claude/dashboard-redesign-plan.md`. Phase 7 (`050` leagues) adds its own section here.
 
 ## 046 — Vocabulary review log; reviews count toward the streak (Phase 3)
 
@@ -185,4 +184,66 @@ Same server as 046, then:
 
 ```
 LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/xp-levels
+```
+
+## 049 — Achievements (Phase 6)
+
+### What ships
+
+| Area | What the learner gets | Source |
+|---|---|---|
+| Trophy case | Five tracks (Flame Keeper, Precision Typist, Shadow Master, Lexicon, Immersion), each Bronze → Silver → Gold → Diamond, beside Needs attention on the Dashboard. A tile shows the highest tier and progress to the next; it opens the track's details (every tier with its unlock date or what's left). | `GET /api/achievements` → `fn_sync_achievements` |
+| Unlock toasts | "Achievement unlocked · Flame Keeper · Silver", on whichever page the sync ran; three or more at once are summed up in one toast. | `AchievementUnlockNotifier` (Providers) |
+| Header streak popover | Today's goal status and the next streak milestone (the Flame Keeper thresholds), loaded when it's opened. | week + achievements routes |
+
+Thresholds live only in `achievement_tiers` (seeded by the migration); the app holds names, icons
+and copy. Each track counts the Dashboard's own canonical number (longest streak from
+`fn_activity_days`, correct latest Dictation answers, Azure-scored Shadowing sentences, saved
+words, active hours). A tier stays unlocked once earned. Badges award no XP. The League track
+comes with Phase 7.
+
+### Expected side effects
+
+- **Existing learners unlock several tiers on their first Dashboard visit after `049`** (their
+  history already meets them). They get one summary toast, and `unlocked_at` is that first visit,
+  not the day they crossed the threshold (that moment was never recorded).
+- **Flame Keeper looks at the last 400 days** (`fn_activity_days`' window). A longest streak
+  older than that is not seen. The app is younger than that window today.
+- **`GET /api/achievements` writes** (it records newly met tiers). It is idempotent and takes no
+  input; repeating it never unlocks or announces anything twice, even when two requests race.
+
+### Deploy order
+
+1. **Apply `049`** (after `048`). Re-running it is harmless and keeps every unlock.
+2. **Then deploy the app.** If the app is deployed first, `/api/achievements` answers
+   `503 learning_data_unavailable`: the trophy case is left out (Needs attention takes the row
+   alone), no unlock toasts, and the streak popover shows no milestone. Nothing else is affected.
+
+### Verify after applying
+
+```sql
+select track, count(*) from achievement_tiers group by track order by track;   -- 5 tracks × 4
+
+-- No client write path: authenticated may only SELECT, and only its own rows (RLS).
+select grantee, privilege_type from information_schema.role_table_grants where table_name = 'user_achievements';
+select has_function_privilege('authenticated', 'fn_sync_achievements()', 'execute');           -- true
+select has_function_privilege('anon',          'fn_sync_achievements()', 'execute');           -- false
+select has_function_privilege('authenticated', 'fn_longest_streak(date[])', 'execute');       -- false
+```
+
+Then open the Dashboard: the trophy case appears and, for a learner with history, an unlock
+toast. `select track, tier, unlocked_at from user_achievements where user_id = '<your user id>';`
+
+### Rollback
+
+Deploy the previous app version first, then
+`drop function fn_sync_achievements(); drop function fn_longest_streak(date[]); drop function fn_streak_from_days(date[], date);`.
+Keep both tables: dropping `user_achievements` loses the unlock dates.
+
+### Local verification
+
+Same server as 046, then:
+
+```
+LOCALDB_ADMIN_URL=postgresql://postgres:postgres@127.0.0.1:55432/postgres npx jest src/__tests__/integration/achievements
 ```

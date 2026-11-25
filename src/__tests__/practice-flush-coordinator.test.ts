@@ -260,7 +260,7 @@ describe("PracticeFlushCoordinator", () => {
     expect(keys()).toEqual(['["video-library","user-a"]']);
   });
 
-  it("Phase 6: a navigation flush invalidates Dashboard (incl. its week), XP, Library and History — only after the write succeeded, only for its own user", async () => {
+  it("Phase 6: a navigation flush invalidates Dashboard (incl. its week), XP, achievements, Library and History — only after the write succeeded, only for its own user", async () => {
     const { fetchMock, coordinator, invalidate } = setup();
     let answer!: (r: Response) => void;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (answer = r)));
@@ -271,6 +271,8 @@ describe("PracticeFlushCoordinator", () => {
     answer(ok());
     await done;
     expect(invalidate.mock.calls.map(([arg]) => JSON.stringify(arg?.queryKey)).sort()).toEqual([
+      // Phase 6: achievements are recomputed from the activity just recorded.
+      '["achievements","user-a"]',
       '["dashboard-summary","user-a"]',
       // Dashboard redesign Phase 4: today's minutes and ✓ on the weekly track.
       '["dashboard-week","user-a"]',

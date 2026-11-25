@@ -12,6 +12,7 @@ import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { toFocusSource } from "@/lib/dashboard/selectFocus";
 import { useDashboardFocus } from "@/lib/dashboard/useDashboardFocus";
+import { AchievementsCase } from "./components/AchievementsCase";
 import { ContinueLearningCard } from "./components/ContinueLearningCard";
 import { DashboardHero } from "./components/DashboardHero";
 import { FirstRunHero } from "./components/FirstRunHero";
@@ -25,6 +26,7 @@ import { useScrollRestoration } from "@/hooks/useScrollRestoration";
 import { useDashboardSummaryQuery, useDashboardErrorPatternsQuery, useDashboardWeekQuery } from "@/lib/queries/dashboard";
 import { useContinueLearningQuery } from "@/lib/queries/videoLibrary";
 import { useXpQuery } from "@/lib/queries/xp";
+import { useAchievementsQuery } from "@/lib/queries/achievements";
 
 const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -50,6 +52,7 @@ function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "s
  *   2. What should I do next?    — "Next up" (the Focus decision)
  *   3. Words to review           — the review deck (graded in place)
  *   4. Am I making progress?     — Learning performance, then error diagnostics
+ *                                  beside the achievements
  * A learner with nothing yet sees only the first-run hero. Browsing saved
  * videos is My Learning (/library); past activity is History. Every metric
  * is its own canonical number (§6.8), never recomputed or blended here.
@@ -71,6 +74,7 @@ function DashboardContent() {
   const summary = summaryQuery.data;
   const weekQuery = useDashboardWeekQuery(userId);
   const xp = useXpQuery(userId).data;
+  const achievementsQuery = useAchievementsQuery(userId);
   const continueQuery = useContinueLearningQuery(userId);
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
@@ -147,6 +151,13 @@ function DashboardContent() {
   // Goal met / level up (once per browser); a first-run learner has neither yet.
   const celebrationBurst = useDashboardCelebrations(firstRun ? undefined : userId, weekQuery.data, xp);
   const summaryPending = !summary && !summaryQuery.isError;
+  // Achievements: the case, a placeholder while loading, or nothing when
+  // unavailable (e.g. migration 049 not applied) — never empty tiles.
+  const achievementsSlot = achievementsQuery.data ? (
+    <AchievementsCase tracks={achievementsQuery.data.tracks} />
+  ) : achievementsQuery.isPending ? (
+    <div aria-busy="true" aria-label="Loading achievements" className="min-h-[260px] animate-pulse rounded-2xl border border-line bg-white" />
+  ) : null;
 
   const addPanel = (
     <section id="add-video" className="scroll-mt-24" aria-labelledby="add-video-heading" onKeyDown={onAddKeyDown}>
@@ -239,8 +250,14 @@ function DashboardContent() {
                 <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-2xl border border-line bg-white" />
               )}
 
-              {/* 5. Error diagnostics. Full width until achievements (Phase 6) take the right third. */}
-              <NeedsAttentionCard userId={userId} patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
+              {/* 5. Error diagnostics (≈ 2/3) and achievements (≈ 1/3); diagnostics take
+                  the row alone when achievements are unavailable. */}
+              <div data-testid="dashboard-diagnostics-row" className={clsx("grid items-start gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
+                <div className={clsx("min-w-0", achievementsSlot && "lg:col-span-8")}>
+                  <NeedsAttentionCard userId={userId} patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
+                </div>
+                {achievementsSlot && <div className="min-w-0 lg:col-span-4">{achievementsSlot}</div>}
+              </div>
             </>
           )}
         </main>

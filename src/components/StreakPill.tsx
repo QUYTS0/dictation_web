@@ -3,16 +3,25 @@
 import { useEffect, useId, useRef, useState } from "react";
 import clsx from "clsx";
 import { Flame } from "lucide-react";
+import { nextStreakMilestone } from "@/lib/achievements/catalog";
+import { goalProgress } from "@/lib/dashboard/week";
+import { useAchievementsQuery } from "@/lib/queries/achievements";
+import { useDashboardWeekQuery } from "@/lib/queries/dashboard";
 
 const dayLabel = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
 
 /**
  * The header's streak pill: consecutive local days with practice in any
  * mode. Opens a short explanation on hover, focus-click or tap; Escape or a
- * click outside closes it.
+ * click outside closes it. The popover adds today's goal status and the
+ * next streak milestone (the Flame Keeper thresholds, migration 049) —
+ * loaded only once it's opened, and left out while unavailable.
  */
-export function StreakPill({ streakDays }: { streakDays: number }) {
+export function StreakPill({ streakDays, userId }: { streakDays: number; userId?: string }) {
   const [open, setOpen] = useState(false);
+  // Fetched while open; a closed (disabled) query keeps its cached data.
+  const week = useDashboardWeekQuery(userId, open).data;
+  const flame = useAchievementsQuery(userId, open).data?.tracks.find((t) => t.track === "flame_keeper");
   const containerRef = useRef<HTMLDivElement>(null);
   const popoverId = useId();
 
@@ -33,6 +42,8 @@ export function StreakPill({ streakDays }: { streakDays: number }) {
   }, [open]);
 
   const active = streakDays > 0;
+  const goal = week ? goalProgress(week) : null;
+  const milestone = flame ? nextStreakMilestone(streakDays, flame) : undefined;
 
   return (
     <div ref={containerRef} className="relative shrink-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
@@ -61,6 +72,26 @@ export function StreakPill({ streakDays }: { streakDays: number }) {
                 ? "Days in a row with practice in any mode. Practice every day to keep it going."
                 : "Practice in any mode today to start a streak."}
             </p>
+            {(goal || milestone !== undefined) && (
+              <dl className="mt-2.5 space-y-1 border-t border-white/10 pt-2.5 text-[11px]">
+                {goal && (
+                  <div data-testid="streak-goal" className="flex justify-between gap-2">
+                    <dt className="text-slate-400">Today&apos;s goal</dt>
+                    <dd className={clsx("font-mono font-semibold", goal.met ? "text-success" : "text-slate-200")}>
+                      {goal.met ? "Met ✓" : `${goal.minutes} / ${goal.goalMinutes} min`}
+                    </dd>
+                  </div>
+                )}
+                {milestone !== undefined && (
+                  <div data-testid="streak-milestone" className="flex justify-between gap-2">
+                    <dt className="text-slate-400">Next milestone</dt>
+                    <dd className="font-mono font-semibold text-slate-200">
+                      {milestone ? `${milestone.days} days · ${milestone.toGo} to go` : "All passed ✓"}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
           </div>
         </div>
       )}

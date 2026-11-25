@@ -71,7 +71,7 @@ export function useDashboardSummaryQuery(userId: string | undefined) {
  * The viewer's local days — the weekly track, Today's target and the 7-day
  * bars. Its own read, so a missing migration 047 (503) hides only those.
  */
-export function useDashboardWeekQuery(userId: string | undefined) {
+export function useDashboardWeekQuery(userId: string | undefined, enabled = true) {
   return useQuery({
     queryKey: dashboardKeys.week(userId),
     queryFn: async (): Promise<DashboardWeek> => {
@@ -84,7 +84,7 @@ export function useDashboardWeekQuery(userId: string | undefined) {
       }
       return data as DashboardWeek;
     },
-    enabled: !!userId,
+    enabled: !!userId && enabled,
   });
 }
 

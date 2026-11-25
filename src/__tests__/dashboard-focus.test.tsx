@@ -250,9 +250,13 @@ describe("wide shell and layout", () => {
     await screen.findByTestId("your-progress");
     expect(screen.queryByRole("region", { name: "Progress summary" })).toBeNull();
     const main = screen.getByRole("main");
-    // Direct children of <main> until their right-hand partners arrive (league: Phase 7, achievements: Phase 6).
+    // The deck: a direct child of <main> until the league card (Phase 7) takes its right third.
     expect(screen.getByTestId("vocabulary-card").parentElement).toBe(main);
-    expect(screen.getByTestId("needs-attention").parentElement).toBe(main);
+    // Diagnostics share a row with achievements (Phase 6); unavailable here, so the row is one column.
+    const row = screen.getByTestId("dashboard-diagnostics-row");
+    expect(row.parentElement).toBe(main);
+    expect(row).not.toHaveClass("lg:grid-cols-12");
+    expect(row).toContainElement(screen.getByTestId("needs-attention"));
     expect(screen.getByTestId("vocabulary-card")).toHaveClass("@container");
     expect(screen.getByTestId("needs-attention")).toHaveClass("@container");
     expect(document.querySelector('[class*="sticky"]')).toBeNull();
@@ -376,13 +380,15 @@ describe("request contract (Option B)", () => {
     "GET /api/dashboard/week",
     // XP and level (Phase 5; unanswered here, so the hero leaves them out).
     "GET /api/xp",
+    // Achievements (Phase 6; unanswered here, so diagnostics take the row alone).
+    "GET /api/achievements",
   ];
   const normalize = (c: string) => c.replace(/\?tz=.*$/, "");
 
   it.each([
     ["with a sentence candidate", [NEEDS]],
     ["without a candidate", [] as LibraryItem[]],
-  ])("cold load %s: exactly 7 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
+  ])("cold load %s: exactly 8 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");

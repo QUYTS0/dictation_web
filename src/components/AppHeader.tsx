@@ -91,7 +91,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
               <span className="hidden whitespace-nowrap sm:inline">New video</span>
             </button>
           )}
-          {user && streak && <StreakPill streakDays={streak.streakDays} />}
+          {user && streak && <StreakPill streakDays={streak.streakDays} userId={user.id} />}
           {user && xp && <XpPill totalXp={xp.totalXp} level={xp.level} />}
           <UserButton />
         </div>
