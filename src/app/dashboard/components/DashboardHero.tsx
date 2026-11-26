@@ -76,7 +76,7 @@ export function DashboardHero({
           {week ? (
             <WeeklyTrack week={week} xp={xp} />
           ) : weekPending ? (
-            <div aria-hidden="true" data-testid="weekly-track-pending" className="h-[92px] max-w-lg animate-pulse rounded-lg bg-white/[0.04]" />
+            <div aria-hidden="true" data-testid="weekly-track-pending" className="h-[92px] max-w-3xl animate-pulse rounded-lg bg-white/[0.04]" />
           ) : null}
         </div>
 

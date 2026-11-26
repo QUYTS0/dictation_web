@@ -86,7 +86,7 @@ export function NeedsAttentionCard({ userId, patterns, loading }: { userId: stri
     <section
       aria-labelledby="needs-attention-heading"
       data-testid="needs-attention"
-      className="@container rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6"
+      className="@container h-full rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6"
     >
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
@@ -140,7 +140,7 @@ export function NeedsAttentionCard({ userId, patterns, loading }: { userId: stri
                       </span>
                       <span className="block h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden="true">
                         <span
-                          className={clsx("block h-full rounded-full", isActive ? "bg-primary-600" : "bg-muted/50")}
+                          className={clsx("animate-progress-fill block h-full rounded-full", isActive ? "bg-primary-600" : "bg-muted/50")}
                           style={{ width: `${Math.min(100, Math.max(0, p.percentage))}%` }}
                         />
                       </span>

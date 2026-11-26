@@ -110,7 +110,7 @@ export function LibraryCard({ item, onRemove }: { item: LibraryItem; onRemove?: 
             <p className="text-xs text-muted">{coverage}</p>
             {ratio !== null && (
               <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-surface" aria-hidden="true">
-                <div className="h-full rounded-full bg-primary-500" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
+                <div className="animate-progress-fill h-full rounded-full bg-primary-500" style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} />
               </div>
             )}
           </div>

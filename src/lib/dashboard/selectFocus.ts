@@ -37,8 +37,9 @@ export type FocusCandidate = { roundId: string; videoId: string; title: string |
  * needsReview = latest practice-valid Dictation answers that are incorrect:
  * `sentenceAccuracy.practiced − sentenceAccuracy.correct` from fn_round_progress,
  * proven equal to fn_round_report's `dictation.needsReview` by
- * integration/dashboard-focus-parity (plan D-2, Option B) — so Focus never
- * fetches the round report.
+ * integration/dashboard-focus-parity (plan D-2, Option B) — so the Focus
+ * decision never waits for the round report. (FocusCard reads it afterwards,
+ * only to name the sentences, and only when its count agrees: plan §4.5.8.)
  */
 export function focusCandidate(items: LibraryItem[]): FocusCandidate | null {
   const top = items[0];

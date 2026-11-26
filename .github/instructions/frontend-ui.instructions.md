@@ -88,8 +88,9 @@ The product plan behind the current Dashboard is `.claude/dashboard-redesign-pla
 - Every interactive element is a real `<button>` or `<a>`, with an accessible name that carries
   the information (e.g. "Mon, Nov 23: practiced, 22 min, +140 XP").
 - Popovers open on hover, focus and tap. Escape closes them, and so does a tap outside.
-- Respect `prefers-reduced-motion`: animations only under `motion-safe` or the existing guarded
-  keyframes, and a toast instead of motion where it matters.
+- Respect `prefers-reduced-motion`: use the guarded motion classes in `globals.css` or
+  `playOnce` (`src/lib/motion.ts`), and a toast instead of motion where it matters. Motion only
+  on a change, never an endless loop (design skill §6).
 - Text on `bg-hero` uses `text-white` / `text-slate-200`–`300`, never `text-muted`.
 
 ## Copy style

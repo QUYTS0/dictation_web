@@ -1,8 +1,10 @@
 "use client";
 
+import { useRef } from "react";
 import clsx from "clsx";
 import { Flame, Heart } from "lucide-react";
 import { useToast } from "@/components/ToastProvider";
+import { BUMP, EASE_OUT, playOnce } from "@/lib/motion";
 import { useGiveKudosMutation } from "@/lib/queries/leaderboard";
 import { formatXp } from "@/lib/xp/levels";
 import type { LeagueAllTimeRow, LeagueWeekRow } from "@/lib/types/leaderboard";
@@ -27,6 +29,7 @@ function Avatar({ initials, isYou }: { initials: string; isYou: boolean }) {
 function KudosButton({ row, userId }: { row: LeagueWeekRow; userId: string | undefined }) {
   const give = useGiveKudosMutation(userId);
   const toast = useToast();
+  const heartRef = useRef<SVGSVGElement>(null);
   if (row.isYou) {
     return (
       <span className="flex items-center gap-1 text-xs text-muted" aria-label={`${row.kudos} kudos`}>
@@ -42,17 +45,19 @@ function KudosButton({ row, userId }: { row: LeagueWeekRow; userId: string | und
       aria-pressed={row.youGaveKudos}
       disabled={row.youGaveKudos || give.isPending}
       aria-label={row.youGaveKudos ? `You gave kudos to ${row.name}` : `Give kudos to ${row.name}`}
-      onClick={() =>
+      onClick={() => {
+        // The heart fills at once (optimistic) with a small pop.
+        playOnce(heartRef.current, BUMP, { duration: 350, easing: EASE_OUT });
         give.mutate(row.memberKey, {
           onError: () => toast({ message: "Couldn't send kudos", sub: "Please try again.", tone: "error" }),
-        })
-      }
+        });
+      }}
       className={clsx(
         "flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors",
         row.youGaveKudos ? "cursor-default text-danger" : "text-muted hover:bg-surface hover:text-danger"
       )}
     >
-      <Heart size={13} aria-hidden="true" className={clsx(row.youGaveKudos && "fill-current")} />
+      <Heart ref={heartRef} size={13} aria-hidden="true" className={clsx(row.youGaveKudos && "fill-current")} />
       <span aria-hidden="true">{row.kudos}</span>
     </button>
   );
@@ -103,7 +108,7 @@ export function LeagueWeekRows({ rows, userId, showZones = false }: { rows: Leag
   );
 }
 
-/** The all-time top 5 (+ the caller when outside it). */
+/** The all-time top rows given (+ the caller when outside them). */
 export function LeagueAllTimeRows({ rows, you }: { rows: LeagueAllTimeRow[]; you: { rank: number; totalXp: number } | null }) {
   const youListed = rows.some((r) => r.isYou);
   return (

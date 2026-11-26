@@ -40,7 +40,7 @@ function ProgressRow({
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden="true">
-        <div className={clsx("h-full rounded-full transition-[width] duration-500", barClass)} style={{ width: `${clampRatio(ratio) * 100}%` }} />
+        <div className={clsx("animate-progress-fill h-full rounded-full", barClass)} style={{ width: `${clampRatio(ratio) * 100}%` }} />
       </div>
     </div>
   );
@@ -80,7 +80,7 @@ export function ContinueLearningCard({ item }: { item: LibraryItem }) {
     <section
       aria-labelledby="continue-learning"
       data-testid="continue-learning"
-      className="rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6"
+      className="h-full rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6"
     >
       <div className="mb-3 flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-primary-600 motion-safe:animate-pulse" aria-hidden="true" />

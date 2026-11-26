@@ -197,13 +197,13 @@ describe("league copy", () => {
 // ---------------------------------------------------------------- league card
 
 describe("LeagueCard", () => {
-  it("tier, reset time, the top 5 plus your row, the zone line and a link to the full board", () => {
+  it("tier, reset time, the top 3 plus your row, the zone line and a link to the full board", () => {
     render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} />));
     const card = screen.getByTestId("league-card");
     expect(within(card).getByRole("heading", { name: "Gold League" })).toBeInTheDocument();
     expect(screen.getByTestId("league-reset")).toHaveTextContent(/^Resets /);
     expect(within(card).getAllByRole("listitem").map((li) => li.getAttribute("data-testid"))).toEqual(
-      ["league-row-1", "league-row-2", "league-row-3", "league-row-4", "league-row-5", "league-row-7"]
+      ["league-row-1", "league-row-2", "league-row-3", "league-row-7"]
     );
     expect(screen.getByTestId("league-row-7")).toHaveAttribute("data-you", "true");
     expect(screen.getByTestId("league-zone")).toHaveTextContent("81 XP to the promotion zone");
@@ -229,7 +229,7 @@ describe("LeagueCard", () => {
     expect(client.getQueryData<LeagueWeekBoard>(leaderboardKeys.board("user-1", "week"))!.rows[1]).toMatchObject({ youGaveKudos: false, kudos: 0 });
   });
 
-  it("All time: loaded on first open — the top 5, your rank below, 'Updated hourly'", async () => {
+  it("All time: loaded on first open — the top 3, your rank below, 'Updated hourly'", async () => {
     render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} />));
     expect(calls.some((c) => c.url.includes("scope=all"))).toBe(false);
     fireEvent.click(screen.getByRole("tab", { name: "All time" }));

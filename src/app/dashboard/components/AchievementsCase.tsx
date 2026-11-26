@@ -27,7 +27,7 @@ export function AchievementsCase({ tracks }: { tracks: AchievementTrack[] }) {
   const selected = tracks.find((t) => t.track === openTrack);
 
   return (
-    <section data-testid="achievements" aria-labelledby="achievements-heading" className="space-y-4 rounded-2xl border border-line bg-white p-5 shadow-xs">
+    <section data-testid="achievements" aria-labelledby="achievements-heading" className="h-full space-y-4 rounded-2xl border border-line bg-white p-5 shadow-xs">
       <div className="flex items-center justify-between gap-2">
         <h2 id="achievements-heading" className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-ink">
           <Award size={16} className="text-primary-600" aria-hidden="true" />
@@ -76,7 +76,7 @@ export function AchievementsCase({ tracks }: { tracks: AchievementTrack[] }) {
                   <span className={clsx("block font-mono text-[10px]", current ? "text-ink" : "text-muted")}>{tierLabel}</span>
                   {next && (
                     <span className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-line">
-                      <span className="block h-full rounded-full bg-primary-600" style={{ width: `${pct}%` }} />
+                      <span className="animate-progress-fill block h-full rounded-full bg-primary-600" style={{ width: `${pct}%` }} />
                     </span>
                   )}
                 </span>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import clsx from "clsx";
 import { RotateCw } from "lucide-react";
 import { VocabularyPronunciationButton } from "@/app/vocabulary/components/VocabularyPronunciationButton";
@@ -17,6 +18,8 @@ interface ReviewCardProps {
   size?: "compact" | "large";
   /** Small status text on the front, e.g. "Card 2 of 6". */
   caption?: string;
+  /** On the root; e.g. `flex-1` lets the card grow to fill a taller deck. */
+  className?: string;
 }
 
 /**
@@ -27,24 +30,34 @@ interface ReviewCardProps {
  * sentence (e.g. edited after saving) falls back to the Meaning front.
  * Back: word, part of speech, definition (or translation), the sentence
  * with the word marked, and pronunciation. Announced politely on flip.
+ * A flip turns the new face into view (a 3D turn, none under reduced
+ * motion); a new card, which remounts this component, simply appears.
  */
-export function ReviewCard({ item, mode, revealed, onFlip, size = "compact", caption }: ReviewCardProps) {
+export function ReviewCard({ item, mode, revealed, onFlip, size = "compact", caption, className }: ReviewCardProps) {
   const word = item.canonical_form ?? item.term;
   const cloze = clozeParts(item.sentence_context, item.term);
   const showGap = mode === "gap" && cloze !== null;
   const large = size === "large";
   const meaning = item.definition ?? item.translation;
+  // Turned = this face appeared because of a flip (state adjusted during render).
+  const [prevRevealed, setPrevRevealed] = useState(revealed);
+  const [turned, setTurned] = useState(false);
+  if (revealed !== prevRevealed) {
+    setPrevRevealed(revealed);
+    setTurned(true);
+  }
 
   return (
-    <div data-testid="review-card" data-mode={showGap ? "gap" : "meaning"} data-revealed={revealed}>
+    <div data-testid="review-card" data-mode={showGap ? "gap" : "meaning"} data-revealed={revealed} className={clsx("flex flex-col", className)}>
       {!revealed ? (
         <button
           type="button"
           onClick={onFlip}
           aria-label={showGap ? "Show the missing word" : `Show the meaning of ${word}`}
           className={clsx(
-            "flex w-full flex-col justify-between gap-4 rounded-xl border border-line bg-surface text-left text-ink transition-colors hover:border-primary-500/40",
-            large ? "min-h-[240px] p-8" : "min-h-[170px] p-5"
+            "flex w-full flex-1 flex-col justify-between gap-4 rounded-xl border border-line bg-surface text-left text-ink transition-colors hover:border-primary-500/40",
+            large ? "min-h-[240px] p-8" : "min-h-[170px] p-5",
+            turned && "animate-card-turn"
           )}
         >
           <span className="flex items-center justify-between text-xs text-muted">
@@ -76,8 +89,9 @@ export function ReviewCard({ item, mode, revealed, onFlip, size = "compact", cap
         <div
           aria-live="polite"
           className={clsx(
-            "flex w-full flex-col gap-3 rounded-xl border border-hero-2 text-white",
-            large ? "min-h-[240px] p-8" : "min-h-[170px] p-5"
+            "flex w-full flex-1 flex-col gap-3 rounded-xl border border-hero-2 text-white",
+            large ? "min-h-[240px] p-8" : "min-h-[170px] p-5",
+            turned && "animate-card-turn"
           )}
           style={{ background: "linear-gradient(135deg, #151b35 0%, #25285c 100%)" }}
         >

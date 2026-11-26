@@ -392,19 +392,22 @@ describe("request contract (Option B)", () => {
   ];
   const normalize = (c: string) => c.replace(/[?&]tz=.*$/, "");
 
+  // The Focus DECISION never waits for the round report (its count comes from
+  // the Continue item). With a sentence candidate, Next up then reads that one
+  // round's report to name the sentences: one extra, read-only GET.
+  const report = `GET /api/session/${NEEDS.round!.roundId}/report`;
   it.each([
-    ["with a sentence candidate", [NEEDS]],
-    ["without a candidate", [] as LibraryItem[]],
-  ])("cold load %s: exactly 10 GETs — no all-library request, no round report, no writes, no AI/provider calls", async (_label, items) => {
+    ["with a sentence candidate: 11 GETs, the 11th being that round's report", [NEEDS], [report]],
+    ["without a candidate: exactly 10 GETs, no round report", [] as LibraryItem[], [] as string[]],
+  ])("cold load %s — no all-library request, no writes, no AI/provider calls", async (_label, items, extra) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");
     await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
     await act(async () => {});
-    expect(calls.map(normalize).sort()).toEqual([...expected].sort());
-    expect(calls.some((c) => c.includes("/report"))).toBe(false);
+    expect(calls.map(normalize).sort()).toEqual([...expected, ...extra].sort());
     expect(calls.some((c) => c.includes("filter=all"))).toBe(false);
-    expect(calls.some((c) => /explain|gemini|azure|assess|pronunciation|\/api\/dictation|\/api\/session/i.test(c))).toBe(false);
+    expect(calls.filter((c) => c !== report).some((c) => /explain|gemini|azure|assess|pronunciation|\/api\/dictation|\/api\/session/i.test(c))).toBe(false);
     expect(calls.every((c) => c.startsWith("GET "))).toBe(true);
   });
 });

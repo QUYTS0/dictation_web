@@ -48,7 +48,7 @@ export function TodayTarget({ week, onChangeGoal, changeGoalRef }: TodayTargetPr
         </div>
       </div>
       <div aria-hidden="true" className="h-2.5 w-full overflow-hidden rounded-full border border-white/10 bg-black/25 p-0.5">
-        <div className={`h-full rounded-full transition-[width] duration-700 ${met ? "bg-success" : "bg-primary-600"}`} style={{ width: `${pct}%` }} />
+        <div className={`animate-progress-fill h-full rounded-full ${met ? "bg-success" : "bg-primary-600"}`} style={{ width: `${pct}%` }} />
       </div>
       {met && <p className="text-xs font-semibold text-success">Goal met today ✓</p>}
     </div>

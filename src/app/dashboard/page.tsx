@@ -240,12 +240,12 @@ function DashboardContent() {
               {(continueSlot || focusShown) && (
                 <div
                   data-testid="dashboard-actions"
-                  className={clsx("grid grid-cols-1 items-start gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
+                  className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
                 >
                   {continueSlot && <div className={clsx("min-w-0", focusShown && "lg:col-span-8")}>{continueSlot}</div>}
                   {focusShown && (
                     <div className={clsx("min-w-0", continueSlot && "lg:col-span-4")}>
-                      <FocusCard focus={focus} onAddVideo={focusAddVideoInput} />
+                      <FocusCard focus={focus} onAddVideo={focusAddVideoInput} userId={userId} />
                     </div>
                   )}
                 </div>
@@ -271,7 +271,7 @@ function DashboardContent() {
 
               {/* 5. Error diagnostics (≈ 2/3) and achievements (≈ 1/3); diagnostics take
                   the row alone when achievements are unavailable. */}
-              <div data-testid="dashboard-diagnostics-row" className={clsx("grid grid-cols-1 items-start gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
+              <div data-testid="dashboard-diagnostics-row" className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
                 <div className={clsx("min-w-0", achievementsSlot && "lg:col-span-8")}>
                   <NeedsAttentionCard userId={userId} patterns={errorPatternsData?.patterns ?? []} loading={errorPatternsLoading} />
                 </div>

@@ -19,6 +19,7 @@ Reference source: `C:\Users\Tri.Nguyen\source\repos\dictalearn---gamified-englis
 | D9 | Streak | **A day with only vocabulary review counts toward the streak.** Today it doesn't: `POST /api/vocabulary/review` only updates `vocabulary_items` in place, with no activity record and no review history. |
 | D10 | Hero button | **"Start today's practice" starts a new video**: it opens a link box inside the hero (the same form as the header's New Video dialog). Resuming belongs to the Continue card, so the two buttons never do the same thing. |
 | D11 | UI additions | Streak status line, first-run dashboard, fill-in-the-blank cards + keyboard shortcuts, weekly-track day details, resume point on the Continue card, celebrations. Details in §4.5. |
+| D12 | Follow-up (2026-11-26) | **Goal ring** replaces the ember as today's marker; **motion only on change** (no endless loops); **even desktop rows**. Details in §4.5.8. |
 
 Defaults chosen in this plan (not asked; change them before implementation if you disagree):
 
@@ -307,6 +308,15 @@ It updates when the summary refetches (after practice or review); no timer is ne
 
 - **Goal met / level up:** on the first dashboard visit after the goal is reached or a level is gained, play `ConfettiBurst` once and show a toast ("Daily goal met!" / "Level 15 reached"). Tracked per user in localStorage (last celebrated goal date, last celebrated level), so it fires once per browser. Nothing animates under reduced motion; the toast still appears.
 - **Monday recap banner** (`WeeklyRecapBanner`): shown on the first visit of a new league week, above the hero, dismissible, once per week. Phase 5: "Last week: 1,240 XP · 96 min · 41 words reviewed". Phase 7 adds "· finished #2 → promoted to Gold" from `leaderboard.lastWeek`. Hidden if last week had no activity.
+
+#### 4.5.8 Goal ring, motion and even rows (D12) — follow-up, done 2026-11-26
+
+Chosen from four options on a comparison page (the goal ring, a today column, a streak flame, a today ring).
+
+- **Goal ring** (`GoalRing.tsx`, replaces `ActiveEmber`): today's active minutes toward the daily goal as an amber arc, with an amber dot until the goal is met. Once met, the ring closes in teal around a check, like a practiced day. The check pops only when the goal is met while the page is open, not on every visit. Today's accessible label adds "goal N min" or "goal met". The track drops its 512px cap (now `max-w-3xl`), and its markers are 28px from `lg`.
+- **Motion** (rules in the design skill §6): the ember's five loops and the header flame's endless flicker are gone. Progress bars fill when they appear and slide on change (`animate-progress-fill`, plus `animate-bar-grow` for the 7-day chart). XP counts up on change (`useCountUp`) in the level bar and the header pill. The level bar floats "+N XP" once. The header flame flickers once when it shows a longer streak than it last showed in this browser (`dictalearn:streak-seen:<user>`). A flashcard flip turns the new face in; a new card just appears. Giving kudos pops the heart. One-shot effects use `playOnce` (`src/lib/motion.ts`, Web Animations API); none of it runs under reduced motion.
+- **Even rows:** the cards in each paired row fill the row's height. Next up's button sits at the bottom, level with Continue's. The deck's flashcard grows into a taller row. The Dashboard's League card shows the **top 3** plus your row on both tabs; `/leaderboard` keeps the full group and the top 5.
+- **Next up names the sentences:** up to 3 by text, the rest counted ("+2 more"), from the round report's `needs_review` sentences. That is the same cache entry the "Review sentences" link opens. The Focus *decision* still never waits for the report (D-2, Option B). The list is a read afterwards, shown only when the report's count matches the headline, and left out while loading, on error or on a mismatch. With a sentence candidate, the cold Dashboard load makes 11 GETs instead of 10.
 
 ## 5. Phases
 

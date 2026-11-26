@@ -11,11 +11,12 @@ import { formatLeagueReset, leagueName, zoneText } from "@/lib/leagues/tiers";
 import { useLeaderboardQuery } from "@/lib/queries/leaderboard";
 import type { LeagueWeekBoard } from "@/lib/types/leaderboard";
 
-const TOP = 5;
+/** Dashboard rows per tab; the full group is on /leaderboard. */
+const TOP = 3;
 
 /**
  * The Dashboard's league card (plan §1, §4.3): the tier, when the week
- * resets (viewer-local), This week / All time, the top 5 plus the learner's
+ * resets (viewer-local), This week / All time, the top 3 plus the learner's
  * own row, and the zone line. States: member, not joined yet (no XP this
  * week), hidden. Shows the one-time privacy notice (D7). The full group is
  * on /leaderboard.
@@ -94,7 +95,7 @@ export function LeagueCard({ userId, board }: { userId: string; board: LeagueWee
               )
             ) : allTime.data ? (
               <>
-                <LeagueAllTimeRows rows={allTime.data.rows} you={allTime.data.you} />
+                <LeagueAllTimeRows rows={allTime.data.rows.slice(0, TOP)} you={allTime.data.you} />
                 <p className="mt-2 text-[11px] text-muted">Updated hourly.</p>
               </>
             ) : allTime.isError ? (

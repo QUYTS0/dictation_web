@@ -193,7 +193,7 @@ describe("WeeklyTrack + day details (plan §4.5.5, Phase 4)", () => {
     expect(within(list).getAllByRole("listitem").map((li) => li.dataset.state)).toEqual(["done", "missed", "today", "future", "future", "future", "future"]);
     expect(within(list).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
       "Mon, Nov 23: practiced, 22 min",
-      "Today, Wed, Nov 25: practiced, 11 min",
+      "Today, Wed, Nov 25: practiced, 11 min, goal 15 min",
     ]);
     expect(screen.getByTestId("track-day-2026-11-24")).toHaveTextContent("Tue, Nov 24: no practice");
     expect(screen.getByTestId("track-day-2026-11-24")).toHaveTextContent("—");

@@ -109,7 +109,7 @@ export function LearningPerformance({ summary, week }: { summary: DashboardSumma
               {m.key === "active" && week && <SevenDayBars week={week} />}
               {m.bar && (
                 <dd className="mt-auto h-1.5 w-full overflow-hidden rounded-full bg-line" aria-hidden="true">
-                  <div className={`h-full rounded-full ${m.bar.className}`} style={{ width: `${clampPct(m.bar.pct)}%` }} />
+                  <div className={`animate-progress-fill h-full rounded-full ${m.bar.className}`} style={{ width: `${clampPct(m.bar.pct)}%` }} />
                 </dd>
               )}
             </div>
@@ -132,7 +132,7 @@ function SevenDayBars({ week }: { week: DashboardWeek }) {
           <div
             key={d.date}
             title={`${formatDayKey(d.date)}: ${formatDayMinutesLong(d.activeSec)}`}
-            className={clsx("flex-1 rounded-xs", d.activeSec <= 0 ? "bg-line" : i === days.length - 1 ? "bg-primary-600" : "bg-primary-600/25")}
+            className={clsx("animate-bar-grow flex-1 rounded-xs", d.activeSec <= 0 ? "bg-line" : i === days.length - 1 ? "bg-primary-600" : "bg-primary-600/25")}
             style={{ height: d.activeSec > 0 && max > 0 ? `${Math.max(12, (100 * d.activeSec) / max)}%` : "2px" }}
           />
         ))}

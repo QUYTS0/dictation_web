@@ -7,8 +7,12 @@ import { nextStreakMilestone } from "@/lib/achievements/catalog";
 import { goalProgress } from "@/lib/dashboard/week";
 import { useAchievementsQuery } from "@/lib/queries/achievements";
 import { useDashboardWeekQuery } from "@/lib/queries/dashboard";
+import { BUMP, EASE_OUT, playOnce } from "@/lib/motion";
 
 const dayLabel = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
+
+/** The streak this browser last showed this learner (so a rise flickers the flame once). */
+const seenKey = (userId: string) => `dictalearn:streak-seen:${userId}`;
 
 /**
  * The header's streak pill: consecutive local days with practice in any
@@ -16,6 +20,10 @@ const dayLabel = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
  * Escape, a second click or a click outside closes it. The popover adds today's goal status and the
  * next streak milestone (the Flame Keeper thresholds, migration 049) —
  * loaded only once it's opened, and left out while unavailable.
+ *
+ * The flame is still. It flickers once when it shows a longer streak than
+ * it last showed in this browser (e.g. the first page after today's
+ * practice extended it), and never under reduced motion.
  */
 export function StreakPill({ streakDays, userId }: { streakDays: number; userId?: string }) {
   // "hover" closes when the pointer leaves; "pinned" (click/tap) stays open.
@@ -27,7 +35,21 @@ export function StreakPill({ streakDays, userId }: { streakDays: number; userId?
   const week = useDashboardWeekQuery(userId, open).data;
   const flame = useAchievementsQuery(userId, open).data?.tracks.find((t) => t.track === "flame_keeper");
   const containerRef = useRef<HTMLDivElement>(null);
+  const flameRef = useRef<SVGSVGElement>(null);
   const popoverId = useId();
+
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const seen = window.localStorage.getItem(seenKey(userId));
+      if (seen !== null && streakDays > Number(seen)) {
+        playOnce(flameRef.current, BUMP, { duration: 700, easing: EASE_OUT });
+      }
+      window.localStorage.setItem(seenKey(userId), String(streakDays));
+    } catch {
+      // Storage blocked (private mode): the flame just stays still.
+    }
+  }, [userId, streakDays]);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +87,7 @@ export function StreakPill({ streakDays, userId }: { streakDays: number; userId?
         aria-label={`Daily streak: ${dayLabel(streakDays)}`}
         className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1.5 text-ink transition-colors hover:border-primary-500/40 sm:px-3"
       >
-        <Flame size={16} aria-hidden="true" className={clsx(active ? "animate-flame-subtle fill-reward/30 text-reward" : "text-muted")} />
+        <Flame ref={flameRef} size={16} aria-hidden="true" className={clsx("origin-bottom", active ? "fill-reward/30 text-reward" : "text-muted")} />
         <span className="text-xs font-bold tabular-nums">{dayLabel(streakDays)}</span>
       </button>
       {open && (

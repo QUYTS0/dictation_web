@@ -5,9 +5,9 @@ import clsx from "clsx";
 import { Check } from "lucide-react";
 import type { DashboardWeek } from "@/lib/types/learning";
 import type { XpDay, XpSummary } from "@/lib/types/xp";
-import { dayDetails, formatDayKey, formatDayMinutesLong, formatDayMinutesShort, weeklyTrack, type TrackDay } from "@/lib/dashboard/week";
+import { dayDetails, formatDayKey, formatDayMinutesLong, formatDayMinutesShort, goalProgress, weeklyTrack, type TrackDay } from "@/lib/dashboard/week";
 import { formatXp } from "@/lib/xp/levels";
-import { ActiveEmber } from "./ActiveEmber";
+import { GoalRing } from "./GoalRing";
 
 type OpenDay = { index: number; pinned: boolean } | null;
 
@@ -32,7 +32,8 @@ function dayValueLabel(day: TrackDay, xpDay: XpDay | undefined, hasXp: boolean):
 /**
  * The hero's Weekly consistency track (plan §1, §4.5.5): Monday–Sunday of the
  * viewer's local week. ✓ = any practice that day (the streak's own day set,
- * word reviews included); the ember marks today; later days are plain dots.
+ * word reviews included); today is the goal ring (today's minutes toward the
+ * daily goal, a check once it's met); later days are plain dots.
  * Under each day: the XP earned that day (its active minutes while XP is
  * unavailable).
  *
@@ -44,6 +45,7 @@ function dayValueLabel(day: TrackDay, xpDay: XpDay | undefined, hasXp: boolean):
  */
 export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary }) {
   const { days, activeCount, todayIndex } = weeklyTrack(week);
+  const goal = goalProgress(week);
   const xpByDate = new Map((xp?.days ?? []).map((d) => [d.date, d]));
   const [open, setOpen] = useState<OpenDay>(null);
   const listRef = useRef<HTMLOListElement>(null);
@@ -75,7 +77,7 @@ export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary 
   const litPct = todayIndex > 0 ? (100 * todayIndex) / 6 : 0;
 
   return (
-    <div data-testid="weekly-track" className="max-w-lg pt-2">
+    <div data-testid="weekly-track" className="max-w-3xl pt-2">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Weekly consistency track</h2>
         <span className="font-mono text-xs text-slate-400" data-testid="weekly-track-count">
@@ -84,10 +86,10 @@ export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary 
       </div>
 
       <div className="relative">
-        <div aria-hidden="true" className="pointer-events-none absolute left-[7.14%] right-[7.14%] top-9 h-[1.5px] -translate-y-1/2">
+        <div aria-hidden="true" className="pointer-events-none absolute left-[7.14%] right-[7.14%] top-9 h-[1.5px] -translate-y-1/2 lg:top-[38px]">
           <div className="h-full w-full bg-white/[0.08]" />
           <div
-            className="absolute left-0 top-0 h-full rounded-full"
+            className="animate-progress-fill absolute left-0 top-0 h-full rounded-full"
             style={{
               width: `${litPct}%`,
               background: "linear-gradient(90deg, rgba(47, 174, 155, 0.38) 0%, rgba(47, 174, 155, 0.38) 82%, rgba(239, 176, 68, 0.35) 100%)",
@@ -101,17 +103,18 @@ export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary 
             const isOpen = open?.index === i;
             const date = formatDayKey(day.date);
             const xpDay = xpByDate.get(day.date);
-            const label = `${isToday ? `Today, ${date}` : date}: ${dayStatusText(day, xpDay)}`;
+            const goalText = isToday ? (goal.met ? ", goal met" : `, goal ${goal.goalMinutes} min`) : "";
+            const label = `${isToday ? `Today, ${date}` : date}: ${dayStatusText(day, xpDay)}${goalText}`;
             const details = isOpen ? dayDetails(day, xpDay) : null;
             const popoverId = `${baseId}-day-${i}`;
             const marker = isToday ? (
-              <ActiveEmber size={24} />
+              <GoalRing pct={goal.pct} met={goal.met} />
             ) : day.state === "done" ? (
-              <span aria-hidden="true" className="flex h-6 w-6 items-center justify-center rounded-full bg-success text-hero">
+              <span aria-hidden="true" className="flex size-full items-center justify-center rounded-full bg-success text-hero">
                 <Check size={14} strokeWidth={3} />
               </span>
             ) : (
-              <span aria-hidden="true" className={clsx("flex h-6 w-6 items-center justify-center rounded-full", day.state === "future" ? "bg-white/[0.06]" : "bg-white/10")}>
+              <span aria-hidden="true" className={clsx("flex size-full items-center justify-center rounded-full", day.state === "future" ? "bg-white/[0.06]" : "bg-white/10")}>
                 <span className={clsx("h-1.5 w-1.5 rounded-full", day.state === "future" ? "bg-slate-600" : "bg-slate-500")} />
               </span>
             );
@@ -140,12 +143,12 @@ export function WeeklyTrack({ week, xp }: { week: DashboardWeek; xp?: XpSummary 
                     onBlur={() => hide(i, true)}
                     onClick={() => toggle(i)}
                     onKeyDown={onKeyDown(i)}
-                    className="relative flex h-6 w-6 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-hero"
+                    className="relative flex size-6 items-center justify-center rounded-full focus-visible:outline-none lg:size-7 focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-hero"
                   >
                     {marker}
                   </button>
                 ) : (
-                  <span className="relative flex h-6 w-6 items-center justify-center">
+                  <span className="relative flex size-6 items-center justify-center lg:size-7">
                     {marker}
                     <span className="sr-only">{label}</span>
                   </span>

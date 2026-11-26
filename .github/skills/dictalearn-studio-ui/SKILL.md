@@ -76,10 +76,12 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
 - **Popovers**: `rounded-lg border border-line bg-white px-3 py-2 text-xs text-ink shadow-lg`
   (on the hero, the dark popover in `StreakPill`).
 - **Page width**: `PAGE_WIDTH_CLASS.wide` + `PAGE_PADDING_CLASS.wide` (`src/lib/layout/pageWidth`).
-- **Two-column rows**: `grid grid-cols-1 items-start gap-4 sm:gap-5 lg:grid-cols-12` with
-  `lg:col-span-8` / `lg:col-span-4`. Keep `grid-cols-1`: without it the single phone column grows
-  to its widest content and the whole page scrolls sideways. A card whose width varies uses
-  container queries (`@container`, `@3xl:`).
+- **Two-column rows**: `grid grid-cols-1 items-stretch gap-4 sm:gap-5 lg:grid-cols-12` with
+  `lg:col-span-8` / `lg:col-span-4`, and `h-full` on both cards, so a row's cards share one height
+  (no hole under the shorter one). Inside a stretched card, put the main action at the bottom
+  with `mt-auto` or let the main content grow (`flex-1`). Keep `grid-cols-1`: without it the single
+  phone column grows to its widest content and the whole page scrolls sideways. A card whose
+  width varies uses container queries (`@container`, `@3xl:`).
 - **Header** (`AppHeader`): below `lg` the nav tabs get their own full-width row under the brand
   (scrolling sideways on a phone); from `lg` they sit inline. Anything added to the header's
   right-hand group must still fit at 1024px and 1280px; check with the browser, not by eye.
@@ -94,7 +96,7 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
 | Hero CTA (amber) | `rounded-lg border border-reward/40 bg-reward px-3 py-2.5 text-sm font-semibold text-hero` |
 | Icon button | `rounded-lg p-1.5 text-muted hover:bg-surface hover:text-ink` + `aria-label` |
 | Input | `rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-primary-500 focus:ring-2 focus:ring-primary-500/30` |
-| Progress bar | track `h-1.5 w-full overflow-hidden rounded-full bg-line`, fill `h-full rounded-full bg-primary-600` (`bg-success` when met); mark the bar `aria-hidden` and give the number as text |
+| Progress bar | track `h-1.5 w-full overflow-hidden rounded-full bg-line`, fill `animate-progress-fill h-full rounded-full bg-primary-600` (`bg-success` when met) with an inline `width`; mark the bar `aria-hidden` and give the number as text |
 | Segmented tabs | track `flex gap-1 rounded-lg bg-surface p-1 text-xs font-semibold`; tab `role="tab"`, selected `bg-white text-ink shadow-xs` |
 | Status chip | `rounded-full px-2 py-0.5 text-[11px] font-semibold` + a tinted pair (`bg-success/10 text-success`, `bg-primary-50 text-primary-700`, `bg-surface text-muted`) |
 | Ranked row | `flex items-center gap-2.5 rounded-xl border px-2.5 py-2`; the viewer's row `border-primary-500/40 bg-primary-50` |
@@ -102,10 +104,27 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
 
 ## 6. Motion
 
-- Subtle and purposeful: color/border transitions (`transition-colors`), progress width
-  transitions. Hover on cards changes the border (`hover:border-primary-500/40`), not a big lift.
-- Decorative keyframes (`animate-flame-subtle`, `animate-ember-*`) are defined in `globals.css`
-  under `prefers-reduced-motion: no-preference`. Add new ones the same way.
+Motion confirms that something just changed or appeared. It is never decoration.
+
+- **Rules:** animate only on a change or when something first appears. Taps and toggles take
+  150–400 ms; fills and counters up to 700 ms. Use an ease-out. **Nothing loops forever.** Under
+  `prefers-reduced-motion`, nothing moves (values still update).
+- **On appear** (CSS classes in `globals.css`, inside `prefers-reduced-motion: no-preference`):
+  `animate-progress-fill` (bars with an inline `width`: fill from empty, slide on change),
+  `animate-bar-grow` (vertical chart bars), `animate-ring-fill` (the goal ring's arc),
+  `animate-card-turn` (a flashcard face turning in after a flip), `animate-xp-gain` (the
+  "+N XP" float; hidden under reduced motion). Add new ones the same way.
+- **On change, from code:** `playOnce(el, keyframes, options)` from `src/lib/motion.ts` (Web
+  Animations API) with `POP_IN` or `BUMP`. It does nothing under reduced motion or in jsdom.
+  Examples: the goal ring's check when the goal is met, the header flame when the streak grows,
+  the kudos heart.
+- **Numbers:** `useCountUp(value)` (`src/hooks/useCountUp.ts`) counts to each new value. The first
+  value shows as is. Keep the real value in the accessible name.
+- Play "it happened" moments only when they happen while the page is open, or the first time
+  they're seen (remember that per user in `localStorage`, like `dictalearn:streak-seen:<user>`).
+  Never replay them on every visit.
+- Hover on cards changes the border (`hover:border-primary-500/40`), not a big lift. Color
+  changes use `transition-colors`.
 - Celebrations use `ConfettiBurst`, which renders nothing under reduced motion. Always pair it
   with a toast so nothing is lost.
 
@@ -133,5 +152,7 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
 - Raw colors on light surfaces: `text-slate-500`, `bg-indigo-50`, `#f4f7ff`. Use the tokens.
 - `dark:` variants. There is no dark theme yet; don't half-build one.
 - Staggered entrance animations on lists, or `hover:-translate-y-1` lifts on dense grids.
+- Endless decorative loops (glows, breathing, flickering). The old "today" ember and header-flame
+  flicker were removed for this reason. `animate-pulse` is for loading placeholders only.
 - Fake data: zeros for unavailable metrics, XP in Learning performance, praise or advice in
   diagnostics copy.

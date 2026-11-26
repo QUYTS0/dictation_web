@@ -115,7 +115,7 @@ export function VocabularyDeck({
       onKeyDown={onKeyDown}
       aria-labelledby="vocabulary-heading"
       data-testid="vocabulary-card"
-      className="@container rounded-2xl border border-line bg-white p-5 shadow-xs outline-none sm:p-6"
+      className="@container flex h-full flex-col rounded-2xl border border-line bg-white p-5 shadow-xs outline-none sm:p-6"
     >
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
@@ -155,9 +155,12 @@ export function VocabularyDeck({
       ) : queue.isError && !queue.data ? (
         <p className="text-sm text-red-600">Couldn&apos;t load your review cards.</p>
       ) : current ? (
-        <div className="grid gap-5 @3xl:grid-cols-12">
-          <div className="space-y-3 @3xl:col-span-7">
+        // flex-1: when the row is taller (beside the League card) the flashcard
+        // grows into the space instead of leaving it empty below.
+        <div className="grid flex-1 gap-5 @3xl:grid-cols-12">
+          <div className="flex flex-col gap-3 @3xl:col-span-7">
             <ReviewCard
+              className="flex-1"
               key={current.id}
               item={current}
               mode={mode}
@@ -167,7 +170,7 @@ export function VocabularyDeck({
             />
             {revealed && <ReviewGradeButtons item={current} onGrade={(g) => void grade(g)} busyGrade={busy} />}
           </div>
-          <div className="space-y-3 @3xl:col-span-5">
+          <div className="flex flex-col items-start gap-3 @3xl:col-span-5">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted">Up next</p>
             <ul aria-label="Cards up next" className="flex flex-wrap gap-2">
               {remaining.slice(0, MAX_CHIPS).map((item) => {
@@ -196,7 +199,7 @@ export function VocabularyDeck({
             <p className="text-[11px] text-muted pointer-coarse:hidden">
               Keys: <kbd className="font-mono">Space</kbd> flip · <kbd className="font-mono">1</kbd>–<kbd className="font-mono">4</kbd> rate
             </p>
-            <Link href="/vocabulary" className="inline-flex items-center gap-1 text-sm font-semibold text-primary-600 hover:text-primary-700">
+            <Link href="/vocabulary" className="mt-auto inline-flex items-center gap-1 text-sm font-semibold text-primary-600 hover:text-primary-700">
               View vocabulary <ArrowRight size={15} aria-hidden="true" />
             </Link>
           </div>
