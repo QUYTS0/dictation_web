@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyboardEvent, MouseEvent, Suspense, useEffect, useRef, useState } from "react";
+import { KeyboardEvent, Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
@@ -10,13 +10,13 @@ import AppFooter from "@/components/AppFooter";
 import { AddVideoForm } from "@/components/AddVideoForm";
 import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
-import { toFocusSource } from "@/lib/dashboard/selectFocus";
-import { useDashboardFocus } from "@/lib/dashboard/useDashboardFocus";
+import { sentencesToReview, todayPlan, toSource } from "@/lib/dashboard/today";
+import { goalProgress } from "@/lib/dashboard/week";
+import { prefersReducedMotion } from "@/lib/motion";
 import { AchievementsCase } from "./components/AchievementsCase";
 import { ContinueLearningCard } from "./components/ContinueLearningCard";
 import { DashboardHero } from "./components/DashboardHero";
 import { FirstRunHero } from "./components/FirstRunHero";
-import { FocusCard } from "./components/FocusCard";
 import { LeagueCard } from "./components/LeagueCard";
 import { LearningPerformance } from "./components/LearningPerformance";
 import { NeedsAttentionCard } from "./components/NeedsAttentionCard";
@@ -30,33 +30,35 @@ import { useXpQuery } from "@/lib/queries/xp";
 import { useAchievementsQuery } from "@/lib/queries/achievements";
 import { useLeaderboardQuery } from "@/lib/queries/leaderboard";
 import { useProfileQuery } from "@/lib/queries/profile";
-
-const prefersReducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+import { useVocabularyStatsQuery } from "@/lib/queries/vocabulary";
 
 /**
- * "scroll" (Next Up's CTA, possibly far from the form): scroll the input into
- * view honoring reduced motion, then focus without a second jump. "toggle":
- * the input is right under the toggle — just focus it.
+ * The Today list's jumps: scroll the card that owns the task into view
+ * (honoring reduced motion), then focus it without a second jump, so its
+ * keys work at once (e.g. the deck's Space / 1–4).
  */
-function focusAddVideoInputEl(input: HTMLInputElement | null, how: "toggle" | "scroll") {
-  if (!input) return;
-  if (how === "scroll") input.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" });
-  input.focus({ preventScroll: how === "scroll" });
+function jumpToCard(id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+  el.focus({ preventScroll: true });
 }
 
 /**
  * The learner's home (.claude/dashboard-redesign-plan.md). It answers, in
  * this order:
- *   0. How am I doing today?     — the hero: welcome, streak status, this
- *                                  week's track, Today's target, level, and
- *                                  "Start today's practice" (a NEW video);
- *                                  last week's recap above it once a week
- *   1. What should I continue?   — "Pick up where you left off" (ONE item)
- *   2. What should I do next?    — "Next up" (the Focus decision)
- *   3. Words to review           — the review deck (graded in place), beside
- *                                  this week's league
- *   4. Am I making progress?     — Learning performance, then error diagnostics
+ *   0. What's left today?        — the hero: welcome, streak status, this
+ *                                  week's track, the Today list (practice
+ *                                  time, then sentences / words left, each
+ *                                  jumping to its card), level, and "Start a
+ *                                  new video"; last week's recap above it
+ *   1. What should I continue?   — "Pick up where you left off" (ONE item,
+ *                                  with its sentences to look at again),
+ *                                  beside this week's league
+ *   2. Words to review           — the review deck (graded in place)
+ *   3. Am I making progress?     — Learning performance, then error diagnostics
  *                                  beside the achievements
+ * Each task has ONE home: no card repeats another (the old Next up card did).
  * A learner with nothing yet sees only the first-run hero. Browsing saved
  * videos is My Learning (/library); past activity is History. Every metric
  * is its own canonical number (§6.8), never recomputed or blended here.
@@ -67,9 +69,9 @@ function DashboardContent() {
   const userId = user?.id;
   const [url, setUrl] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-  // Focus hand-offs across the disclosure's mount/unmount: what to do with
-  // the input once the form mounts, and returning focus to the toggle on close.
-  const pendingInputFocus = useRef<"toggle" | "scroll" | null>(null);
+  // Focus hand-offs across the disclosure's mount/unmount: focus the input
+  // once the form mounts, and return focus to the toggle on close.
+  const pendingInputFocus = useRef(false);
   const returnFocusToToggle = useRef(false);
   const addVideoInputRef = useRef<HTMLInputElement>(null);
   const addToggleRef = useRef<HTMLButtonElement>(null);
@@ -82,23 +84,23 @@ function DashboardContent() {
   const leagueQuery = useLeaderboardQuery(userId, "week");
   const profile = useProfileQuery(userId).data;
   const continueQuery = useContinueLearningQuery(userId);
+  const vocab = toSource(useVocabularyStatsQuery(userId));
   const { data: errorPatternsData, isLoading: errorPatternsLoading } = useDashboardErrorPatternsQuery(userId);
 
   useScrollRestoration(pathname, userId, !summaryQuery.isLoading && !continueQuery.isLoading);
 
   useEffect(() => {
     if (addOpen && pendingInputFocus.current) {
-      focusAddVideoInputEl(addVideoInputRef.current, pendingInputFocus.current);
-      pendingInputFocus.current = null;
+      addVideoInputRef.current?.focus(); // right under the toggle: no scroll needed
+      pendingInputFocus.current = false;
     } else if (!addOpen && returnFocusToToggle.current) {
       returnFocusToToggle.current = false;
       addToggleRef.current?.focus();
     }
   }, [addOpen]);
 
-  const openAddVideo = (how: "toggle" | "scroll") => {
-    if (addOpen) return focusAddVideoInputEl(addVideoInputRef.current, how); // already open: just bring it into view
-    pendingInputFocus.current = how;
+  const openAddVideo = () => {
+    pendingInputFocus.current = true;
     setAddOpen(true);
   };
   // Collapsing keeps whatever was typed (state lives here, not in the form).
@@ -113,22 +115,17 @@ function DashboardContent() {
     }
   };
 
-  // The ONE resume item — the same top item Focus evaluates for sentences.
+  // The ONE resume item; its round's sentences to look at again live in its card.
   const continueTop = continueQuery.data?.items[0] ?? null;
-  const { result: focus, vocab } = useDashboardFocus(userId, {
-    continueItems: toFocusSource({ data: continueQuery.data?.items, isError: continueQuery.isError }),
-    summary: toFocusSource(summaryQuery),
+  // The deck owns "Start review" (the Today list only jumps to it).
+  const showVocabReviewButton = vocab.status === "ready" && vocab.data.reviewable > 0;
+  // What's left today (plan §4.5.9). Unknown sources stay unknown, never "nothing left".
+  const today = todayPlan({
+    sentences: continueQuery.data ? { status: "ready", data: sentencesToReview(continueTop) } : continueQuery.isError ? { status: "error" } : { status: "pending" },
+    words: vocab,
+    wordsReviewedToday: xp ? (xp.days.find((d) => d.date === xp.today)?.activity.wordsReviewed ?? 0) : null,
+    goalMet: weekQuery.data ? goalProgress(weekQuery.data).met : null,
   });
-  // Dedup: Next Up owns "Start review" when it is about vocabulary; while it
-  // is still deciding, no button either (no flash of a duplicate). Next to a
-  // sentence Next Up, the review is a different action, so it may appear.
-  const showVocabReviewButton = vocab.status === "ready" && vocab.data.reviewable > 0 && focus.kind === "sentences";
-
-  // Next Up's "Add a video": open the one form and bring its input into view.
-  const focusAddVideoInput = (e: MouseEvent<HTMLAnchorElement>) => {
-    e.preventDefault();
-    openAddVideo("scroll");
-  };
 
   // Primary slot: the resume card, a load/error state, a pointer to My
   // Learning when there is saved content but nothing unfinished, or nothing.
@@ -138,7 +135,7 @@ function DashboardContent() {
     ) : !continueQuery.data ? (
       <div aria-busy="true" aria-label="Loading continue learning" className="min-h-[180px] animate-pulse rounded-2xl border border-line bg-white" />
     ) : continueTop ? (
-      <ContinueLearningCard item={continueTop} />
+      <ContinueLearningCard item={continueTop} userId={userId} />
     ) : summary && summary.libraryVideos > 0 ? (
       <div data-testid="continue-empty" className="rounded-2xl border border-line bg-white p-5 text-sm text-muted shadow-xs sm:p-6">
         Nothing unfinished right now.{" "}
@@ -147,7 +144,6 @@ function DashboardContent() {
         </Link>
       </div>
     ) : null;
-  const focusShown = focus.kind !== "hidden";
   // The public name when the learner chose one (Profile & preferences), else the email's local part.
   const name = profile?.publicName ?? user?.email?.split("@")[0] ?? "Learner";
   // Nothing yet at all — no videos, no study sessions, no saved words — gets
@@ -167,6 +163,10 @@ function DashboardContent() {
     ) : leagueQuery.isPending ? (
       <div aria-busy="true" aria-label="Loading your league" className="min-h-[320px] animate-pulse rounded-2xl border border-line bg-white" />
     ) : null;
+  // The league sits beside the resume card; with no resume card (nothing
+  // unfinished, or it failed) it moves beside the deck instead, never alone.
+  // While Continue is still loading it waits beside its placeholder.
+  const leagueBesideContinue = !!leagueSlot && !!continueSlot && (continueQuery.data ? !!continueTop : !continueQuery.isError);
   const achievementsSlot = achievementsQuery.data ? (
     <AchievementsCase tracks={achievementsQuery.data.tracks} />
   ) : achievementsQuery.isPending ? (
@@ -218,7 +218,7 @@ function DashboardContent() {
               {/* Last week's recap: first visit of a new league week only. */}
               {userId && xp && <WeeklyRecapBanner userId={userId} xp={xp} leagueLastWeek={leagueQuery.data?.lastWeek ?? null} />}
 
-              {/* Hero: welcome, streak status and the week; today's panel with "Start today's practice". */}
+              {/* Hero: welcome, streak status and the week; the Today list, level and "Start a new video". */}
               {summaryPending ? (
                 <div aria-busy="true" aria-label="Loading your dashboard" className="min-h-[148px] animate-pulse rounded-2xl bg-hero/90" />
               ) : (
@@ -228,39 +228,42 @@ function DashboardContent() {
                   week={weekQuery.data}
                   weekPending={weekQuery.isPending}
                   xp={xp}
+                  todayRows={today.rows}
+                  todayAllDone={today.allDone}
+                  onJump={(target) => jumpToCard(target === "sentences" ? "continue-sentences" : "review-deck")}
                   celebrationBurst={celebrationBurst}
                   addOpen={addOpen}
-                  onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo("toggle"))}
+                  onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo())}
                   addToggleRef={addToggleRef}
                   addPanel={addPanel}
                 />
               )}
 
-              {/* 1 + 2. The primary resume action and the next action (≈ 2/3 : 1/3 on desktop). */}
-              {(continueSlot || focusShown) && (
+              {/* 1. The resume card (with its sentences to look at again) and this
+                  week's league (≈ 2/3 : 1/3 on desktop); alone, a readable card width. */}
+              {continueSlot && (
                 <div
                   data-testid="dashboard-actions"
-                  className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", continueSlot && focusShown ? "lg:grid-cols-12" : "w-full max-w-3xl")}
+                  className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueBesideContinue ? "lg:grid-cols-12" : "w-full max-w-3xl")}
                 >
-                  {continueSlot && <div className={clsx("min-w-0", focusShown && "lg:col-span-8")}>{continueSlot}</div>}
-                  {focusShown && (
-                    <div className={clsx("min-w-0", continueSlot && "lg:col-span-4")}>
-                      <FocusCard focus={focus} onAddVideo={focusAddVideoInput} userId={userId} />
-                    </div>
-                  )}
+                  <div className={clsx("min-w-0", leagueBesideContinue && "lg:col-span-8")}>{continueSlot}</div>
+                  {leagueBesideContinue && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
                 </div>
               )}
 
-              {/* 3. The review deck (≈ 2/3) and the league card (≈ 1/3); the deck takes
-                  the row alone when the league is unavailable and adapts to its own width. */}
-              <div data-testid="dashboard-deck-row" className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueSlot && "lg:grid-cols-12")}>
-                <div className={clsx("min-w-0", leagueSlot && "lg:col-span-8")}>
+              {/* 2. The review deck, full width (it adapts to its own width); the league
+                  joins it only when there is no resume card to sit beside. */}
+              <div
+                data-testid="dashboard-deck-row"
+                className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueSlot && !leagueBesideContinue && "lg:grid-cols-12")}
+              >
+                <div className={clsx("min-w-0", leagueSlot && !leagueBesideContinue && "lg:col-span-8")}>
                   <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
                 </div>
-                {leagueSlot && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
+                {leagueSlot && !leagueBesideContinue && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
               </div>
 
-              {/* 4. Learning performance — the canonical metrics, each its own card. */}
+              {/* 3. Learning performance — the canonical metrics, each its own card. */}
               {summaryQuery.isError && !summary ? (
                 <p className="text-sm text-red-600">Failed to load your progress. Please refresh and try again.</p>
               ) : summary ? (
@@ -269,7 +272,7 @@ function DashboardContent() {
                 <div aria-busy="true" aria-label="Loading your progress" className="min-h-[168px] animate-pulse rounded-2xl border border-line bg-white" />
               )}
 
-              {/* 5. Error diagnostics (≈ 2/3) and achievements (≈ 1/3); diagnostics take
+              {/* 4. Error diagnostics (≈ 2/3) and achievements (≈ 1/3); diagnostics take
                   the row alone when achievements are unavailable. */}
               <div data-testid="dashboard-diagnostics-row" className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", achievementsSlot && "lg:grid-cols-12")}>
                 <div className={clsx("min-w-0", achievementsSlot && "lg:col-span-8")}>

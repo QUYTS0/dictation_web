@@ -36,6 +36,7 @@ import DashboardPage from "@/app/dashboard/page";
 import UserButton from "@/components/UserButton";
 import { ToastProvider } from "@/components/ToastProvider";
 import { WeeklyTrack } from "@/app/dashboard/components/WeeklyTrack";
+import { TodayPlan } from "@/app/dashboard/components/TodayPlan";
 import { TodayTarget } from "@/app/dashboard/components/TodayTarget";
 import { formatDayMinutesLong, formatDayMinutesShort, goalProgress, lastSevenDays, weeklyTrack } from "@/lib/dashboard/week";
 import { addDaysToKey, mondayOfKey, weekdayIndexMonday0 } from "@/lib/utils/streak";
@@ -257,22 +258,38 @@ describe("WeeklyTrack + day details (plan §4.5.5, Phase 4)", () => {
 
 // ---------------------------------------------------------------- today's target
 
-describe("TodayTarget (D3)", () => {
-  it("minutes of the goal, a bar, and a way to change the goal — no 'met' label before it's met", () => {
+describe("TodayTarget (D3) in the Today list", () => {
+  const plan = (week: DashboardWeek | undefined, onChangeGoal = jest.fn()) => (
+    <TodayPlan week={week} weekPending={false} rows={[]} allDone={false} onChangeGoal={onChangeGoal} changeGoalRef={null} onJump={jest.fn()} />
+  );
+
+  it("practice time of the goal, a bar, and a way to change the goal — no 'met' label before it's met", () => {
     const onChangeGoal = jest.fn();
-    render(<TodayTarget week={WEEK} onChangeGoal={onChangeGoal} changeGoalRef={null} />);
+    render(plan(WEEK, onChangeGoal));
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
     const target = screen.getByTestId("today-target");
     expect(target).toHaveAttribute("data-met", "false");
+    expect(target).toHaveTextContent("Practice time");
     expect(screen.getByTestId("today-target-value")).toHaveTextContent("11 of 15 minutes");
     expect(within(target).queryByText(/Goal met/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Change daily goal" }));
     expect(onChangeGoal).toHaveBeenCalledTimes(1);
   });
 
-  it("met: teal, with 'Goal met today ✓'", () => {
-    render(<TodayTarget week={weekOf({ goalMinutes: 10 }, { "2026-11-25": { practiced: true, activeSec: 600 } })} onChangeGoal={jest.fn()} changeGoalRef={null} />);
+  it("met: teal, with 'Goal met today ✓'; 'All done for today ✓' instead when nothing else is left", () => {
+    const met = weekOf({ goalMinutes: 10 }, { "2026-11-25": { practiced: true, activeSec: 600 } });
+    const { unmount } = render(<TodayTarget week={met} />);
     expect(screen.getByTestId("today-target")).toHaveAttribute("data-met", "true");
     expect(screen.getByText("Goal met today ✓")).toBeInTheDocument();
+    unmount();
+    render(<TodayTarget week={met} allDone />);
+    expect(screen.getByTestId("today-all-done")).toHaveTextContent("All done for today ✓");
+    expect(screen.queryByText("Goal met today ✓")).toBeNull();
+  });
+
+  it("no week and nothing left → no Today list at all (never an empty heading)", () => {
+    const { container } = render(plan(undefined));
+    expect(container).toBeEmptyDOMElement();
   });
 });
 
@@ -284,7 +301,7 @@ describe("Dashboard hero and Learning performance with the week", () => {
     const hero = await screen.findByTestId("dashboard-welcome");
     await within(hero).findByTestId("weekly-track");
     expect(within(hero).getByTestId("today-target-value")).toHaveTextContent("11 of 15 minutes");
-    expect(within(hero).getByRole("button", { name: /Start today/ })).toBeInTheDocument();
+    expect(within(hero).getByRole("button", { name: "Start a new video" })).toBeInTheDocument();
 
     const bars = await screen.findByTestId("progress-week-bars");
     expect(within(screen.getByTestId("progress-active")).getByTestId("progress-week-bars")).toBe(bars);
@@ -301,7 +318,7 @@ describe("Dashboard hero and Learning performance with the week", () => {
     await waitFor(() => expect(within(hero).queryByTestId("weekly-track-pending")).toBeNull());
     expect(within(hero).queryByTestId("weekly-track")).toBeNull();
     expect(within(hero).queryByTestId("today-target")).toBeNull();
-    expect(within(hero).getByRole("button", { name: /Start today/ })).toBeInTheDocument();
+    expect(within(hero).getByRole("button", { name: "Start a new video" })).toBeInTheDocument();
     await screen.findByTestId("your-progress");
     expect(screen.queryByTestId("progress-week-bars")).toBeNull();
   });

@@ -6,8 +6,10 @@ import clsx from "clsx";
 import type { LucideIcon } from "lucide-react";
 import { ArrowRight, Headphones, Mic, PenTool, Play } from "lucide-react";
 import { libraryPracticeHref, listeningText, practiceCoverageText } from "@/components/library/LibraryCard";
+import { sentencesHeadline, sentencesToReview } from "@/lib/dashboard/today";
 import type { LibraryItem } from "@/lib/types/learning";
 import { formatLastActive } from "@/lib/utils/time";
+import { NeedsReviewSentences } from "./NeedsReviewSentences";
 
 const MODE_LABEL = { dictation: "Dictation", listening: "Listening", shadowing: "Shadowing" } as const;
 
@@ -47,13 +49,17 @@ function ProgressRow({
 }
 
 /**
- * The Dashboard's primary resume card: the ONE resume item — the top
- * Continue Learning item, the same one Focus evaluates. Each progress bar is
- * that mode's own canonical coverage (never accuracy, never blended); the
- * overall "x/N sentences practiced" stays the round's headline number.
- * Report/Library/History navigation lives on those pages, not here.
+ * The Dashboard's primary resume card: the ONE resume item (the top Continue
+ * Learning item). Each progress bar is that mode's own canonical coverage
+ * (never accuracy, never blended); the overall "x/N sentences practiced"
+ * stays the round's headline number. Below it, the round's sentences that
+ * need another look (plan §4.5.9): the count from the round's progress,
+ * their text from the round report when it agrees, and the one "Review
+ * sentences" link on the Dashboard. The hero's Today list jumps here
+ * (#continue-sentences). Library/History navigation lives on those pages.
  */
-export function ContinueLearningCard({ item }: { item: LibraryItem }) {
+export function ContinueLearningCard({ item, userId }: { item: LibraryItem; userId?: string }) {
+  const toReview = sentencesToReview(item);
   const href = libraryPracticeHref(item);
   const title = item.title ?? `Video ${item.videoId}`;
   const listeningOnly = item.state === "listening" || item.state === "listening_prior_revision";
@@ -192,6 +198,26 @@ export function ContinueLearningCard({ item }: { item: LibraryItem }) {
             </div>
           </div>
         </div>
+
+        {toReview && (
+          <div
+            id="continue-sentences"
+            tabIndex={-1}
+            data-testid="continue-sentences"
+            className="mt-5 scroll-mt-28 space-y-3 rounded-lg border-t border-line pt-4 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <h4 className="text-sm font-bold text-ink">{sentencesHeadline(toReview.count)}</h4>
+              <Link
+                href={`/results/${toReview.roundId}`}
+                className="inline-flex items-center gap-1 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700"
+              >
+                Review sentences <ArrowRight size={15} aria-hidden="true" />
+              </Link>
+            </div>
+            {userId && <NeedsReviewSentences userId={userId} roundId={toReview.roundId} count={toReview.count} />}
+          </div>
+        )}
       </article>
     </section>
   );

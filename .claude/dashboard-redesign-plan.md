@@ -17,9 +17,10 @@ Reference source: `C:\Users\Tri.Nguyen\source\repos\dictalearn---gamified-englis
 | D7 | Leaderboard identity | **Everyone included by default** under an auto-generated nickname, with an opt-out and an optional public name. |
 | D8 | Vocabulary card | **Inline flashcard with real grading** through the existing review API (Again/Hard/Good/Easy). |
 | D9 | Streak | **A day with only vocabulary review counts toward the streak.** Today it doesn't: `POST /api/vocabulary/review` only updates `vocabulary_items` in place, with no activity record and no review history. |
-| D10 | Hero button | **"Start today's practice" starts a new video**: it opens a link box inside the hero (the same form as the header's New Video dialog). Resuming belongs to the Continue card, so the two buttons never do the same thing. |
+| D10 | Hero button | *(Renamed "Start a new video" in D13.)* **"Start today's practice" starts a new video**: it opens a link box inside the hero (the same form as the header's New Video dialog). Resuming belongs to the Continue card, so the two buttons never do the same thing. |
 | D11 | UI additions | Streak status line, first-run dashboard, fill-in-the-blank cards + keyboard shortcuts, weekly-track day details, resume point on the Continue card, celebrations. Details in §4.5. |
 | D12 | Follow-up (2026-11-26) | **Goal ring** replaces the ember as today's marker; **motion only on change** (no endless loops); **even desktop rows**. Details in §4.5.8. |
+| D13 | One home per task (2026-11-26) | **Next up removed**: it always repeated another card. Its sentences move into the **Continue card**, the **League card** takes its place beside Continue, and the hero gets a **Today list** (what's left today, each row jumping to its card, then "All done for today ✓"). The hero button is renamed **"Start a new video"**. The end-of-round "Library" button now opens My Learning. Details in §4.5.9. |
 
 Defaults chosen in this plan (not asked; change them before implementation if you disagree):
 
@@ -55,7 +56,7 @@ Legend: ✅ data exists today · 🔨 built by this plan · ❌ dropped
 | Hero: amber "Claim Daily Streak (+25 XP)" | — | 🔨 (D10) | Same amber button, labelled **"Start today's practice"**. It opens a link box inside the hero (§4.5.1). There is no claim action: XP is calculated, and the active-day bonus (+10 XP, §3.3) is automatic. |
 | **Continue card** ("Pick up where you left off") | `ContinueLearningCard.tsx` | ✅ | Larger 5/12 thumbnail with play overlay, clickable title, CTA. Meta line = mode · Round N · last practiced (speaker/source/category ❌, not stored). Thumbnail badges: Round N + mode (duration ❌: `videos.duration_sec` exists but nothing writes it; CEFR ❌). Adds the **resume point** "Resume at sentence 13 of 58" (§4.5.6). |
 | Continue: Round N progress, 3 bars | Single coverage bar | ✅ | **All three are real:** Dictation `round.progress.coveredSentences.dictation / requiredSentenceCount`, Shadowing `…shadowing / requiredSentenceCount`, Listening `listening.coverageRatio` / "Listened through". Rows hide when their data is null. |
-| **Weekly Quests** (4 col) | `FocusCard` ("Next up") | ✅ | Next up takes this slot. Restyle only; `selectFocus` logic untouched. Not shown on the first-run dashboard (§4.5.3), which covers its "Add a video" case. |
+| **Weekly Quests** (4 col) | `FocusCard` ("Next up") | ✅ → removed (D13) | *Removed 2026-11-26: the League card takes this slot; the Today list (§4.5.9) says what's left.* Next up takes this slot. Restyle only; `selectFocus` logic untouched. Not shown on the first-run dashboard (§4.5.3), which covers its "Add a video" case. |
 | **Spaced Repetition Deck** (8 col) | `VocabularyCard.tsx` (count + chips) | ✅ | Inline flip card (D8) with two modes, **Fill the gap** and **Meaning** (§4.5.4). Meaning front = `canonical_form ?? term`, `phonetic`, pronounce button. Back (navy) = word, `part_of_speech`, `definition ?? translation`, example = `sentence_context` (the real sentence from the video), pronounce button. Grades Again/Hard/Good/Easy with the interval preview from `computeNextReview` (e.g. "Good · 3d"), plus **keyboard shortcuts**. Due-word chips select a card. "Start full review" → `/vocabulary/review`. **Mastery % ❌** (removed by the earlier vocabulary-stats plan); the existing New/Learning/Due status badge replaces it. |
 | **Diamond League** (4 col) | — | 🔨 (D2, D5–D7) | `LeagueCard`: tier header, "Resets Mon 07:00", This week / All time tabs, top rows + your row with **weekly XP**, streak sub-line, kudos heart, promotion-zone footer. |
 | **Learning Performance** (3 cards) | `ProgressSummary.tsx` | ✅ | Same three canonical numbers, each its own card. Active practice + video-count line (the reference copied this line from the current app) + **7-day minute bars** 🔨. Accuracy `correct/practiced` + bar. Pronunciation `/100` + scored sentences + bar. Tags "Top 15% consistency", "Flawless streak", "Native cadence" ❌ (no basis; the current "descriptive only" rule stands). XP never appears in this section. |
@@ -77,16 +78,17 @@ AppHeader (sticky, every page)
 (Mondays only) Last week: 1,240 XP · 96 min · 41 words reviewed · finished #2 → promoted to Gold   [×]
 
 Hero — navy gradient, full width
-┌ Welcome back, Tri ─────────────────────────────┬ TODAY'S TARGET        11 / 15 min ┐
-│ Your 12-day streak ends at midnight. One       │ ███████████░░░░                   │
-│ sentence or one word review keeps it going.    │ ● Level 14     4,850 / 5,000 XP   │
-│ WEEKLY CONSISTENCY TRACK · 5/7 active          │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔    │
-│ Mon  Tue  Wed  Thu  Fri  Sat  Sun              │ [ Start today's practice ]        │
-│  ✓────✓────✓────·────✓────✓────◉              │   ↓ (opens in place)              │
-│ +85  +90  +110  —   +95  +140 +40              │ [ Paste a YouTube link…] [Start →]│
+┌ Welcome back, Tri ─────────────────────────────┬ TODAY                           ⚙ ┐
+│ Your 12-day streak ends at midnight. One       │ Practice time         11 / 15 min │
+│ sentence or one word review keeps it going.    │ ███████████░░░░                   │
+│ WEEKLY CONSISTENCY TRACK · 5/7 active          │ ○ 3 sentences need another look ↓ │
+│ Mon  Tue  Wed  Thu  Fri  Sat  Sun              │ ○ 2 words are due               ↓ │
+│  ✓────✓────✓────·────✓────✓────◔              │ ● Level 14     4,850 / 5,000 XP   │
+│ +85  +90  +110  —   +95  +140 +40              │ [ + Start a new video ]           │
 └────────────────────────────────────────────────┴───────────────────────────────────┘
-Row 8/4:  Continue learning (thumbnail + 3 bars + "Resume at sentence 13 of 58")  |  Next up
-Row 8/4:  Spaced repetition deck (Fill the gap / Meaning, grades, chips)          |  League card (weekly XP)
+Row 8/4:  Continue learning (thumbnail + bars + resume point;      |  League card (weekly XP)
+          its sentences to look at again + "Review sentences")     |
+Full:     Spaced repetition deck (Fill the gap / Meaning, grades, chips, "Start review")
 Full:     Learning performance — Active practice | Sentence accuracy | Pronunciation
 Row 8/4:  Needs attention · error diagnostics                                     |  Achievements
 AppFooter
@@ -102,7 +104,7 @@ First-run learner (§4.5.3):
 (no other cards until the learner has data)
 ```
 
-The existing rule stays: if Continue or Next up is absent, the other takes the row alone (`page.tsx:204-216`).
+This is the layout since D13 (§4.5.9). Before it, the first row was Continue | Next up and the deck shared its row with the League card. If the League card is unavailable, Continue takes the row alone. With no Continue card (nothing unfinished, or it failed), the League card sits beside the deck instead, never alone.
 
 ## 3. Backend
 
@@ -256,10 +258,10 @@ Full group list (≤ 30) with weekly XP, tier ladder, promotion/demotion zones, 
 
 #### 4.5.1 Hero button: start a new video (D10) — Phase 2
 
-- "Start today's practice" (amber, under the level bar) expands an inline link box **inside the hero panel**: `AddVideoForm` in its dark variant, autofocused. The button becomes the form's toggle (`aria-expanded`, `aria-controls`); Esc or a close button collapses it and returns focus to the button. Typed text survives collapsing, as the current disclosure does.
+- "Start today's practice" (renamed **"Start a new video"** in D13: next to the Today list, the old name sounded like it started those tasks) (amber, under the level bar) expands an inline link box **inside the hero panel**: `AddVideoForm` in its dark variant, autofocused. The button becomes the form's toggle (`aria-expanded`, `aria-controls`); Esc or a close button collapses it and returns focus to the button. Typed text survives collapsing, as the current disclosure does.
 - Submitting resolves the video and opens it, exactly like the header dialog. Errors show inline under the field.
 - The button is always available, also after the goal is met. "Goal met today ✓" is a label next to the target, not a button state.
-- Division of work: hero button = **start something new**, Continue card = **resume**, Next up = **review**.
+- Division of work: hero button = **start something new**, Continue card = **resume** (and its sentences to look at again), review deck = **words**. Since D13 there is no Next up (§4.5.9).
 
 #### 4.5.2 Streak status line — Phase 2
 
@@ -280,7 +282,7 @@ It updates when the summary refetches (after practice or review); no timer is ne
 - Shown when the learner has **nothing yet**: `libraryVideos === 0 && activeTime.sessionCount === 0 && vocabularyCount === 0`. A learner who removed all their videos but has history still gets the normal dashboard.
 - `FirstRunHero`: heading, `AddVideoForm` (dark variant), and three steps: ① Listen → ② Type what you hear → ③ Repeat aloud. The field is **not** autofocused: on page load that would skip the heading for screen-reader users and pop the keyboard on phones.
 - While the summary loads, the hero is a placeholder, so a brand-new learner never sees a premature "Welcome back".
-- All other cards (Continue, Next up, deck, league, performance, diagnostics, achievements) are hidden until there's data. The header stays the same.
+- All other cards (Continue, deck, league, performance, diagnostics, achievements) are hidden until there's data. The header stays the same.
 - This also satisfies the `.github/instructions/frontend-ui.instructions.md` rule about a prominent link input, at the moment it matters most.
 
 #### 4.5.4 Fill the gap mode and keyboard shortcuts — Phase 3
@@ -315,8 +317,27 @@ Chosen from four options on a comparison page (the goal ring, a today column, a 
 
 - **Goal ring** (`GoalRing.tsx`, replaces `ActiveEmber`): today's active minutes toward the daily goal as an amber arc, with an amber dot until the goal is met. Once met, the ring closes in teal around a check, like a practiced day. The check pops only when the goal is met while the page is open, not on every visit. Today's accessible label adds "goal N min" or "goal met". The track drops its 512px cap (now `max-w-3xl`), and its markers are 28px from `lg`.
 - **Motion** (rules in the design skill §6): the ember's five loops and the header flame's endless flicker are gone. Progress bars fill when they appear and slide on change (`animate-progress-fill`, plus `animate-bar-grow` for the 7-day chart). XP counts up on change (`useCountUp`) in the level bar and the header pill. The level bar floats "+N XP" once. The header flame flickers once when it shows a longer streak than it last showed in this browser (`dictalearn:streak-seen:<user>`). A flashcard flip turns the new face in; a new card just appears. Giving kudos pops the heart. One-shot effects use `playOnce` (`src/lib/motion.ts`, Web Animations API); none of it runs under reduced motion.
-- **Even rows:** the cards in each paired row fill the row's height. Next up's button sits at the bottom, level with Continue's. The deck's flashcard grows into a taller row. The Dashboard's League card shows the **top 3** plus your row on both tabs; `/leaderboard` keeps the full group and the top 5.
-- **Next up names the sentences:** up to 3 by text, the rest counted ("+2 more"), from the round report's `needs_review` sentences. That is the same cache entry the "Review sentences" link opens. The Focus *decision* still never waits for the report (D-2, Option B). The list is a read afterwards, shown only when the report's count matches the headline, and left out while loading, on error or on a mismatch. With a sentence candidate, the cold Dashboard load makes 11 GETs instead of 10.
+- **Even rows:** the cards in each paired row fill the row's height. Next up's button sits at the bottom, level with Continue's (until D13 removed Next up). The deck's flashcard grows into a taller row. The Dashboard's League card shows the **top 3** plus your row on both tabs; `/leaderboard` keeps the full group and the top 5.
+- **Next up names the sentences** *(moved into the Continue card by D13, same rules)*: up to 3 by text, the rest counted ("+2 more"), from the round report's `needs_review` sentences. That is the same cache entry the "Review sentences" link opens. The Focus *decision* still never waits for the report (D-2, Option B). The list is a read afterwards, shown only when the report's count matches the headline, and left out while loading, on error or on a mismatch. With a sentence candidate, the cold Dashboard load makes 11 GETs instead of 10.
+
+#### 4.5.9 One home per task: the Today list (D13) — done 2026-11-26
+
+Next up always repeated something already on the page: "N words are due" was the review deck, "Add a video" was the hero button, and "N sentences need another look" was about the Continue card's own round. It is gone (`FocusCard`, `selectFocus`, `useDashboardFocus` deleted). What it did well, saying what to do first, moved into the hero.
+
+- **Each task has one home:**
+  - **Continue card:** resume, plus the round's sentences to look at again (`#continue-sentences`). This holds the count, the list (same rules as §4.5.8) and the only "Review sentences" link.
+  - **Review deck:** words (`#review-deck`), with the only "Start review" link.
+  - **Hero button:** start a new video. It is renamed **"Start a new video"** (plus icon, like the header's).
+- **Today list** (`TodayPlan.tsx`, rules in `src/lib/dashboard/today.ts`). It replaces the hero's Today's target heading:
+  - "Practice time 12 / 20 min" + bar (the old target; change-goal button in the heading).
+  - Then what's left today, in Next up's old order: the sentences of the current round, then words (due, else new).
+  - Each row is a link that scrolls to the owning card and focuses it, so the deck's Space / 1–4 keys work at once. It never repeats the action.
+  - A words row turns into "✓ N words reviewed today" when today's reviews (`fn_my_xp` day activity) cleared them.
+  - **"All done for today ✓"** replaces "Goal met today ✓" only when the goal is met and every source answered with nothing left. A pending or failed source never reads as "nothing left".
+  - No new requests: it reuses the week, XP, vocabulary stats and Continue queries.
+- **Layout:** Continue | League (8/4), then the deck full width. With no Continue card, the League card sits beside the deck, never alone. If the League card is unavailable, Continue keeps its readable single width.
+- **Sentence count:** the rule (`sentencesToReview`, formerly `focusCandidate`) is unchanged, so the D-2 parity test still covers it.
+- **Also fixed:** the end-of-round "Library" button on the practice page linked to `/dashboard` (left over from before the Dashboard / My Learning split). It is now "My Learning" → `/library`.
 
 ## 5. Phases
 

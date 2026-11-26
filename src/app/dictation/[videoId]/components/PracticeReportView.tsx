@@ -136,8 +136,10 @@ export function PracticeReportView({
               <Link href={`/results/${report.round.roundId}`} className={buttonClass}>
                 <FileText size={14} /> Full report
               </Link>
-              <Link href="/dashboard" className={buttonClass}>
-                <Library size={14} /> Library
+              {/* My Learning (/library): the saved videos. It pointed at /dashboard
+                  from before the Dashboard and My Learning were split. */}
+              <Link href="/library" className={buttonClass}>
+                <Library size={14} /> My Learning
               </Link>
               {restartError && (
                 <p className="w-full text-xs text-[var(--red)]" role="alert">

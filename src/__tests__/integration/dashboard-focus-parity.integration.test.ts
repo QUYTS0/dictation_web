@@ -1,8 +1,10 @@
 /**
- * Dashboard Focus parity gate (plan D-2), on real PostgreSQL.
+ * Dashboard sentence-count parity gate (plan D-2), on real PostgreSQL.
  *
- * Focus takes its "sentences need another look" count from the Continue
- * Learning card it already has — `round.progress.sentenceAccuracy`, i.e.
+ * The Dashboard takes its "sentences need another look" count (Continue card
+ * and Today list: `sentencesToReview` in src/lib/dashboard/today.ts; it was
+ * Next up's "Focus" before plan D13) from the Continue Learning item it
+ * already has — `round.progress.sentenceAccuracy`, i.e.
  * fn_round_progress via fn_video_library — instead of fetching the round
  * report. That is only allowed if, for every round,
  *

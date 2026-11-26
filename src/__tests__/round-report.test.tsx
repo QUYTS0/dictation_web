@@ -354,7 +354,7 @@ describe("PracticeReportView (practice page results)", () => {
     fireEvent.click(screen.getByText("Open script"));
     expect(props.onOpenScript).toHaveBeenCalled();
     expect(screen.getByText("Full report").closest("a")).toHaveAttribute("href", "/results/round-1");
-    expect(screen.getByText("Library").closest("a")).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByText("My Learning").closest("a")).toHaveAttribute("href", "/library");
   });
 
   it("a guest (no round) sees the local fallback — never a fabricated server report", () => {

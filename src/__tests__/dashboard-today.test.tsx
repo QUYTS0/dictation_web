@@ -1,11 +1,12 @@
 /**
- * Dashboard V1 (component tests, fetch mocked — not a real browser):
- *   - wide shared shell; one Continue item paired with Focus; metrics and
- *     the Recent Vocabulary + Mistakes row; no Library, no rail;
- *   - Focus V1: progressive gating with independently delayed sources,
- *     sentence count from the Continue card (Option B — no report request),
- *     vocabulary copy, add-video scroll/focus, error ≠ empty;
- *   - duplicate-CTA suppression (Continue report link, vocabulary nudge);
+ * The Dashboard (component tests, fetch mocked — not a real browser):
+ *   - wide shared shell; the resume card beside the league, the review deck
+ *     full width (the league joins it when there is no resume card);
+ *   - each task has ONE home (plan §4.5.9): the sentences to look at again
+ *     in the Continue card, the words in the review deck; the hero's Today
+ *     list only says what's left and jumps there — no Next up card;
+ *   - unknown data is never "nothing left"; "All done for today" only when
+ *     every source answered;
  *   - exact cold-load request counts, no writes, no AI/provider calls;
  *   - cached data during background refetch; invalidation; account isolation.
  */
@@ -13,8 +14,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
-import type { DashboardSummary, LibraryItem, LibraryPage } from "@/lib/types/learning";
+import type { DashboardSummary, DashboardWeek, LibraryItem, LibraryPage } from "@/lib/types/learning";
 import type { VocabularyStatsResponse } from "@/lib/types";
+import type { LeagueWeekBoard } from "@/lib/types/leaderboard";
+import type { XpSummary } from "@/lib/types/xp";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
 import { invalidateLearningViews } from "@/lib/queries/learningInvalidation";
 import { invalidateVocabularyQueries } from "@/lib/queries/vocabulary";
@@ -58,7 +61,6 @@ function item(videoId: string, acc: { correct: number; practiced: number } | nul
     state: acc ? "in_progress" : "not_started",
     hasCompletedRound: false,
     hasLegacyCompletion: false,
-    // An earlier completed round: the card would normally offer "Review report" for its round.
     completedRoundCount: 1,
     round: acc
       ? {
@@ -111,10 +113,41 @@ const summaryOf = (over: Partial<DashboardSummary> = {}): DashboardSummary => ({
 });
 const statsOf = (over: Partial<VocabularyStatsResponse> = {}): VocabularyStatsResponse => ({ total: 12, new: 0, learning: 12, due: 0, reviewable: 0, ...over });
 
-// A learner who removed every video but has practiced before: an empty
-// Library on the NORMAL Dashboard. (No videos, no sessions and no words at
-// all is the first-run Dashboard instead — see dashboard-hero.test.tsx.)
-const HISTORY_ONLY: DashboardSummary["activeTime"] = { activeSec: 600, trackedSince: "2026-09-01T00:00:00Z", sessionCount: 2 };
+const TODAY = "2026-11-25";
+const weekOf = (todaySec: number, goalMinutes = 15): DashboardWeek => ({
+  timeZone: "UTC",
+  today: TODAY,
+  weekStart: "2026-11-23",
+  goalMinutes,
+  goalIsDefault: false,
+  days: [{ date: TODAY, practiced: todaySec > 0, activeSec: todaySec }],
+});
+const xpOf = (wordsReviewed: number): XpSummary => ({
+  rulesVersion: 1,
+  timeZone: "UTC",
+  xpTimeZone: "UTC",
+  today: TODAY,
+  totalXp: 120,
+  todayXp: 20,
+  level: 2,
+  levelStartXp: 100,
+  nextLevelXp: 300,
+  leagueWeekStart: "2026-11-23T00:00:00Z",
+  leagueWeekXp: 20,
+  lastLeagueWeek: { weekStart: "2026-11-16", xp: 0, activeSec: 0, wordsReviewed: 0 },
+  days: [{ date: TODAY, xp: 20, activity: { dictationSentences: 0, shadowingSentences: 0, wordsReviewed, listeningMin: 0 } }],
+});
+const LEAGUE: LeagueWeekBoard = {
+  scope: "week",
+  status: "member",
+  tier: 1,
+  weekStart: "2026-11-23",
+  weekEndsAt: "2026-11-30T00:00:00Z",
+  displayName: "Learner 1",
+  lastWeek: null,
+  rows: [{ rank: 1, memberKey: "m1", name: "Learner 1", initials: "L1", weekXp: 50, streakDays: 1, kudos: 0, youGaveKudos: false, isYou: true, zone: "safe" }],
+  you: { rank: 1, weekXp: 50, zone: "safe", gapToPromotionXp: null },
+};
 
 const NEEDS = item("vNeeds", { correct: 5, practiced: 8 }); // 3 sentences need another look
 const CLEAN = item("vClean", { correct: 8, practiced: 8 });
@@ -124,6 +157,8 @@ const CLEAN = item("vClean", { correct: 8, practiced: 8 });
 type Source = "summary" | "continue" | "library" | "errors" | "vocab";
 const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as unknown as Response;
 let responses: { summary: DashboardSummary; continue: LibraryPage; library: LibraryPage; vocab: VocabularyStatsResponse };
+/** Optional parts: unanswered (404) unless set, so the hero and rows leave them out. */
+let extras: { week?: DashboardWeek; xp?: XpSummary; league?: LeagueWeekBoard };
 let failing: Set<Source>;
 let gates: Partial<Record<Source, Promise<void>>>;
 let errorPatterns: { total: number; patterns: Array<{ errorType: string; count: number; percentage: number }> };
@@ -142,10 +177,12 @@ beforeEach(() => {
   calls.length = 0;
   authUser = { id: "user-1", email: "learner@example.test" } as User;
   responses = { summary: summaryOf(), continue: page([NEEDS], "continue"), library: page([NEEDS, CLEAN]), vocab: statsOf() };
+  extras = {};
   failing = new Set();
   gates = {};
   errorPatterns = { total: 0, patterns: [] };
   window.sessionStorage.clear();
+  window.localStorage.clear();
   Element.prototype.scrollIntoView = jest.fn();
   window.matchMedia = jest.fn().mockReturnValue({ matches: false }) as unknown as typeof window.matchMedia;
   global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -162,10 +199,12 @@ beforeEach(() => {
               ? "continue"
               : "library"
             : null;
-    // The review deck's batch and the diagnostics example (Phase 3) — not
-    // part of Focus; plain answers here.
+    // The review deck's batch and the diagnostics example (Phase 3); plain answers here.
     if (url.startsWith("/api/vocabulary/review")) return json({ items: [] });
     if (url.startsWith("/api/dashboard/mistake-example")) return json({ example: null });
+    if (url.startsWith("/api/dashboard/week")) return extras.week ? json(extras.week) : json({}, 404);
+    if (url.startsWith("/api/xp")) return extras.xp ? json(extras.xp) : json({}, 404);
+    if (url.startsWith("/api/leaderboard")) return extras.league ? json(extras.league) : json({}, 404);
     if (!source) return json({}, 404);
     const g = gates[source];
     if (g) await g;
@@ -179,7 +218,8 @@ const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: fa
 function renderDashboard(client = newClient()) {
   return { client, ...render(<QueryClientProvider client={client}><DashboardPage /></QueryClientProvider>) };
 }
-const focusCard = () => screen.queryByTestId("dashboard-focus");
+const hero = () => screen.getByTestId("dashboard-welcome");
+const todayRow = (kind: "sentences" | "words") => screen.queryByTestId(`today-row-${kind}`);
 const settle = () => waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(4));
 
 // ---------------------------------------------------------------- layout
@@ -193,55 +233,53 @@ describe("wide shell and layout", () => {
     await settle();
   });
 
-  it("hero row: 'Pick up where you left off' (8/12) + 'Next up' (4/12); the displayed Continue item IS the Focus candidate", async () => {
+  it("first row: 'Pick up where you left off' (8/12) beside this week's league (4/12); the deck below takes the full width", async () => {
+    extras.league = LEAGUE;
     responses.continue = page([NEEDS, CLEAN], "continue");
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
+    const league = await screen.findByTestId("league-card");
     const row = screen.getByTestId("dashboard-actions");
     expect(row).toHaveClass("grid", "lg:grid-cols-12");
-    expect(row).not.toHaveClass("max-w-3xl");
     const cont = within(row).getByTestId("continue-learning");
     expect(cont.parentElement).toHaveClass("lg:col-span-8");
-    expect(focus.parentElement).toHaveClass("lg:col-span-4");
-    expect(within(cont).getByRole("heading", { name: "Pick up where you left off" })).toBeInTheDocument();
-    expect(within(focus).getByText("Next up")).toBeInTheDocument();
+    expect(league.parentElement).toHaveClass("lg:col-span-4");
+    expect(row).toContainElement(league);
     expect(within(cont).getByTestId("continue-card-vNeeds")).toBeInTheDocument();
     expect(screen.queryByTestId("continue-card-vClean")).toBeNull(); // only the first item
-    expect(within(focus).getByRole("link", { name: "Review sentences" })).toHaveAttribute("href", "/results/round-vNeeds");
+    expect(screen.getByTestId("dashboard-deck-row")).not.toHaveClass("lg:grid-cols-12");
+    expect(screen.getByTestId("dashboard-deck-row")).not.toContainElement(league);
+    expect(screen.queryByTestId("dashboard-focus")).toBeNull(); // no Next up card any more
   });
 
-  it("only one side present → a single readable card width, not a full-width banner", async () => {
-    responses.continue = page([CLEAN], "continue"); // Continue shown, Focus hidden
-    const first = renderDashboard();
+  it("no league → the resume card alone at a readable width, not a full-width banner", async () => {
+    responses.continue = page([CLEAN], "continue");
+    renderDashboard();
     await screen.findByTestId("continue-learning");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
     expect(screen.getByTestId("dashboard-actions")).toHaveClass("max-w-3xl");
     expect(screen.getByTestId("dashboard-actions")).not.toHaveClass("lg:grid-cols-12");
-    first.unmount();
-    responses.continue = page([], "continue"); // Focus shown, no Continue, empty library
-    responses.summary = summaryOf({ libraryVideos: 0 });
-    responses.vocab = statsOf({ due: 3, reviewable: 3 });
-    renderDashboard();
-    await screen.findByTestId("dashboard-focus");
-    expect(screen.getByTestId("dashboard-actions")).toHaveClass("max-w-3xl");
-    expect(screen.queryByTestId("continue-learning")).toBeNull();
   });
 
-  it("saved videos but nothing unfinished → a small 'Browse My Learning' pointer instead of a resume card", async () => {
+  it("nothing unfinished → the league moves beside the deck (never alone), and a small 'Browse My Learning' pointer replaces the resume card", async () => {
+    extras.league = LEAGUE;
     responses.continue = page([], "continue");
     renderDashboard();
     const empty = await screen.findByTestId("continue-empty");
     expect(empty).toHaveTextContent("Nothing unfinished right now.");
     expect(within(empty).getByRole("link", { name: "Browse My Learning" })).toHaveAttribute("href", "/library");
+    const league = await screen.findByTestId("league-card");
+    const deckRow = screen.getByTestId("dashboard-deck-row");
+    expect(deckRow).toHaveClass("lg:grid-cols-12");
+    expect(deckRow).toContainElement(league);
+    expect(screen.getByTestId("dashboard-actions")).not.toContainElement(league);
   });
 
-  it("nothing to resume, empty library and Focus hidden → no action row at all", async () => {
+  it("nothing to resume and an empty library → no resume row at all", async () => {
     responses.continue = page([], "continue");
     responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 3 });
-    failing.add("vocab"); // vocabulary unknown + saved words → Focus unavailable (never add-video)
     renderDashboard();
     await screen.findByTestId("your-progress");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Loading continue learning")).toBeNull());
     expect(screen.queryByTestId("dashboard-actions")).toBeNull();
   });
 
@@ -250,7 +288,6 @@ describe("wide shell and layout", () => {
     await screen.findByTestId("your-progress");
     expect(screen.queryByRole("region", { name: "Progress summary" })).toBeNull();
     const main = screen.getByRole("main");
-    // The deck shares a row with the league card (Phase 7); unavailable here, so the row is one column.
     const deckRow = screen.getByTestId("dashboard-deck-row");
     expect(deckRow.parentElement).toBe(main);
     expect(deckRow).not.toHaveClass("lg:grid-cols-12");
@@ -263,22 +300,16 @@ describe("wide shell and layout", () => {
     expect(screen.getByTestId("vocabulary-card")).toHaveClass("@container");
     expect(screen.getByTestId("needs-attention")).toHaveClass("@container");
     expect(document.querySelector('[class*="sticky"]')).toBeNull();
-    for (const gone of ["dashboard-rail", "library-rail-grid", "library-grid", "dashboard-insights"]) expect(screen.queryByTestId(gone)).toBeNull();
+    for (const gone of ["dashboard-rail", "library-rail-grid", "library-grid", "dashboard-insights", "dashboard-focus"]) expect(screen.queryByTestId(gone)).toBeNull();
   });
 
-  it("DOM order: hero (with 'Start today's practice') → Continue → Next up → review deck → Learning performance → Needs attention", async () => {
+  it("DOM order: hero (Today list, 'Start a new video') → Continue → review deck → Learning performance → Needs attention", async () => {
+    extras.week = weekOf(300);
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    const hero = await screen.findByTestId("dashboard-welcome");
-    expect(within(hero).getByRole("button", { name: "Start today's practice" })).toBeInTheDocument();
-    const order = [
-      hero,
-      screen.getByTestId("continue-learning"),
-      focus,
-      screen.getByTestId("vocabulary-card"),
-      screen.getByTestId("your-progress"),
-      screen.getByTestId("needs-attention"),
-    ];
+    const welcome = await screen.findByTestId("dashboard-welcome");
+    expect(within(welcome).getByRole("button", { name: "Start a new video" })).toBeInTheDocument();
+    expect(await within(welcome).findByTestId("today-plan")).toBeInTheDocument();
+    const order = [welcome, screen.getByTestId("continue-learning"), screen.getByTestId("vocabulary-card"), screen.getByTestId("your-progress"), screen.getByTestId("needs-attention")];
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
@@ -369,7 +400,7 @@ describe("Needs attention (existing error-pattern data, descriptive only)", () =
 
 // ---------------------------------------------------------------- requests
 
-describe("request contract (Option B)", () => {
+describe("request contract", () => {
   const expected = [
     "GET /api/dashboard/summary",
     "GET /api/videos/library?filter=continue&offset=0&limit=1",
@@ -378,32 +409,32 @@ describe("request contract (Option B)", () => {
     // The review deck's current batch (Phase 3). No mistake example here:
     // with no recorded mistakes there is no type to show one for.
     "GET /api/vocabulary/review",
-    // The hero's weekly track and Today's target (Phase 4; unanswered here,
+    // The hero's weekly track and Today list (Phase 4; unanswered here,
     // so the hero leaves them out).
     "GET /api/dashboard/week",
     // XP and level (Phase 5; unanswered here, so the hero leaves them out).
     "GET /api/xp",
     // Achievements (Phase 6; unanswered here, so diagnostics take the row alone).
     "GET /api/achievements",
-    // This week's league (Phase 7; unanswered here, so the deck takes the row alone)
-    // and the profile (the welcome uses a public name when one is set).
+    // This week's league (Phase 7; unanswered here) and the profile (the
+    // welcome uses a public name when one is set).
     "GET /api/leaderboard?scope=week",
     "GET /api/profile",
   ];
   const normalize = (c: string) => c.replace(/[?&]tz=.*$/, "");
 
-  // The Focus DECISION never waits for the round report (its count comes from
-  // the Continue item). With a sentence candidate, Next up then reads that one
-  // round's report to name the sentences: one extra, read-only GET.
+  // The sentence COUNT never waits for the round report (it comes from the
+  // Continue item, plan D-2 Option B). With sentences to look at again, the
+  // Continue card then reads that one round's report to name them.
   const report = `GET /api/session/${NEEDS.round!.roundId}/report`;
   it.each([
-    ["with a sentence candidate: 11 GETs, the 11th being that round's report", [NEEDS], [report]],
-    ["without a candidate: exactly 10 GETs, no round report", [] as LibraryItem[], [] as string[]],
+    ["with sentences to look at again: 11 GETs, the 11th being that round's report", [NEEDS], [report]],
+    ["without: exactly 10 GETs, no round report", [CLEAN], [] as string[]],
   ])("cold load %s — no all-library request, no writes, no AI/provider calls", async (_label, items, extra) => {
     responses.continue = page(items, "continue");
     renderDashboard();
     await screen.findByTestId("your-progress");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
+    await screen.findByTestId("continue-learning");
     await act(async () => {});
     expect(calls.map(normalize).sort()).toEqual([...expected, ...extra].sort());
     expect(calls.some((c) => c.includes("filter=all"))).toBe(false);
@@ -412,70 +443,67 @@ describe("request contract (Option B)", () => {
   });
 });
 
-// ---------------------------------------------------------------- Focus behavior
+// ---------------------------------------------------------------- one home per task
 
-describe("Focus actions", () => {
-  it("sentences: count from the Continue card, task-specific CTA to the round report; the Continue card carries no second report link", async () => {
+describe("each task has one home; the Today list jumps to it", () => {
+  it("sentences: counted in the Continue card with the ONE 'Review sentences' link; the Today row jumps there and focuses it", async () => {
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    expect(focus).toHaveTextContent("3 sentences need another look");
-    expect(focus).toHaveTextContent("Review the ones that tripped you up.");
-    expect(within(focus).getByRole("link", { name: "Review sentences" })).toHaveAttribute("href", "/results/round-vNeeds");
-    const cont = screen.getByTestId("continue-learning");
-    expect(within(cont).queryByRole("link", { name: /report/i })).toBeNull();
-    expect(within(cont).getByRole("link", { name: "Continue learning" })).toHaveAttribute("href", "/dictation/vNeeds");
+    const section = await screen.findByTestId("continue-sentences");
+    expect(within(screen.getByTestId("continue-learning")).getByTestId("continue-sentences")).toBe(section);
+    expect(section).toHaveTextContent("3 sentences need another look");
+    expect(within(section).getByRole("link", { name: /Review sentences/ })).toHaveAttribute("href", "/results/round-vNeeds");
     expect(document.querySelectorAll('a[href="/results/round-vNeeds"]')).toHaveLength(1);
+    expect(within(screen.getByTestId("continue-learning")).getByRole("link", { name: "Continue learning" })).toHaveAttribute("href", "/dictation/vNeeds");
+
+    const row = await within(hero()).findByTestId("today-row-sentences");
+    expect(row).toHaveAccessibleName("3 sentences need another look, go to the sentences");
+    expect(row).toHaveAttribute("href", "#continue-sentences");
+    fireEvent.click(row);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(document.activeElement).toBe(section);
+  });
+
+  it("reduced motion → the jump doesn't animate", async () => {
+    window.matchMedia = jest.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia;
+    renderDashboard();
+    fireEvent.click(await screen.findByTestId("today-row-sentences"));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
   });
 
   it("a null title never renders 'null' or 'Untitled'; one sentence is singular", async () => {
     responses.continue = page([item("vX", { correct: 3, practiced: 4 }, { title: null })], "continue");
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    expect(focus).toHaveTextContent("1 sentence needs another look");
+    expect(await screen.findByTestId("continue-sentences")).toHaveTextContent("1 sentence needs another look");
+    expect(await screen.findByTestId("today-row-sentences")).toHaveTextContent("1 sentence needs another look");
     expect(document.body.textContent).not.toMatch(/\bnull\b|Untitled/);
     expect(screen.getByTestId("continue-card-vX")).toHaveTextContent("Video vX"); // the card's own existing fallback
   });
 
-  it("vocabulary due: factual copy, 'Start review'; the nudge shows context but no second button", async () => {
+  it("words due: the Today row jumps to the deck and focuses it (its keys work at once); the deck has the ONE 'Start review'", async () => {
     responses.continue = page([CLEAN], "continue");
     responses.vocab = statsOf({ due: 22, new: 233, reviewable: 255 });
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    expect(focus).toHaveTextContent("22 words are due");
-    expect(focus).toHaveTextContent("Keep them fresh.");
-    expect(within(focus).getByRole("link", { name: "Start review" })).toHaveAttribute("href", "/vocabulary/review");
-    const vocabCard = screen.getByTestId("vocabulary-card");
-    expect(within(vocabCard).getByTestId("vocab-nudge")).toHaveTextContent("22 words are due");
-    expect(within(vocabCard).queryByRole("link", { name: "Start review" })).toBeNull(); // Next Up owns it
-    expect(within(vocabCard).getByRole("link", { name: "View vocabulary" })).toHaveAttribute("href", "/vocabulary");
+    const row = await screen.findByTestId("today-row-words");
+    expect(hero()).toContainElement(row);
+    expect(row).toHaveAccessibleName("22 words are due, go to the review deck");
+    const deck = screen.getByTestId("vocabulary-card");
+    expect(within(deck).getByTestId("vocab-nudge")).toHaveTextContent("22 words are due");
+    expect(within(deck).getByRole("link", { name: "Start review" })).toHaveAttribute("href", "/vocabulary/review");
     expect(screen.getAllByRole("link", { name: "Start review" })).toHaveLength(1);
-    // Every vocabulary CTA is exactly "Start review"; no line claims an order or a batch size.
-    for (const link of within(focus).getAllByRole("link")) expect(link).toHaveTextContent(/^Start review$/);
-    const lines = [focus, vocabCard].flatMap((el) => Array.from(el.querySelectorAll("p, h2, a")).map((n) => n.textContent ?? ""));
+    fireEvent.click(row);
+    expect(document.activeElement).toBe(deck);
+    // No line claims an order or a batch size.
+    const lines = [hero(), deck].flatMap((el) => Array.from(el.querySelectorAll("p, h2, a, li")).map((n) => n.textContent ?? ""));
     for (const line of lines) {
-      for (const forbidden of [/Review due/i, /Review \d+/i, /Review all/i, /prioriti[sz]ed/i, /mixed in/i, /\b20\b/, /batch/i]) expect(line).not.toMatch(forbidden);
+      for (const forbidden of [/Review due/i, /Review \d+/i, /Review all/i, /prioriti[sz]ed/i, /mixed in/i, /batch/i]) expect(line).not.toMatch(forbidden);
     }
-    expect(document.body.textContent).not.toMatch(/Review due|Review all|prioriti[sz]ed|mixed in/i);
-    // Vocabulary Focus sits beside the (unchanged) Continue card.
-    expect(screen.getByTestId("dashboard-actions")).toContainElement(screen.getByTestId("continue-card-vClean"));
   });
 
-  it("vocabulary new-only copy", async () => {
-    responses.continue = page([], "continue");
+  it("new-only vocabulary has its own factual line", async () => {
+    responses.continue = page([CLEAN], "continue");
     responses.vocab = statsOf({ new: 7, reviewable: 7 });
     renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    expect(focus).toHaveTextContent("New vocabulary is ready to practice");
-    expect(focus).toHaveTextContent("7 words haven't been reviewed yet.");
-    expect(within(focus).getByRole("link", { name: "Start review" })).toBeInTheDocument();
-  });
-
-  it("sentence Focus + reviewable vocabulary: both actions shown (different destinations)", async () => {
-    responses.vocab = statsOf({ due: 2, reviewable: 2 });
-    renderDashboard();
-    await screen.findByTestId("dashboard-focus");
-    await screen.findByTestId("vocab-nudge");
-    expect(within(screen.getByTestId("vocabulary-card")).getByRole("link", { name: "Start review" })).toHaveAttribute("href", "/vocabulary/review");
+    expect(await screen.findByTestId("today-row-words")).toHaveTextContent("New vocabulary is ready to practice");
   });
 
   it("Vocabulary surface: saved total, review context, at most six recent terms as chips — never a sentence table", async () => {
@@ -492,67 +520,105 @@ describe("Focus actions", () => {
     expect(card.querySelector("table")).toBeNull();
     expect(card).not.toHaveTextContent("context sentence");
   });
+});
 
-  it("nothing actionable → no Focus card at all", async () => {
+// ---------------------------------------------------------------- the Today list
+
+describe("the Today list", () => {
+  it("practice time first, then sentences, then words", async () => {
+    extras.week = weekOf(300);
+    responses.vocab = statsOf({ due: 2, reviewable: 2 });
+    renderDashboard();
+    const plan = await screen.findByTestId("today-plan");
+    await within(plan).findByTestId("today-row-words");
+    expect(within(plan).getByTestId("today-target-value")).toHaveTextContent("5 of 15 minutes");
+    expect(within(plan).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "3 sentences need another look",
+      "2 words are due",
+    ]);
+  });
+
+  it("words reviewed today and none left → a ticked row, not a link", async () => {
+    extras.week = weekOf(300);
+    extras.xp = xpOf(5);
     responses.continue = page([CLEAN], "continue");
     renderDashboard();
-    await screen.findByTestId("your-progress");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
-    expect(focusCard()).toBeNull();
+    const row = await screen.findByTestId("today-row-words");
+    expect(row).toHaveAttribute("data-done", "true");
+    expect(row).toHaveTextContent("5 words reviewed today");
+    expect(row.tagName).toBe("LI");
+  });
+
+  it("goal met and nothing else left → 'All done for today ✓'", async () => {
+    extras.week = weekOf(20 * 60);
+    responses.continue = page([CLEAN], "continue");
+    renderDashboard();
+    expect(await screen.findByTestId("today-all-done")).toHaveTextContent("All done for today ✓");
+    expect(todayRow("sentences")).toBeNull();
+    expect(todayRow("words")).toBeNull();
+  });
+
+  it("goal met but sentences left → 'Goal met today ✓' only, never 'All done'", async () => {
+    extras.week = weekOf(20 * 60);
+    renderDashboard();
+    await screen.findByTestId("today-row-sentences");
+    expect(within(hero()).getByText("Goal met today ✓")).toBeInTheDocument();
+    expect(screen.queryByTestId("today-all-done")).toBeNull();
+  });
+
+  it("unknown is never 'nothing left': failed word stats → no words row and no 'All done'", async () => {
+    extras.week = weekOf(20 * 60);
+    responses.continue = page([CLEAN], "continue");
+    failing.add("vocab");
+    renderDashboard();
+    await screen.findByTestId("today-plan");
+    await waitFor(() => expect(calls.some((c) => c.includes("/api/vocabulary/stats"))).toBe(true));
+    await act(async () => {});
+    expect(todayRow("words")).toBeNull();
+    expect(screen.queryByTestId("today-all-done")).toBeNull();
+    expect(within(hero()).getByText("Goal met today ✓")).toBeInTheDocument();
+  });
+
+  it("Continue still loading → no sentences row and no 'All done' yet; they follow once it answers", async () => {
+    extras.week = weekOf(20 * 60);
+    const releaseContinue = gate("continue");
+    renderDashboard();
+    await screen.findByTestId("today-plan");
+    await act(async () => {});
+    expect(todayRow("sentences")).toBeNull();
+    expect(screen.queryByTestId("today-all-done")).toBeNull();
+    await act(async () => releaseContinue());
+    expect(await screen.findByTestId("today-row-sentences")).toBeInTheDocument();
+  });
+
+  it("Continue failed: no sentences row, words still listed; never 'All done'", async () => {
+    extras.week = weekOf(20 * 60);
+    failing.add("continue");
+    responses.vocab = statsOf({ due: 1, reviewable: 1 });
+    renderDashboard();
+    await screen.findByText(/Couldn.t load your unfinished videos/);
+    expect(await screen.findByTestId("today-row-words")).toHaveTextContent("1 word is due");
+    expect(todayRow("sentences")).toBeNull();
+    expect(screen.queryByTestId("today-all-done")).toBeNull();
   });
 });
 
-describe("Add Video Focus (empty library)", () => {
-  beforeEach(() => {
-    responses.continue = page([], "continue");
-    responses.library = page([]);
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
-    responses.vocab = statsOf({ total: 0, learning: 0 });
-  });
+// ---------------------------------------------------------------- start a new video
 
-  it("Next Up's CTA expands the ONE Add Video form, scrolls its input into view smoothly and focuses it without a second scroll; never submits", async () => {
-    const focusSpy = jest.spyOn(HTMLInputElement.prototype, "focus");
-    renderDashboard();
-    const focus = await screen.findByTestId("dashboard-focus");
-    expect(focus).toHaveTextContent("Ready for something new?");
-    const cta = within(focus).getByRole("link", { name: "Add a video" });
-    expect(cta).toHaveAttribute("href", "#add-video");
-    expect(document.getElementById("add-video-url")).toBeNull(); // collapsed by default
-    fireEvent.click(cta);
-    const input = document.getElementById("add-video-url") as HTMLInputElement;
-    expect(input).not.toBeNull();
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
-    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
-    expect(document.activeElement).toBe(input);
-    expect(calls.some((c) => !c.startsWith("GET "))).toBe(false);
-    expect(screen.getAllByRole("textbox", { name: "YouTube URL" })).toHaveLength(1); // no second form
-    focusSpy.mockRestore();
-  });
-
-  it("keyboard activation behaves the same; reduced motion → behavior auto", async () => {
-    window.matchMedia = jest.fn().mockReturnValue({ matches: true }) as unknown as typeof window.matchMedia;
-    const user = userEvent.setup();
-    renderDashboard();
-    const cta = within(await screen.findByTestId("dashboard-focus")).getByRole("link", { name: "Add a video" });
-    cta.focus();
-    await user.keyboard("{Enter}");
-    expect(window.matchMedia).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" });
-    expect(document.activeElement).toBe(document.getElementById("add-video-url"));
-  });
-
-  it("the hero's 'Start today's practice' opens the link box in place and focuses it; Escape collapses it, keeps the typed URL and returns focus to the button", async () => {
+describe("'Start a new video' (the hero's button)", () => {
+  it("opens the link box in place and focuses it; Escape collapses it, keeps the typed URL and returns focus to the button", async () => {
     const user = userEvent.setup();
     renderDashboard();
     await screen.findByTestId("your-progress");
     expect(document.getElementById("add-video")).toBeNull();
-    const toggle = within(screen.getByTestId("dashboard-welcome")).getByRole("button", { name: "Start today's practice" });
+    const toggle = within(hero()).getByRole("button", { name: "Start a new video" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const input = document.getElementById("add-video-url") as HTMLInputElement;
-    expect(screen.getByTestId("dashboard-welcome")).toContainElement(input); // inside the hero, not elsewhere
+    expect(hero()).toContainElement(input); // inside the hero, not elsewhere
     expect(document.activeElement).toBe(input);
+    expect(screen.getAllByRole("textbox", { name: "YouTube URL" })).toHaveLength(1); // never a second form
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled(); // right under the button — no scroll jump
     await user.type(input, "https://youtu.be/abc");
     await user.keyboard("{Escape}");
@@ -565,150 +631,53 @@ describe("Add Video Focus (empty library)", () => {
     expect(document.getElementById("add-video")).toBeNull();
     expect(calls.some((c) => !c.startsWith("GET "))).toBe(false);
   });
-
-  it("vocabulary stats failed but the summary proves no saved words → add-video is still safe", async () => {
-    failing.add("vocab");
-    renderDashboard();
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "add-video");
-  });
-
-  it("vocabulary stats failed and the summary shows saved words → no Focus (never 'nothing to review' from a failure)", async () => {
-    failing.add("vocab");
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 5 });
-    renderDashboard();
-    await screen.findByTestId("your-progress");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
-    expect(focusCard()).toBeNull();
-  });
-
-  it("summary failed → never add-video", async () => {
-    failing.add("summary");
-    renderDashboard();
-    await screen.findByText(/Failed to load your progress/);
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
-    expect(focusCard()).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------- progressive gating with delayed sources
-
-describe("progressive gating (independently delayed sources)", () => {
-  it("a qualifying sentence appears before vocabulary and summary finish", async () => {
-    const releaseVocab = gate("vocab");
-    const releaseSummary = gate("summary");
-    renderDashboard();
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "sentences");
-    await act(async () => {
-      releaseVocab();
-      releaseSummary();
-    });
-  });
-
-  it("no sentence action: pending vocabulary blocks the fallback (placeholder, no add-video, no nudge button)", async () => {
-    responses.continue = page([], "continue");
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
-    const releaseVocab = gate("vocab");
-    renderDashboard();
-    await screen.findByTestId("your-progress"); // summary resolved
-    expect(screen.getByTestId("focus-pending")).toHaveAttribute("aria-busy", "true");
-    expect(focusCard()).toBeNull();
-    await act(async () => releaseVocab());
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "add-video");
-  });
-
-  it("qualifying vocabulary appears before the summary finishes", async () => {
-    responses.continue = page([CLEAN], "continue");
-    responses.vocab = statsOf({ due: 3, reviewable: 3 });
-    const releaseSummary = gate("summary");
-    renderDashboard();
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "vocabulary");
-    await act(async () => releaseSummary());
-  });
-
-  it("no sentence/vocabulary action: the summary decides add-video vs hidden", async () => {
-    responses.continue = page([], "continue");
-    responses.summary = summaryOf({ libraryVideos: 0, vocabularyCount: 0, activeTime: HISTORY_ONLY });
-    const releaseSummary = gate("summary");
-    renderDashboard();
-    await screen.findByTestId("continue-learning").catch(() => undefined);
-    await waitFor(() => expect(calls.some((c) => c.includes("/api/vocabulary/stats"))).toBe(true));
-    await act(async () => {});
-    expect(screen.getByTestId("focus-pending")).toBeInTheDocument();
-    await act(async () => releaseSummary());
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "add-video");
-  });
-
-  it("Continue pending: placeholder only, and the vocabulary nudge button is suppressed meanwhile", async () => {
-    responses.vocab = statsOf({ due: 2, reviewable: 2 });
-    const releaseContinue = gate("continue");
-    renderDashboard();
-    await screen.findByTestId("vocab-nudge");
-    expect(screen.getByTestId("focus-pending")).toBeInTheDocument();
-    expect(within(screen.getByTestId("vocabulary-card")).queryByRole("link", { name: "Start review" })).toBeNull();
-    await act(async () => releaseContinue());
-    expect(await screen.findByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "sentences");
-    expect(within(screen.getByTestId("vocabulary-card")).getByRole("link", { name: "Start review" })).toBeInTheDocument();
-  });
-
-  it("Continue failed: sentences skipped, vocabulary still qualifies; with nothing else → hidden, not add-video", async () => {
-    failing.add("continue");
-    responses.vocab = statsOf({ due: 1, reviewable: 1 });
-    const { unmount } = renderDashboard();
-    expect(await screen.findByTestId("dashboard-focus")).toHaveTextContent("1 word is due");
-    unmount();
-    calls.length = 0;
-    responses.vocab = statsOf();
-    renderDashboard();
-    await screen.findByText(/Couldn.t load your unfinished videos/);
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
-    expect(focusCard()).toBeNull();
-  });
 });
 
 // ---------------------------------------------------------------- cache, invalidation, isolation
 
 describe("cache and invalidation", () => {
-  it("background refetch keeps the current Focus action (no placeholder while refetching)", async () => {
+  it("background refetch keeps the sentences and the Today row (no placeholder while refetching)", async () => {
     const { client } = renderDashboard();
-    await screen.findByTestId("dashboard-focus");
+    await screen.findByTestId("today-row-sentences");
     const releaseContinue = gate("continue");
     const releaseVocab = gate("vocab");
     await act(async () => {
       invalidateLearningViews(client, "user-1");
       invalidateVocabularyQueries(client, "user-1");
     });
-    expect(screen.getByTestId("dashboard-focus")).toHaveAttribute("data-focus-kind", "sentences");
-    expect(screen.queryByTestId("focus-pending")).toBeNull();
+    expect(screen.getByTestId("today-row-sentences")).toBeInTheDocument();
+    expect(screen.getByTestId("continue-sentences")).toHaveTextContent("3 sentences need another look");
     await act(async () => {
       releaseContinue();
       releaseVocab();
     });
   });
 
-  it("Option B follows the Continue query: a practice write's invalidateLearningViews (no roundIds needed) updates Focus", async () => {
+  it("a practice write's invalidateLearningViews (no roundIds needed) updates the count; clearing it removes the section and the row", async () => {
     const { client } = renderDashboard();
-    expect(await screen.findByTestId("dashboard-focus")).toHaveTextContent("3 sentences need another look");
+    expect(await screen.findByTestId("continue-sentences")).toHaveTextContent("3 sentences need another look");
     responses.continue = page([item("vNeeds", { correct: 7, practiced: 8 })], "continue");
     await act(async () => invalidateLearningViews(client, "user-1"));
-    await waitFor(() => expect(screen.getByTestId("dashboard-focus")).toHaveTextContent("1 sentence needs another look"));
+    await waitFor(() => expect(screen.getByTestId("today-row-sentences")).toHaveTextContent("1 sentence needs another look"));
+    expect(screen.getByTestId("continue-sentences")).toHaveTextContent("1 sentence needs another look");
     responses.continue = page([item("vNeeds", { correct: 8, practiced: 8 })], "continue");
     responses.vocab = statsOf({ due: 4, reviewable: 4 });
     await act(async () => {
       invalidateLearningViews(client, "user-1");
       invalidateVocabularyQueries(client, "user-1");
     });
-    await waitFor(() => expect(screen.getByTestId("dashboard-focus")).toHaveTextContent("4 words are due"));
+    await waitFor(() => expect(screen.getByTestId("today-row-words")).toHaveTextContent("4 words are due"));
+    expect(screen.queryByTestId("continue-sentences")).toBeNull();
+    expect(todayRow("sentences")).toBeNull();
   });
 
-  it("another account never sees this account's cached Continue round in Focus", async () => {
+  it("another account never sees this account's cached Continue round", async () => {
     const client = newClient();
     client.setQueryData(videoLibraryKeys.continueLearning("user-1"), page([NEEDS], "continue"));
     authUser = { id: "user-2", email: "other@example.test" } as User;
     responses.continue = page([CLEAN], "continue");
     renderDashboard(client);
     await screen.findByTestId("continue-card-vClean");
-    await waitFor(() => expect(screen.queryByTestId("focus-pending")).toBeNull());
-    expect(focusCard()).toBeNull();
     expect(document.body.textContent).not.toContain("need another look");
   });
 });

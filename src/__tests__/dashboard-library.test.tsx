@@ -219,7 +219,7 @@ describe("Add Video", () => {
     renderDashboard();
     await screen.findByTestId("continue-learning");
     expect(screen.queryByLabelText("YouTube URL")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Start today's practice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start a new video" }));
     expect(screen.queryByText("Dictation Practice")).toBeNull();
     expect(screen.queryByText("Listening Practice")).toBeNull();
     fireEvent.change(screen.getByLabelText("YouTube URL"), { target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } });

@@ -57,7 +57,8 @@ The signed-in product should:
 ## Specific preference for this repo
 The signed-in Dashboard was redesigned (`.claude/dashboard-redesign-plan.md`). When improving the signed-in experience:
 - follow the design system in `.github/skills/dictalearn-studio-ui/SKILL.md` and the layout and data-honesty rules in `.github/instructions/frontend-ui.instructions.md`
-- keep the Dashboard order: hero (with "Start today's practice") → Continue | Next up → review deck | league → Learning performance → Needs attention | achievements
+- keep the Dashboard order: hero (Today list, "Start a new video") → Continue | league → review deck → Learning performance → Needs attention | achievements
+- give each task one home (no card repeating another card's action); the hero's Today list only jumps to the card that owns a task
 - keep "start a new video" in the header dialog, the hero link box and the first-run hero; don't add a separate URL input at the top
 - keep primary destinations in the header nav, not the avatar dropdown
 

@@ -51,7 +51,7 @@ describe("internal navigation stays inside the app shell (no new-tab / hard-code
   const filesToAudit = [
     "app/dashboard/page.tsx",
     "app/dashboard/components/ContinueLearningCard.tsx",
-    "app/dashboard/components/FocusCard.tsx",
+    "app/dashboard/components/TodayPlan.tsx",
     "app/dashboard/components/VocabularyDeck.tsx",
     "app/dashboard/components/NeedsAttentionCard.tsx",
     "app/library/page.tsx",

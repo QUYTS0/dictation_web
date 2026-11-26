@@ -1,14 +1,15 @@
 "use client";
 
 import { useRef, useState, type ReactNode, type Ref } from "react";
-import { Play } from "lucide-react";
+import { Plus } from "lucide-react";
 import { ConfettiBurst } from "@/components/ConfettiBurst";
 import { ProfileDialog } from "@/components/ProfileDialog";
+import type { TodayRow } from "@/lib/dashboard/today";
 import type { DashboardSummary, DashboardWeek } from "@/lib/types/learning";
 import type { XpSummary } from "@/lib/types/xp";
 import { LevelProgress } from "./LevelProgress";
 import { StreakStatusLine } from "./StreakStatusLine";
-import { TodayTarget } from "./TodayTarget";
+import { TodayPlan } from "./TodayPlan";
 import { WeeklyTrack } from "./WeeklyTrack";
 
 /** The navy hero surface (reference "Approved DictaLearn" hero). */
@@ -27,6 +28,10 @@ interface DashboardHeroProps {
   weekPending: boolean;
   /** XP and level; undefined while loading or unavailable (bar left out). */
   xp: XpSummary | undefined;
+  /** What else is left today (sentences, words) and whether everything is clear. */
+  todayRows: TodayRow[];
+  todayAllDone: boolean;
+  onJump: (target: "sentences" | "words") => void;
   /** Key of a celebration confetti burst while it plays, else null. */
   celebrationBurst: number | null;
   addOpen: boolean;
@@ -39,9 +44,10 @@ interface DashboardHeroProps {
 /**
  * The returning learner's hero (plan §1, §4.5.1–2, §4.5.5): welcome, streak
  * status and the weekly consistency track (XP per day) on the left; on the
- * right, today's panel — Today's target, the level bar, then "Start today's
- * practice". The button starts a NEW video (an inline link box); resuming
- * belongs to the Continue card. If the week or XP can't be loaded (e.g.
+ * right, today's panel: the Today list (practice time toward the goal, then
+ * what else is left, each jumping to its card; plan §4.5.9), the level bar,
+ * then "Start a new video" (an inline link box). Resuming belongs to the
+ * Continue card. If the week or XP can't be loaded (e.g.
  * migration 047 / 048 not applied yet), their parts are left out — never
  * shown as zeros. Goal-met and level-up confetti plays inside the hero.
  */
@@ -51,6 +57,9 @@ export function DashboardHero({
   week,
   weekPending,
   xp,
+  todayRows,
+  todayAllDone,
+  onJump,
   celebrationBurst,
   addOpen,
   onToggleAdd,
@@ -81,11 +90,15 @@ export function DashboardHero({
         </div>
 
         <div className="min-w-0 space-y-4 rounded-xl border border-white/10 bg-white/[0.04] p-5 lg:col-span-5">
-          {week ? (
-            <TodayTarget week={week} onChangeGoal={() => setGoalOpen(true)} changeGoalRef={changeGoalRef} />
-          ) : weekPending ? (
-            <div aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-white/[0.04]" />
-          ) : null}
+          <TodayPlan
+            week={week}
+            weekPending={weekPending}
+            rows={todayRows}
+            allDone={todayAllDone}
+            onChangeGoal={() => setGoalOpen(true)}
+            changeGoalRef={changeGoalRef}
+            onJump={onJump}
+          />
           {xp && <LevelProgress xp={xp} />}
           <button
             ref={addToggleRef}
@@ -95,8 +108,8 @@ export function DashboardHero({
             aria-controls="add-video"
             className="flex w-full items-center justify-center gap-2 rounded-lg border border-reward/40 bg-reward px-3 py-2.5 text-sm font-semibold tracking-wide text-hero shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_2px_rgba(0,0,0,0.12)] transition-colors hover:bg-[#e2a544] active:scale-[0.99]"
           >
-            <Play size={15} className="fill-current" aria-hidden="true" />
-            Start today&apos;s practice
+            <Plus size={16} strokeWidth={2.5} aria-hidden="true" />
+            Start a new video
           </button>
           {addOpen && addPanel}
         </div>

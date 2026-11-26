@@ -2,16 +2,17 @@
  * Dashboard follow-up to the redesign (approved 2026-11-26): the goal ring
  * replaces the ember as today's marker; motion only on change (count-ups,
  * the XP gain float, a one-time streak flicker, the flashcard turn, the
- * kudos pop); Next up names its sentences when the round report agrees.
+ * kudos pop); the Continue card names its sentences to look at again when
+ * the round report agrees.
  */
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { DashboardWeek, DashboardWeekDay, ReportSentence } from "@/lib/types/learning";
+import type { DashboardWeek, DashboardWeekDay, LibraryItem, ReportSentence } from "@/lib/types/learning";
 import type { VocabularyItem } from "@/lib/types";
 import type { XpSummary } from "@/lib/types/xp";
 import type { LeagueWeekRow } from "@/lib/types/leaderboard";
 import { WeeklyTrack } from "@/app/dashboard/components/WeeklyTrack";
-import { FocusCard } from "@/app/dashboard/components/FocusCard";
+import { ContinueLearningCard } from "@/app/dashboard/components/ContinueLearningCard";
 import { LevelProgress } from "@/app/dashboard/components/LevelProgress";
 import { StreakPill } from "@/components/StreakPill";
 import { ToastProvider } from "@/components/ToastProvider";
@@ -19,6 +20,16 @@ import { LeagueWeekRows } from "@/components/league/LeagueRows";
 import { ReviewCard } from "@/components/vocabulary/ReviewCard";
 import { useCountUp } from "@/hooks/useCountUp";
 import { addDaysToKey } from "@/lib/utils/streak";
+
+jest.mock("next/link", () => {
+  return function MockLink({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; children: React.ReactNode }) {
+    return (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    );
+  };
+});
 
 const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as unknown as Response;
 let reportBody: unknown;
@@ -100,39 +111,78 @@ describe("goal ring (today's marker)", () => {
   });
 });
 
-// ---------------------------------------------------------------- Next up sentences
+// ---------------------------------------------------------------- the Continue card's sentences
 
 const sentence = (segmentIndex: number, category: ReportSentence["category"], text: string | null = `Sentence text ${segmentIndex}`) =>
   ({ segmentIndex, text, eligible: true, category, dictation: null, shadowing: null }) as ReportSentence;
 const reportWith = (sentences: ReportSentence[], needsReview = sentences.filter((s) => s.category === "needs_review").length) => ({
   round: { sentences, dictation: { needsReview } },
 });
-const focus = (needsReview: number) => ({ kind: "sentences" as const, roundId: "round-1", videoId: "v1", title: "T", needsReview });
+/** A Continue item whose active round has `needsReview` latest answers wrong. */
+const continueItem = (needsReview: number): LibraryItem => ({
+  videoId: "v1",
+  title: "Talk",
+  addedAt: "2026-09-01T00:00:00Z",
+  lastActivityAt: "2026-09-02T00:00:00Z",
+  lastMode: "dictation",
+  state: "in_progress",
+  hasCompletedRound: false,
+  hasLegacyCompletion: false,
+  completedRoundCount: 0,
+  round: {
+    roundId: "round-1",
+    status: "active",
+    provenance: "current",
+    roundNumber: 1,
+    transcriptId: "t",
+    startedAt: "2026-09-01T00:00:00Z",
+    completedAt: null,
+    currentSegmentIndex: 4,
+    progress: {
+      requiredSentenceCount: 20,
+      coveredSentences: { dictation: 10, shadowing: 0, overall: 10 },
+      coverage: { dictation: 0.5, shadowing: 0, overall: 0.5 },
+      attemptCount: 12,
+      sentenceAccuracy: { correct: 10 - needsReview, practiced: 10, percent: null },
+    },
+  },
+  listening: { transcriptId: "t", coverageRatio: null, listenedThrough: false, lastPositionSec: null, hasHistory: false, historyOnOtherRevision: false },
+});
 
-describe("Next up names the sentences", () => {
-  it("lists the needs-review sentences from the round report (3 by name, the rest counted)", async () => {
+describe("the Continue card names the sentences to look at again", () => {
+  it("count from the round's progress; text from the round report (3 by name, the rest counted); one link to the report", async () => {
     reportBody = reportWith([sentence(0, "correct"), sentence(2, "needs_review"), sentence(4, "needs_review"), sentence(5, "needs_review", null), sentence(9, "needs_review")]);
-    render(withClient(<FocusCard focus={focus(4)} onAddVideo={jest.fn()} userId="user-1" />));
-    const list = await screen.findByTestId("focus-sentences");
+    render(withClient(<ContinueLearningCard item={continueItem(4)} userId="user-1" />));
+    const section = screen.getByTestId("continue-sentences");
+    expect(section).toHaveAttribute("id", "continue-sentences"); // the Today list jumps here
+    expect(within(section).getByRole("heading", { name: "4 sentences need another look" })).toBeInTheDocument();
+    expect(within(section).getByRole("link", { name: /Review sentences/ })).toHaveAttribute("href", "/results/round-1");
+    const list = await screen.findByTestId("needs-review-sentences");
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["#3Sentence text 2", "#5Sentence text 4", "#6Sentence 6"]);
     expect(list).toHaveTextContent("+1 more");
-    expect(screen.getByRole("link", { name: /Review sentences/ })).toHaveAttribute("href", "/results/round-1");
   });
 
-  it("left out when the report disagrees with the headline's count, or can't be loaded", async () => {
+  it("the list is left out when the report disagrees with the count or can't be loaded; the count and link stay", async () => {
     reportBody = reportWith([sentence(2, "needs_review"), sentence(4, "needs_review")]);
-    const { unmount } = render(withClient(<FocusCard focus={focus(3)} onAddVideo={jest.fn()} userId="user-1" />));
+    const { unmount } = render(withClient(<ContinueLearningCard item={continueItem(3)} userId="user-1" />));
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     await act(async () => {});
-    expect(screen.queryByTestId("focus-sentences")).toBeNull();
+    expect(screen.queryByTestId("needs-review-sentences")).toBeNull();
     expect(screen.getByRole("heading", { name: "3 sentences need another look" })).toBeInTheDocument();
     unmount();
 
     reportStatus = 500;
-    render(withClient(<FocusCard focus={focus(3)} onAddVideo={jest.fn()} userId="user-1" />));
+    render(withClient(<ContinueLearningCard item={continueItem(3)} userId="user-1" />));
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
     await act(async () => {});
-    expect(screen.queryByTestId("focus-sentences")).toBeNull();
+    expect(screen.queryByTestId("needs-review-sentences")).toBeNull();
+    expect(screen.getByRole("link", { name: /Review sentences/ })).toBeInTheDocument();
+  });
+
+  it("nothing to look at again → no section and no report request", () => {
+    render(withClient(<ContinueLearningCard item={continueItem(0)} userId="user-1" />));
+    expect(screen.queryByTestId("continue-sentences")).toBeNull();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

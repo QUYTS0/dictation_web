@@ -8,11 +8,10 @@ import { ArrowRight, BookOpen } from "lucide-react";
 import { ReviewCard, ReviewGradeButtons, ReviewModeToggle } from "@/components/vocabulary/ReviewCard";
 import { reviewShortcut, useReviewMode } from "@/components/vocabulary/reviewControls";
 import { useToast } from "@/components/ToastProvider";
-import type { FocusSource } from "@/lib/dashboard/selectFocus";
+import { vocabularyHeadline, type Source } from "@/lib/dashboard/today";
 import { invalidateAfterVocabularyReview, submitVocabularyReview, useVocabularyReviewQueueQuery } from "@/lib/queries/vocabulary";
 import type { ReviewGrade, VocabularyStatsResponse } from "@/lib/types";
 import type { DashboardSummary } from "@/lib/types/learning";
-import { vocabularyHeadline } from "./FocusCard";
 
 const MAX_CHIPS = 8;
 const MAX_RECENT = 6;
@@ -25,9 +24,10 @@ const MAX_RECENT = 6;
  * puts the card back and says so.
  *
  * Keys (only while focus is inside the deck): Space/Enter flip, 1–4 grade.
- * `showReviewButton` follows the Dashboard's dedup rule: "Start review" is
- * not repeated here when Next up already offers it. Copy never claims a
- * queue order or batch size (the review queue guarantees neither).
+ * The hero's Today list jumps here (#review-deck) and focuses the deck, so
+ * the keys work at once. This is the one "Start review" on the Dashboard.
+ * Copy never claims a queue order or batch size (the review queue
+ * guarantees neither).
  */
 export function VocabularyDeck({
   userId,
@@ -37,7 +37,7 @@ export function VocabularyDeck({
 }: {
   userId: string | undefined;
   summary: DashboardSummary | undefined;
-  vocab: FocusSource<VocabularyStatsResponse>;
+  vocab: Source<VocabularyStatsResponse>;
   showReviewButton: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -111,11 +111,12 @@ export function VocabularyDeck({
   return (
     <section
       ref={deckRef}
+      id="review-deck"
       tabIndex={-1}
       onKeyDown={onKeyDown}
       aria-labelledby="vocabulary-heading"
       data-testid="vocabulary-card"
-      className="@container flex h-full flex-col rounded-2xl border border-line bg-white p-5 shadow-xs outline-none sm:p-6"
+      className="@container flex h-full scroll-mt-28 flex-col rounded-2xl border border-line bg-white p-5 shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 sm:p-6"
     >
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">

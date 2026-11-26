@@ -526,7 +526,7 @@ describe("completed-round report on the practice page", () => {
       const el = within(view).getAllByRole("button", { name })[0];
       expect([String(name), hiddenByClass(el)]).toEqual([String(name), false]);
     }
-    for (const name of [/Full report/, /Library/]) expect(hiddenByClass(within(view).getByRole("link", { name }))).toBe(false);
+    for (const name of [/Full report/, /My Learning/]) expect(hiddenByClass(within(view).getByRole("link", { name }))).toBe(false);
     expect(forbiddenWrites()).toEqual([]);
 
     // "Practice again" is the ONLY action that creates a round — and only after confirming.

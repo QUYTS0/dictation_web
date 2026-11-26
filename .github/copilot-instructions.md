@@ -31,8 +31,8 @@ This repository is a dictation web app built with Next.js, TypeScript, and Supab
 
 ## Signed-in experience rules
 - After sign-in, users land on `/dashboard`
-- Starting a new video is always one step away: the header's **New video** dialog on every page, the Dashboard hero's **Start today's practice** link box, and the first-run hero for a learner with nothing yet. All three use `AddVideoForm`; don't add another URL input
-- The Dashboard shows, in this order: the hero (welcome, streak, weekly track, today's target, level), Continue learning | Next up, the review deck | league, Learning performance, Needs attention | achievements (see `frontend-ui.instructions.md`)
+- Starting a new video is always one step away: the header's **New video** dialog on every page, the Dashboard hero's **Start a new video** link box, and the first-run hero for a learner with nothing yet. All three use `AddVideoForm`; don't add another URL input
+- The Dashboard shows, in this order: the hero (welcome, streak, weekly track, the Today list, level), Continue learning | league, the review deck, Learning performance, Needs attention | achievements (see `frontend-ui.instructions.md`). Each task has one home (resume and its sentences: Continue; words: the deck; new video: the hero button); the Today list only jumps to them. There is no "Next up" card
 - Metrics stay canonical and separate; unavailable data is hidden or shown as "—", never as zeros
 - Avoid splitting the signed-in experience into two weak pages if one stronger workspace page is better
 

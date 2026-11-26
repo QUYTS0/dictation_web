@@ -27,22 +27,29 @@ The product plan behind the current Dashboard is `.claude/dashboard-redesign-pla
 - **Starting a new video** is always one step away, in three places that share one form
   (`src/components/AddVideoForm.tsx`, one `/api/video/resolve` flow):
   1. the header's **New video** button (`AddVideoDialog`, on every signed-in page),
-  2. the Dashboard hero's **Start today's practice** button, which opens the link box inside the
-     hero,
+  2. the Dashboard hero's **Start a new video** button, which opens the link box inside the hero,
   3. the **first-run hero**, for a learner with nothing yet (no videos, sessions or words).
   Do not add a separate URL input at the top of the Dashboard; the hero already is that.
 - Dashboard order (`src/app/dashboard/page.tsx`). Keep it.
   1. Monday recap banner (first visit of a league week only)
-  2. Hero: welcome, streak status, weekly consistency track | Today's target, level bar,
-     Start today's practice
-  3. Continue learning (resume) | Next up (the Focus decision)
-  4. Review deck | League card
+  2. Hero: welcome, streak status, weekly consistency track | **Today list** (practice time
+     toward the goal, then what else is left today, then "All done for today ✓"), level bar,
+     Start a new video
+  3. Continue learning (resume + its sentences to look at again) | League card
+  4. Review deck (full width; the League card joins it when there is no Continue card)
   5. Learning performance (3 cards)
   6. Needs attention (error diagnostics) | Achievements
-  Each pair is roughly 8/4 columns on large screens. When the right-hand partner is unavailable
-  (e.g. its migration isn't applied), the left card takes the row alone.
-- Division of work: hero button = start something **new**; Continue card = **resume**;
-  Next up = what to **review** next. Never give two of them the same action.
+  Each pair is roughly 8/4 columns on large screens, and the two cards share the row's height.
+  When the right-hand partner is unavailable (e.g. its migration isn't applied), the left card
+  takes the row alone.
+- **Each task has one home.** Never show the same action in two cards:
+  - start something new: the hero button;
+  - resume a video and see its sentences to look at again ("Review sentences"): the Continue
+    card;
+  - review words ("Start review"): the review deck.
+  The hero's Today list only says what's left today, and each row jumps to (and focuses) the
+  card that owns the task. There is no "Next up" card: it was removed because it always repeated
+  one of these cards.
 
 ## Data honesty (non-negotiable)
 
