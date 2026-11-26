@@ -233,34 +233,38 @@ describe("wide shell and layout", () => {
     await settle();
   });
 
-  it("first row: 'Pick up where you left off' (8/12) beside this week's league (4/12); the deck below takes the full width", async () => {
+  it("'Pick up where you left off' (8/12) above the deck (8/12), this week's league running beside both (4/12, two rows); phone order resume → league → deck", async () => {
     extras.league = LEAGUE;
     responses.continue = page([NEEDS, CLEAN], "continue");
     renderDashboard();
     const league = await screen.findByTestId("league-card");
-    const row = screen.getByTestId("dashboard-actions");
-    expect(row).toHaveClass("grid", "lg:grid-cols-12");
-    const cont = within(row).getByTestId("continue-learning");
-    expect(cont.parentElement).toHaveClass("lg:col-span-8");
-    expect(league.parentElement).toHaveClass("lg:col-span-4");
-    expect(row).toContainElement(league);
+    const grid = screen.getByTestId("dashboard-learning");
+    expect(grid).toHaveClass("grid", "lg:grid-cols-12");
+    const cont = within(grid).getByTestId("continue-learning");
+    const deck = within(grid).getByTestId("vocabulary-card");
+    expect(cont.parentElement).toHaveClass("lg:col-span-8", "lg:col-start-1", "lg:row-start-1");
+    expect(deck.parentElement).toHaveClass("lg:col-span-8", "lg:col-start-1", "lg:row-start-2");
+    expect(league.parentElement).toHaveClass("relative", "lg:col-span-4", "lg:col-start-9", "lg:row-start-1", "lg:row-span-2");
+    // It takes the two cards' height and lists as many rows as fit (LeagueCard fill, leaderboard tests).
+    expect(league).toHaveAttribute("data-fill", "true");
+    expect([...grid.children]).toEqual([cont.parentElement, league.parentElement, deck.parentElement]);
     expect(within(cont).getByTestId("continue-card-vNeeds")).toBeInTheDocument();
     expect(screen.queryByTestId("continue-card-vClean")).toBeNull(); // only the first item
-    expect(screen.getByTestId("dashboard-deck-row")).not.toHaveClass("lg:grid-cols-12");
-    expect(screen.getByTestId("dashboard-deck-row")).not.toContainElement(league);
     expect(screen.queryByTestId("dashboard-focus")).toBeNull(); // no Next up card any more
   });
 
-  it("no league → the resume card alone at a readable width, not a full-width banner", async () => {
+  it("no league → the resume card alone at a readable width, not a full-width banner; the deck below on its own", async () => {
     responses.continue = page([CLEAN], "continue");
     renderDashboard();
-    await screen.findByTestId("continue-learning");
+    const cont = await screen.findByTestId("continue-learning");
     await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
-    expect(screen.getByTestId("dashboard-actions")).toHaveClass("max-w-3xl");
-    expect(screen.getByTestId("dashboard-actions")).not.toHaveClass("lg:grid-cols-12");
+    expect(screen.getByTestId("dashboard-learning")).not.toHaveClass("lg:grid-cols-12");
+    expect(cont.parentElement).toHaveClass("max-w-3xl");
+    expect(cont.parentElement!.className).not.toMatch(/col-span/);
+    expect(screen.getByTestId("vocabulary-card").parentElement!.className).not.toMatch(/col-span/);
   });
 
-  it("nothing unfinished → the league moves beside the deck (never alone), and a small 'Browse My Learning' pointer replaces the resume card", async () => {
+  it("nothing unfinished → a small 'Browse My Learning' pointer replaces the resume card, and the league sits beside the deck only, as a plain card (never alone)", async () => {
     extras.league = LEAGUE;
     responses.continue = page([], "continue");
     renderDashboard();
@@ -268,10 +272,32 @@ describe("wide shell and layout", () => {
     expect(empty).toHaveTextContent("Nothing unfinished right now.");
     expect(within(empty).getByRole("link", { name: "Browse My Learning" })).toHaveAttribute("href", "/library");
     const league = await screen.findByTestId("league-card");
-    const deckRow = screen.getByTestId("dashboard-deck-row");
-    expect(deckRow).toHaveClass("lg:grid-cols-12");
-    expect(deckRow).toContainElement(league);
-    expect(screen.getByTestId("dashboard-actions")).not.toContainElement(league);
+    expect(empty.parentElement).toHaveClass("max-w-3xl", "lg:col-span-12", "lg:row-start-1");
+    expect(league.parentElement).toHaveClass("lg:col-span-4", "lg:col-start-9", "lg:row-start-2");
+    expect(league.parentElement).not.toHaveClass("lg:row-span-2");
+    expect(league).not.toHaveAttribute("data-fill");
+    expect(screen.getByTestId("vocabulary-card").parentElement).toHaveClass("lg:col-span-8", "lg:col-start-1", "lg:row-start-2");
+  });
+
+  it("the cards are never rebuilt when the layout changes as data arrives (the deck keeps its card)", async () => {
+    // Continue and the league load while the deck is already on screen: the
+    // layout moves from 'league beside both' to 'no league' (and to 'beside
+    // the deck only'), but the deck stays the same element.
+    responses.continue = page([CLEAN], "continue");
+    const first = renderDashboard();
+    const deck = await screen.findByTestId("vocabulary-card");
+    await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
+    await screen.findByTestId("continue-learning");
+    expect(screen.getByTestId("vocabulary-card")).toBe(deck);
+    first.unmount();
+
+    extras.league = LEAGUE;
+    responses.continue = page([], "continue");
+    renderDashboard();
+    const deck2 = await screen.findByTestId("vocabulary-card");
+    await screen.findByTestId("continue-empty");
+    await screen.findByTestId("league-card");
+    expect(screen.getByTestId("vocabulary-card")).toBe(deck2);
   });
 
   it("nothing to resume and an empty library → no resume row at all", async () => {
@@ -280,7 +306,10 @@ describe("wide shell and layout", () => {
     renderDashboard();
     await screen.findByTestId("your-progress");
     await waitFor(() => expect(screen.queryByLabelText("Loading continue learning")).toBeNull());
-    expect(screen.queryByTestId("dashboard-actions")).toBeNull();
+    expect(screen.queryByTestId("continue-learning")).toBeNull();
+    expect(screen.queryByTestId("continue-empty")).toBeNull();
+    await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
+    expect([...screen.getByTestId("dashboard-learning").children]).toEqual([screen.getByTestId("vocabulary-card").parentElement]);
   });
 
   it("no six metric cards, no Library, no rail, no sticky; the deck and diagnostics are full-width sections that size themselves (container queries)", async () => {
@@ -288,10 +317,11 @@ describe("wide shell and layout", () => {
     await screen.findByTestId("your-progress");
     expect(screen.queryByRole("region", { name: "Progress summary" })).toBeNull();
     const main = screen.getByRole("main");
-    const deckRow = screen.getByTestId("dashboard-deck-row");
-    expect(deckRow.parentElement).toBe(main);
-    expect(deckRow).not.toHaveClass("lg:grid-cols-12");
-    expect(deckRow).toContainElement(screen.getByTestId("vocabulary-card"));
+    const learning = screen.getByTestId("dashboard-learning");
+    expect(learning.parentElement).toBe(main);
+    await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
+    expect(learning).not.toHaveClass("lg:grid-cols-12"); // no league here: each card takes the width alone
+    expect(learning).toContainElement(screen.getByTestId("vocabulary-card"));
     // Diagnostics share a row with achievements (Phase 6); unavailable here, so the row is one column.
     const row = screen.getByTestId("dashboard-diagnostics-row");
     expect(row.parentElement).toBe(main);

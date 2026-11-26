@@ -21,6 +21,7 @@ Reference source: `C:\Users\Tri.Nguyen\source\repos\dictalearn---gamified-englis
 | D11 | UI additions | Streak status line, first-run dashboard, fill-in-the-blank cards + keyboard shortcuts, weekly-track day details, resume point on the Continue card, celebrations. Details in §4.5. |
 | D12 | Follow-up (2026-11-26) | **Goal ring** replaces the ember as today's marker; **motion only on change** (no endless loops); **even desktop rows**. Details in §4.5.8. |
 | D13 | One home per task (2026-11-26) | **Next up removed**: it always repeated another card. Its sentences move into the **Continue card**, the **League card** takes its place beside Continue, and the hero gets a **Today list** (what's left today, each row jumping to its card, then "All done for today ✓"). The hero button is renamed **"Start a new video"**. The end-of-round "Library" button now opens My Learning. Details in §4.5.9. |
+| D14 | League beside both (2026-11-26) | The **review deck** narrows to Continue's width (8 col) and the **League card runs beside both** (4 col, two rows), taking their height and listing **as many whole rows as fit** (at least the top 3) with the zones marked. One grid keeps the three cards in place, so none is rebuilt when the layout changes. Details in §4.5.10. |
 
 Defaults chosen in this plan (not asked; change them before implementation if you disagree):
 
@@ -86,9 +87,10 @@ Hero — navy gradient, full width
 │  ✓────✓────✓────·────✓────✓────◔              │ ● Level 14     4,850 / 5,000 XP   │
 │ +85  +90  +110  —   +95  +140 +40              │ [ + Start a new video ]           │
 └────────────────────────────────────────────────┴───────────────────────────────────┘
-Row 8/4:  Continue learning (thumbnail + bars + resume point;      |  League card (weekly XP)
-          its sentences to look at again + "Review sentences")     |
-Full:     Spaced repetition deck (Fill the gap / Meaning, grades, chips, "Start review")
+8 col:    Continue learning (thumbnail + bars + resume point;      ┐  League card (weekly XP),
+          its sentences to look at again + "Review sentences")     │  runs beside both: as many
+8 col:    Spaced repetition deck (Fill the gap / Meaning, grades,  │  rows as fit, zones marked
+          chips, "Start review")                                   ┘  (4 col, two rows)
 Full:     Learning performance — Active practice | Sentence accuracy | Pronunciation
 Row 8/4:  Needs attention · error diagnostics                                     |  Achievements
 AppFooter
@@ -104,7 +106,7 @@ First-run learner (§4.5.3):
 (no other cards until the learner has data)
 ```
 
-This is the layout since D13 (§4.5.9). Before it, the first row was Continue | Next up and the deck shared its row with the League card. If the League card is unavailable, Continue takes the row alone. With no Continue card (nothing unfinished, or it failed), the League card sits beside the deck instead, never alone.
+This is the layout since D14 (§4.5.10). Before D13 the first row was Continue | Next up and the deck shared its row with the League card; D13 put the League card beside Continue and the deck full width. If the League card is unavailable, Continue keeps a readable single width and the deck takes the width alone. With no Continue card (nothing unfinished, or it failed), the League card sits beside the deck only, as a plain card, never alone. On a phone: Continue, League, deck.
 
 ## 3. Backend
 
@@ -244,7 +246,7 @@ Query hooks go in `src/lib/queries/{dashboard,profile,xp,achievements,leaderboar
 | `ContinueLearningCard.tsx` | same | 3 bars + resume point; keep test ids `continue-learning`, `continue-card-*`, `continue-coverage`, `continue-listening`. |
 | `FocusCard.tsx` | same | Restyle only. Its "Add a video" CTA opens the **hero link box** (scrolls it into view and focuses the field), so the page has one form. *(Implemented in Phase 2; originally planned as opening `AddVideoDialog`.)* |
 | `VocabularyDeck.tsx` | `VocabularyCard.tsx` | Queue from `GET /api/vocabulary/review` (20-item batch). The flip is a real `<button>`, and the back side is announced (`aria-live`). Grades advance optimistically and roll back with a toast on error. Empty state: saved count + recent chips + "View vocabulary". Keeps the dedup rule (`page.tsx:136`) for the header "Start full review" button. Modes and shortcuts in §4.5.4. |
-| `LeagueCard.tsx` | — | States: member / not joined / hidden / loading / error. One-time notice (localStorage) for D7: "You appear as Learner 4F2A2. Change your name or hide yourself in Preferences." |
+| `LeagueCard.tsx` | — | States: member / not joined / hidden / loading / error. One-time notice (localStorage) for D7: "You appear as Learner 4F2A2. Change your name or hide yourself in Preferences." `fill` (D14): beside Continue and the deck it takes their height and lists as many whole rows as fit (§4.5.10). |
 | `LearningPerformance.tsx` | `ProgressSummary.tsx` | Keep test ids `your-progress`, `progress-active`, `progress-accuracy`, `progress-pronunciation`, `progress-videos`. |
 | `NeedsAttentionCard.tsx` | same | Selection state + example panel; keep `mostCommonMistakeLine`. Add `description` per type to `ERROR_TYPE_OPTIONS` (`src/lib/constants/errorTypes.ts`). Consider reusing `ComparedSentenceText` for the diff. |
 | `AchievementsCase.tsx`, `AchievementDetailDialog.tsx` | — | |
@@ -335,9 +337,19 @@ Next up always repeated something already on the page: "N words are due" was the
   - A words row turns into "✓ N words reviewed today" when today's reviews (`fn_my_xp` day activity) cleared them.
   - **"All done for today ✓"** replaces "Goal met today ✓" only when the goal is met and every source answered with nothing left. A pending or failed source never reads as "nothing left".
   - No new requests: it reuses the week, XP, vocabulary stats and Continue queries.
-- **Layout:** Continue | League (8/4), then the deck full width. With no Continue card, the League card sits beside the deck, never alone. If the League card is unavailable, Continue keeps its readable single width.
+- **Layout:** Continue | League (8/4), then the deck full width. With no Continue card, the League card sits beside the deck, never alone. If the League card is unavailable, Continue keeps its readable single width. *(Changed by D14, §4.5.10: the deck narrows to Continue's width and the League card runs beside both.)*
 - **Sentence count:** the rule (`sentencesToReview`, formerly `focusCandidate`) is unchanged, so the D-2 parity test still covers it.
 - **Also fixed:** the end-of-round "Library" button on the practice page linked to `/dashboard` (left over from before the Dashboard / My Learning split). It is now "My Learning" → `/library`.
+
+#### 4.5.10 The League card beside Continue and the deck (D14) — done 2026-11-26
+
+At full width the deck had a wide empty area under "Up next" and a practice sentence about 750px long, while every other row was 8/4.
+
+- **One grid** (`dashboard-learning`): Continue (8 col, row 1), the deck (8 col, row 2) and the League card (4 col, rows 1–2). The three slots are always in the same place in the page, so a layout change as data arrives (Continue or the league loading, failing, or coming back empty) never rebuilds a card: the deck keeps the card a learner is on. On a phone: Continue, League, deck.
+- **The League card fills its slot without setting it** (`LeagueCard fill`): from `lg` it is absolutely placed in a `relative` slot (`lg:min-h-[36rem]`, room for the top 3, your row and the privacy notice), so the row heights come from Continue and the deck only. It measures its list area (ResizeObserver) and lists **as many whole rows as fit, at least 3** (`rowsThatFit` in `src/lib/leagues/fit.ts`): your own row, when you rank below them, takes room first; All time keeps room for "Updated hourly.". More room (the privacy notice dismissed, a taller Continue) means more rows. Promotion and demotion rows are marked as on /leaderboard. Below `lg` it is a plain card with the top 3.
+- **Fallbacks:** no Continue card → the pointer or error above at a readable width, and the League card beside the deck only, as a plain card (top 3). No League card → Continue at a readable width and the deck at full width.
+- **The deck** keeps its container query: card and "Up next" side by side when it is at least 48rem wide (1440px screens), stacked below that (1024–1279px).
+- **Narrow League lists** (beside two cards on a 1024px screen) hide the avatar initials (`@max-[17rem]`), so names have room; rank and name still identify a row.
 
 ## 5. Phases
 

@@ -35,13 +35,16 @@ The product plan behind the current Dashboard is `.claude/dashboard-redesign-pla
   2. Hero: welcome, streak status, weekly consistency track | **Today list** (practice time
      toward the goal, then what else is left today, then "All done for today ✓"), level bar,
      Start a new video
-  3. Continue learning (resume + its sentences to look at again) | League card
-  4. Review deck (full width; the League card joins it when there is no Continue card)
+  3. Continue learning (resume + its sentences to look at again), and below it
+  4. the Review deck, both 8 columns, with the League card running beside both (4 columns, two
+     rows; it takes their height and lists as many whole rows as fit). With no Continue card it
+     sits beside the deck only, as a plain card.
   5. Learning performance (3 cards)
   6. Needs attention (error diagnostics) | Achievements
-  Each pair is roughly 8/4 columns on large screens, and the two cards share the row's height.
+  Each pair is roughly 8/4 columns on large screens, and the cards share the row's height.
   When the right-hand partner is unavailable (e.g. its migration isn't applied), the left card
-  takes the row alone.
+  takes the row alone. Continue, League and the deck are one grid whose slots never move in the
+  page, so a layout change never rebuilds a card. On a phone: Continue, League, deck.
 - **Each task has one home.** Never show the same action in two cards:
   - start something new: the hero button;
   - resume a video and see its sentences to look at again ("Review sentences"): the Continue

@@ -1,18 +1,26 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { ArrowRight, Trophy } from "lucide-react";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { LeagueAllTimeRows, LeagueWeekRows } from "@/components/league/LeagueRows";
 import { LeaguePrivacyNotice } from "@/components/league/LeaguePrivacyNotice";
+import { rowsThatFit } from "@/lib/leagues/fit";
 import { formatLeagueReset, leagueName, zoneText } from "@/lib/leagues/tiers";
 import { useLeaderboardQuery } from "@/lib/queries/leaderboard";
 import type { LeagueWeekBoard } from "@/lib/types/leaderboard";
 
-/** Dashboard rows per tab; the full group is on /leaderboard. */
+/** Dashboard rows per tab (at least); the full group is on /leaderboard. */
 const TOP = 3;
+
+/** The list area's measured room while the card fills a fixed height (`fill`). */
+interface Room {
+  heightPx: number;
+  rowPx: number;
+  rem: number;
+}
 
 /**
  * The Dashboard's league card (plan §1, §4.3): the tier, when the week
@@ -20,24 +28,66 @@ const TOP = 3;
  * own row, and the zone line. States: member, not joined yet (no XP this
  * week), hidden. Shows the one-time privacy notice (D7). The full group is
  * on /leaderboard.
+ *
+ * `fill` (plan D14): on large screens the card runs beside Continue AND the
+ * review deck. It then takes its height from that slot (absolutely placed in
+ * a `relative` parent, so it never sets the row heights) and lists as many
+ * whole rows as fit, at least 3, with the promotion and demotion rows marked
+ * as on /leaderboard. Below `lg` it is an ordinary card with the top 3.
  */
-export function LeagueCard({ userId, board }: { userId: string; board: LeagueWeekBoard }) {
+export function LeagueCard({ userId, board, fill = false }: { userId: string; board: LeagueWeekBoard; fill?: boolean }) {
   const [tab, setTab] = useState<"week" | "all">("week");
   const [prefsOpen, setPrefsOpen] = useState(false);
   const prefsReturnRef = useRef<HTMLElement | null>(null);
   const allTime = useLeaderboardQuery(userId, "all", tab === "all");
+  const cardRef = useRef<HTMLElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState<Room | null>(null);
+  const hidden = board.status === "hidden";
+
+  // Measure the list area whenever its size changes (resize, the rows beside
+  // it growing, the privacy notice going away). Only while the card really is
+  // filling its slot; otherwise (below lg) it shows the plain top 3.
+  useEffect(() => {
+    const card = cardRef.current;
+    const panel = panelRef.current;
+    if (!fill || hidden || !card || !panel || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (getComputedStyle(card).position !== "absolute") return setRoom(null);
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const rowPx = panel.querySelector("li")?.getBoundingClientRect().height || 3.5 * rem;
+      setRoom((prev) =>
+        prev && prev.heightPx === panel.clientHeight && prev.rowPx === rowPx && prev.rem === rem ? prev : { heightPx: panel.clientHeight, rowPx, rem }
+      );
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [fill, hidden]);
 
   const openPreferences = () => {
     prefsReturnRef.current = document.activeElement as HTMLElement | null;
     setPrefsOpen(true);
   };
   const mine = board.rows.find((r) => r.isYou);
-  const shown = board.rows.slice(0, TOP);
-  const extraYou = mine && mine.rank > TOP ? [mine] : [];
+  const gapPx = room ? room.rem / 4 : 0; // the rows' space-y-1
+  const weekTop = room
+    ? rowsThatFit({ heightPx: room.heightPx, rowPx: room.rowPx, gapPx, youExtraPx: 1.25 * room.rem + room.rowPx, youRank: mine?.rank ?? null, min: TOP })
+    : TOP;
+  const allTimeTop = room
+    ? rowsThatFit({ heightPx: room.heightPx, rowPx: room.rowPx, gapPx, reservePx: 1.75 * room.rem, youExtraPx: gapPx + room.rowPx, youRank: allTime.data?.you?.rank ?? null, min: TOP })
+    : TOP;
+  const shown = board.rows.slice(0, weekTop);
+  const extraYou = mine && mine.rank > weekTop ? [mine] : [];
   const zone = zoneText(board);
 
   return (
-    <section data-testid="league-card" aria-labelledby="league-heading" className="flex h-full flex-col gap-3.5 rounded-2xl border border-line bg-white p-5 shadow-xs">
+    <section
+      ref={cardRef}
+      data-testid="league-card"
+      data-fill={fill || undefined}
+      aria-labelledby="league-heading"
+      className={clsx("flex h-full flex-col gap-3.5 rounded-2xl border border-line bg-white p-5 shadow-xs", fill && "lg:absolute lg:inset-0")}
+    >
       <div className="flex items-start justify-between gap-2">
         <h2 id="league-heading" className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-ink">
           <Trophy size={16} className="text-reward" aria-hidden="true" />
@@ -48,7 +98,7 @@ export function LeagueCard({ userId, board }: { userId: string; board: LeagueWee
         </span>
       </div>
 
-      {board.status === "hidden" ? (
+      {hidden ? (
         <div data-testid="league-hidden" className="space-y-2 text-sm text-muted">
           <p>You&apos;re hidden from leaderboards, so you don&apos;t see them either.</p>
           <button type="button" onClick={openPreferences} className="font-semibold text-primary-600 hover:text-primary-700">
@@ -74,7 +124,13 @@ export function LeagueCard({ userId, board }: { userId: string; board: LeagueWee
             ))}
           </div>
 
-          <div role="tabpanel" id={`league-panel-${tab}`} aria-labelledby={`league-tab-${tab}`} className="min-h-0 flex-1">
+          <div
+            ref={panelRef}
+            role="tabpanel"
+            id={`league-panel-${tab}`}
+            aria-labelledby={`league-tab-${tab}`}
+            className={clsx("min-h-0 flex-1", fill && "lg:overflow-hidden")}
+          >
             {tab === "week" ? (
               board.status === "not_joined" ? (
                 <p data-testid="league-not-joined" className="text-sm text-muted">
@@ -82,20 +138,20 @@ export function LeagueCard({ userId, board }: { userId: string; board: LeagueWee
                 </p>
               ) : (
                 <>
-                  <LeagueWeekRows rows={shown} userId={userId} />
+                  <LeagueWeekRows rows={shown} userId={userId} showZones={!!room} />
                   {extraYou.length > 0 && (
                     <>
                       <p aria-hidden="true" className="py-0.5 text-center text-xs text-muted">
                         ···
                       </p>
-                      <LeagueWeekRows rows={extraYou} userId={userId} />
+                      <LeagueWeekRows rows={extraYou} userId={userId} showZones={!!room} />
                     </>
                   )}
                 </>
               )
             ) : allTime.data ? (
               <>
-                <LeagueAllTimeRows rows={allTime.data.rows.slice(0, TOP)} you={allTime.data.you} />
+                <LeagueAllTimeRows rows={allTime.data.rows.slice(0, allTimeTop)} you={allTime.data.you} />
                 <p className="mt-2 text-[11px] text-muted">Updated hourly.</p>
               </>
             ) : allTime.isError ? (

@@ -82,6 +82,13 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
   with `mt-auto` or let the main content grow (`flex-1`). Keep `grid-cols-1`: without it the single
   phone column grows to its widest content and the whole page scrolls sideways. A card whose
   width varies uses container queries (`@container`, `@3xl:`).
+- **A side card beside two cards** (the Dashboard's League card): one grid; the two main cards
+  `lg:col-span-8` with explicit `lg:row-start-1` / `lg:row-start-2`, the side card
+  `lg:col-span-4 lg:col-start-9 lg:row-span-2 lg:row-start-1` in a `relative` slot with a
+  `lg:min-h-*` for its smallest content, and the card itself `lg:absolute lg:inset-0`, so it takes
+  the two cards' height without setting it. A list in it shows as many whole rows as fit
+  (measure; never a cut-off row). Keep every slot in the same place in the page whatever the
+  layout, so nothing is rebuilt when data arrives; DOM order is the phone order.
 - **Header** (`AppHeader`): below `lg` the nav tabs get their own full-width row under the brand
   (scrolling sideways on a phone); from `lg` they sit inline. Anything added to the header's
   right-hand group must still fit at 1024px and 1280px; check with the browser, not by eye.

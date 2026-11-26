@@ -353,17 +353,120 @@ describe("Profile & preferences: public name and visibility (D7)", () => {
   });
 });
 
+// ---------------------------------------------------------------- league card filling its slot (D14)
+
+describe("LeagueCard fill: beside Continue and the deck, as many whole rows as fit", () => {
+  // jsdom has no layout: the test plays the browser. The card reports its
+  // position, the list area its height, a row 54.5px; the observer fires on demand.
+  let resize: Array<() => void>;
+  let position: string;
+  const realGetComputedStyle = window.getComputedStyle;
+  const g = globalThis as { ResizeObserver?: unknown };
+  const hadResizeObserver = "ResizeObserver" in g;
+  const savedResizeObserver = g.ResizeObserver;
+
+  beforeEach(() => {
+    resize = [];
+    position = "absolute";
+    g.ResizeObserver = class {
+      constructor(cb: () => void) {
+        resize.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    };
+    jest
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((el: Element, pseudo?: string | null) =>
+        el instanceof HTMLElement && el.dataset.testid === "league-card" ? ({ position } as CSSStyleDeclaration) : realGetComputedStyle(el, pseudo)
+      );
+    jest.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ height: 54.5 } as DOMRect);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (hadResizeObserver) g.ResizeObserver = savedResizeObserver;
+    else delete g.ResizeObserver;
+  });
+
+  /** Give the list area a height and let the observer report it. */
+  const layOut = (heightPx: number) => {
+    Object.defineProperty(screen.getByRole("tabpanel"), "clientHeight", { configurable: true, get: () => heightPx });
+    act(() => resize.forEach((fire) => fire()));
+  };
+  const rowIds = () =>
+    within(screen.getByRole("tabpanel"))
+      .getAllByRole("listitem")
+      .map((li) => li.getAttribute("data-testid"));
+
+  it("fills the slot (absolutely placed, so it never sets the row heights) and lists the rows that fit, your row among them", () => {
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} fill />));
+    const card = screen.getByTestId("league-card");
+    expect(card).toHaveAttribute("data-fill", "true");
+    expect(card).toHaveClass("lg:absolute", "lg:inset-0");
+    expect(rowIds()).toEqual(["league-row-1", "league-row-2", "league-row-3", "league-row-7"]); // before measuring: the plain top 3
+    layOut(516); // 8 rows take 464px; a 9th would need 58.5 more
+    expect(rowIds()).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((r) => `league-row-${r}`));
+    expect(screen.queryByText("···")).toBeNull(); // you (7th) are in the list
+    // The zones are marked as on /leaderboard.
+    expect(screen.getByTestId("league-row-1")).toHaveClass("border-l-success");
+    expect(screen.getByTestId("league-row-5")).not.toHaveClass("border-l-4");
+  });
+
+  it("ranked below the rows that fit: your row after a ···, taking room from the top rows", () => {
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} fill />));
+    layOut(360); // 6 would fit; your row and its ··· take two of them
+    expect(rowIds()).toEqual(["league-row-1", "league-row-2", "league-row-3", "league-row-4", "league-row-7"]);
+    expect(screen.getByText("···")).toBeInTheDocument();
+    layOut(100); // never fewer than the top 3
+    expect(rowIds()).toEqual(["league-row-1", "league-row-2", "league-row-3", "league-row-7"]);
+  });
+
+  it("the room grows (e.g. the privacy notice goes): more rows; a board shorter than the room shows all of it", () => {
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} fill />));
+    layOut(516);
+    expect(rowIds()).toHaveLength(8);
+    layOut(2000);
+    expect(rowIds()).toHaveLength(12); // the whole group
+  });
+
+  it("not filling (below lg the card is static): the plain top 3, no zone marks", () => {
+    position = "static";
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} fill />));
+    layOut(900);
+    expect(rowIds()).toEqual(["league-row-1", "league-row-2", "league-row-3", "league-row-7"]);
+    expect(screen.getByTestId("league-row-1")).not.toHaveClass("border-l-4");
+  });
+
+  it("without fill nothing is measured: the plain top 3", () => {
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} />));
+    expect(resize).toHaveLength(0);
+    expect(screen.getByTestId("league-card")).not.toHaveAttribute("data-fill");
+    expect(screen.getByTestId("league-card")).not.toHaveClass("lg:absolute");
+  });
+
+  it("All time uses the same room (minus 'Updated hourly.'): every row that fits, your rank below", async () => {
+    render(withProviders(<LeagueCard userId="user-1" board={weekBoard()} fill />));
+    layOut(516);
+    fireEvent.click(screen.getByRole("tab", { name: "All time" }));
+    expect(await screen.findByTestId("alltime-row-5")).toBeInTheDocument(); // all 5 fit (3 without fill)
+    expect(screen.getByTestId("alltime-you")).toHaveTextContent("14You2,400 XP");
+  });
+});
+
 // ---------------------------------------------------------------- dashboard + footer
 
 describe("Dashboard and footer", () => {
-  it("the deck shares its row with the league card; the welcome uses the public name", async () => {
+  it("nothing to resume: the league card sits beside the deck as a plain card; the welcome uses the public name", async () => {
     profileResponse = { ...PROFILE, publicName: "Linh" };
     render(withProviders(<DashboardPage />));
     const card = await screen.findByTestId("league-card");
-    const row = screen.getByTestId("dashboard-deck-row");
-    expect(row).toHaveClass("lg:grid-cols-12");
-    expect(row).toContainElement(card);
-    expect(row).toContainElement(screen.getByTestId("vocabulary-card"));
+    const grid = screen.getByTestId("dashboard-learning");
+    expect(grid).toHaveClass("lg:grid-cols-12");
+    expect(grid).toContainElement(card);
+    expect(card).not.toHaveAttribute("data-fill");
+    expect(card.parentElement).toHaveClass("lg:col-span-4");
+    expect(card.parentElement).not.toHaveClass("lg:row-span-2");
+    expect(screen.getByTestId("vocabulary-card").parentElement).toHaveClass("lg:col-span-8");
     expect(await screen.findByRole("heading", { name: "Welcome back, Linh" })).toBeInTheDocument();
   });
 
@@ -373,7 +476,7 @@ describe("Dashboard and footer", () => {
     await screen.findByTestId("vocabulary-card");
     await waitFor(() => expect(screen.queryByLabelText("Loading your league")).toBeNull());
     expect(screen.queryByTestId("league-card")).toBeNull();
-    expect(screen.getByTestId("dashboard-deck-row")).not.toHaveClass("lg:grid-cols-12");
+    expect(screen.getByTestId("dashboard-learning")).not.toHaveClass("lg:grid-cols-12");
   });
 
   it("the footer shows the league rank only from an already-loaded board — it never asks for one", async () => {

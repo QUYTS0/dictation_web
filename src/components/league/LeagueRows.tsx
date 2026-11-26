@@ -16,8 +16,10 @@ function Avatar({ initials, isYou }: { initials: string; isYou: boolean }) {
     <span
       aria-hidden="true"
       className={clsx(
-        // Below 360px the name needs the room; rank and name still identify the row.
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold max-[359px]:hidden",
+        // Below 360px, or in a list narrower than 17rem (the League card beside two
+        // cards on a small laptop), the name needs the room; rank and name still
+        // identify the row.
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold max-[359px]:hidden @max-[17rem]:hidden",
         isYou ? "bg-primary-600 text-white" : "bg-surface text-ink ring-1 ring-line"
       )}
     >
@@ -70,7 +72,7 @@ function KudosButton({ row, userId }: { row: LeagueWeekRow; userId: string | und
  */
 export function LeagueWeekRows({ rows, userId, showZones = false }: { rows: LeagueWeekRow[]; userId: string | undefined; showZones?: boolean }) {
   return (
-    <ol aria-label="This week's ranking" className="space-y-1">
+    <ol aria-label="This week's ranking" className="@container space-y-1">
       {rows.map((r) => (
         <li
           key={r.memberKey}
@@ -112,7 +114,7 @@ export function LeagueWeekRows({ rows, userId, showZones = false }: { rows: Leag
 export function LeagueAllTimeRows({ rows, you }: { rows: LeagueAllTimeRow[]; you: { rank: number; totalXp: number } | null }) {
   const youListed = rows.some((r) => r.isYou);
   return (
-    <ol aria-label="All-time ranking" className="space-y-1">
+    <ol aria-label="All-time ranking" className="@container space-y-1">
       {rows.map((r) => (
         <li key={r.rank} data-testid={`alltime-row-${r.rank}`} data-you={r.isYou} className={clsx("flex items-center gap-2.5 rounded-xl border px-2.5 py-2", r.isYou ? "border-primary-500/40 bg-primary-50" : "border-transparent")}>
           <span className="w-6 shrink-0 text-center font-mono text-xs font-bold text-muted">{r.rank}</span>

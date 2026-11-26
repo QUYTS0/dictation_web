@@ -53,9 +53,9 @@ function jumpToCard(id: string) {
  *                                  jumping to its card), level, and "Start a
  *                                  new video"; last week's recap above it
  *   1. What should I continue?   — "Pick up where you left off" (ONE item,
- *                                  with its sentences to look at again),
- *                                  beside this week's league
+ *                                  with its sentences to look at again)
  *   2. Words to review           — the review deck (graded in place)
+ *      This week's league runs beside both on large screens (D14).
  *   3. Am I making progress?     — Learning performance, then error diagnostics
  *                                  beside the achievements
  * Each task has ONE home: no card repeats another (the old Next up card did).
@@ -157,16 +157,19 @@ function DashboardContent() {
   // Achievements: the case, a placeholder while loading, or nothing when
   // unavailable (e.g. migration 049 not applied) — never empty tiles.
   // League: the card, a placeholder while loading, or nothing when unavailable (050 not applied).
+  const leagueAvailable = (!!leagueQuery.data && !!userId) || leagueQuery.isPending;
+  // Plan D14: the league runs beside the resume card AND the deck, taking
+  // their height (it lists as many rows as fit). With no resume card (nothing
+  // unfinished, or it failed) it sits beside the deck only, as a plain card —
+  // never alone. While Continue is still loading it waits beside its placeholder.
+  const leagueTall = leagueAvailable && !!continueSlot && (continueQuery.data ? !!continueTop : !continueQuery.isError);
   const leagueSlot =
     leagueQuery.data && userId ? (
-      <LeagueCard userId={userId} board={leagueQuery.data} />
+      <LeagueCard userId={userId} board={leagueQuery.data} fill={leagueTall} />
     ) : leagueQuery.isPending ? (
-      <div aria-busy="true" aria-label="Loading your league" className="min-h-[320px] animate-pulse rounded-2xl border border-line bg-white" />
+      <div aria-busy="true" aria-label="Loading your league" className="h-full min-h-[320px] animate-pulse rounded-2xl border border-line bg-white" />
     ) : null;
-  // The league sits beside the resume card; with no resume card (nothing
-  // unfinished, or it failed) it moves beside the deck instead, never alone.
-  // While Continue is still loading it waits beside its placeholder.
-  const leagueBesideContinue = !!leagueSlot && !!continueSlot && (continueQuery.data ? !!continueTop : !continueQuery.isError);
+  const deckSlot = <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />;
   const achievementsSlot = achievementsQuery.data ? (
     <AchievementsCase tracks={achievementsQuery.data.tracks} />
   ) : achievementsQuery.isPending ? (
@@ -239,28 +242,41 @@ function DashboardContent() {
                 />
               )}
 
-              {/* 1. The resume card (with its sentences to look at again) and this
-                  week's league (≈ 2/3 : 1/3 on desktop); alone, a readable card width. */}
-              {continueSlot && (
-                <div
-                  data-testid="dashboard-actions"
-                  className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueBesideContinue ? "lg:grid-cols-12" : "w-full max-w-3xl")}
-                >
-                  <div className={clsx("min-w-0", leagueBesideContinue && "lg:col-span-8")}>{continueSlot}</div>
-                  {leagueBesideContinue && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
+              {/* 1–2. The resume card (with its sentences to look at again) above the
+                  review deck (≈ 2/3), and this week's league running beside both (≈ 1/3),
+                  taking their height without setting it (plan D14). With no resume card
+                  the pointer / error sits above at a readable width and the league sits
+                  beside the deck as a plain card; with no league each card takes the
+                  width alone. One grid, the three slots always in the same place, so
+                  nothing is rebuilt when a layout changes (the deck keeps its card).
+                  On a phone: resume, league, deck. */}
+              <div data-testid="dashboard-learning" className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueSlot && "lg:grid-cols-12")}>
+                {continueSlot && (
+                  <div
+                    key="continue"
+                    className={clsx(
+                      "min-w-0",
+                      leagueTall ? "lg:col-span-8 lg:col-start-1 lg:row-start-1" : "w-full max-w-3xl",
+                      leagueSlot && !leagueTall && "lg:col-span-12 lg:row-start-1"
+                    )}
+                  >
+                    {continueSlot}
+                  </div>
+                )}
+                {leagueSlot && (
+                  <div
+                    key="league"
+                    className={clsx(
+                      "relative min-w-0 lg:col-span-4 lg:col-start-9",
+                      leagueTall ? "lg:row-span-2 lg:row-start-1 lg:min-h-[36rem]" : continueSlot ? "lg:row-start-2" : "lg:row-start-1"
+                    )}
+                  >
+                    {leagueSlot}
+                  </div>
+                )}
+                <div key="deck" className={clsx("min-w-0", leagueSlot && "lg:col-span-8 lg:col-start-1", leagueSlot && (continueSlot ? "lg:row-start-2" : "lg:row-start-1"))}>
+                  {deckSlot}
                 </div>
-              )}
-
-              {/* 2. The review deck, full width (it adapts to its own width); the league
-                  joins it only when there is no resume card to sit beside. */}
-              <div
-                data-testid="dashboard-deck-row"
-                className={clsx("grid grid-cols-1 items-stretch gap-4 sm:gap-5", leagueSlot && !leagueBesideContinue && "lg:grid-cols-12")}
-              >
-                <div className={clsx("min-w-0", leagueSlot && !leagueBesideContinue && "lg:col-span-8")}>
-                  <VocabularyDeck userId={userId} summary={summary} vocab={vocab} showReviewButton={showVocabReviewButton} />
-                </div>
-                {leagueSlot && !leagueBesideContinue && <div className="min-w-0 lg:col-span-4">{leagueSlot}</div>}
               </div>
 
               {/* 3. Learning performance — the canonical metrics, each its own card. */}
