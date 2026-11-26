@@ -12,10 +12,11 @@ interface AddVideoDialogProps {
 }
 
 /**
- * The header's "New video" dialog, reachable from every signed-in page. A
- * true modal (ModalDialog: backdrop, Tab trap, Escape, focus restored to
- * whatever opened it). The typed link is owned by the caller, so closing
- * and reopening keeps it.
+ * The "New video" dialog. A true modal (ModalDialog: backdrop, Tab trap,
+ * Escape, focus restored to whatever opened it). The typed link is owned by
+ * the caller, so closing and reopening keeps it. Open it through
+ * `useNewVideoDialog` (NewVideoDialog.tsx): the app has ONE, shared by the
+ * header's New video button and the Dashboard hero.
  */
 export function AddVideoDialog({ url, onUrlChange, onClose }: AddVideoDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);

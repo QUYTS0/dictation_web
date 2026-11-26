@@ -17,11 +17,12 @@ Reference source: `C:\Users\Tri.Nguyen\source\repos\dictalearn---gamified-englis
 | D7 | Leaderboard identity | **Everyone included by default** under an auto-generated nickname, with an opt-out and an optional public name. |
 | D8 | Vocabulary card | **Inline flashcard with real grading** through the existing review API (Again/Hard/Good/Easy). |
 | D9 | Streak | **A day with only vocabulary review counts toward the streak.** Today it doesn't: `POST /api/vocabulary/review` only updates `vocabulary_items` in place, with no activity record and no review history. |
-| D10 | Hero button | *(Renamed "Start a new video" in D13.)* **"Start today's practice" starts a new video**: it opens a link box inside the hero (the same form as the header's New Video dialog). Resuming belongs to the Continue card, so the two buttons never do the same thing. |
+| D10 | Hero button | *(Renamed "Start a new video" in D13; amber only once nothing is left since D15; opens the header's New video dialog instead of a box in the hero since D15's follow-up.)* **"Start today's practice" starts a new video**: it opens a link box inside the hero (the same form as the header's New Video dialog). Resuming belongs to the Continue card, so the two buttons never do the same thing. |
 | D11 | UI additions | Streak status line, first-run dashboard, fill-in-the-blank cards + keyboard shortcuts, weekly-track day details, resume point on the Continue card, celebrations. Details in §4.5. |
 | D12 | Follow-up (2026-11-26) | **Goal ring** replaces the ember as today's marker; **motion only on change** (no endless loops); **even desktop rows**. Details in §4.5.8. |
 | D13 | One home per task (2026-11-26) | **Next up removed**: it always repeated another card. Its sentences move into the **Continue card**, the **League card** takes its place beside Continue, and the hero gets a **Today list** (what's left today, each row jumping to its card, then "All done for today ✓"). The hero button is renamed **"Start a new video"**. The end-of-round "Library" button now opens My Learning. Details in §4.5.9. |
 | D14 | League beside both (2026-11-26) | The **review deck** narrows to Continue's width (8 col) and the **League card runs beside both** (4 col, two rows), taking their height and listing **as many whole rows as fit** (at least the top 3) with the zones marked. One grid keeps the three cards in place, so none is rebuilt when the layout changes. Details in §4.5.10. |
+| D15 | One amber action (2026-11-26) | The hero has **one amber action at a time**: the **first open Today row** ("start here") while something is left, and **"Start a new video" only once nothing is** (a quiet link before that; the header's New video is on every page). A new first row, **"N min to today's goal"**, goes to the Continue card, or starts a new video when nothing is unfinished. The **level bar moves to the left column** under the weekly track, and the columns line up at the top (hero about 60px shorter). Details in §4.5.11. |
 
 Defaults chosen in this plan (not asked; change them before implementation if you disagree):
 
@@ -82,11 +83,13 @@ Hero — navy gradient, full width
 ┌ Welcome back, Tri ─────────────────────────────┬ TODAY                           ⚙ ┐
 │ Your 12-day streak ends at midnight. One       │ Practice time         11 / 15 min │
 │ sentence or one word review keeps it going.    │ ███████████░░░░                   │
-│ WEEKLY CONSISTENCY TRACK · 5/7 active          │ ○ 3 sentences need another look ↓ │
-│ Mon  Tue  Wed  Thu  Fri  Sat  Sun              │ ○ 2 words are due               ↓ │
-│  ✓────✓────✓────·────✓────✓────◔              │ ● Level 14     4,850 / 5,000 XP   │
-│ +85  +90  +110  —   +95  +140 +40              │ [ + Start a new video ]           │
+│ WEEKLY CONSISTENCY TRACK · 5/7 active          │ [○ 4 min to today's goal       ↓] │ ← amber: start here
+│ Mon  Tue  Wed  Thu  Fri  Sat  Sun              │  ○ 3 sentences need another look ↓│
+│  ✓────✓────✓────·────✓────✓────◔              │  ○ 2 words are due              ↓ │
+│ +85  +90  +110  —   +95  +140 +40              │  + Start a new video   (quiet)    │
+│ ● Level 14              4,850 / 5,000 XP       │                                   │
 └────────────────────────────────────────────────┴───────────────────────────────────┘
+(All done: "All done for today ✓", and [ + Start a new video ] becomes the amber button.)
 8 col:    Continue learning (thumbnail + bars + resume point;      ┐  League card (weekly XP),
           its sentences to look at again + "Review sentences")     │  runs beside both: as many
 8 col:    Spaced repetition deck (Fill the gap / Meaning, grades,  │  rows as fit, zones marked
@@ -233,7 +236,7 @@ Query hooks go in `src/lib/queries/{dashboard,profile,xp,achievements,leaderboar
 - `src/components/AppHeader.tsx`: restyle; add Leaderboard link (Phase 7 enables it), New Video button, streak pill and popover, XP pill slot (Phase 5 fills it). Move `useStreak` from `src/app/dictation/[videoId]/useStreak.ts` to `src/lib/queries/streak.ts` so the header and practice page share it.
 - `src/components/AddVideoForm.tsx`: the logic from `page.tsx:81-125` (validation, `/api/video/resolve`, `invalidateLearningViews`, `router.push`), with a `variant` for light (dialog) and dark (hero) surfaces. Used by:
   - `src/components/AddVideoDialog.tsx`: the header's New Video button. Accessible dialog (focus trap, Esc, return focus).
-  - the hero link box (§4.5.1) and the first-run hero (§4.5.3).
+  - the hero link box (§4.5.1) and the first-run hero (§4.5.3). *(Since D15's follow-up the hero opens the header's dialog instead: one `NewVideoDialogProvider` in `Providers.tsx`.)*
 - `src/components/ProfileDialog.tsx` (Phase 4) from `UserButton`; `src/components/AppFooter.tsx`; `src/components/ToastProvider.tsx` mounted in `Providers.tsx`.
 - Move `ConfettiBurst` from `src/app/dictation/[videoId]/components/ConfettiBurst.tsx` to `src/components/ConfettiBurst.tsx` and make it render nothing under `prefers-reduced-motion: reduce` (it doesn't check today). Used by the practice page and celebrations (§4.5.7).
 
@@ -264,6 +267,7 @@ Full group list (≤ 30) with weekly XP, tier ladder, promotion/demotion zones, 
 - Submitting resolves the video and opens it, exactly like the header dialog. Errors show inline under the field.
 - The button is always available, also after the goal is met. "Goal met today ✓" is a label next to the target, not a button state.
 - Division of work: hero button = **start something new**, Continue card = **resume** (and its sentences to look at again), review deck = **words**. Since D13 there is no Next up (§4.5.9).
+- *Since D15 (§4.5.11):* amber only once nothing is left today; before that a quiet link at the foot of the Today panel, and not shown at all when the "N min to today's goal" row is itself the way to start a new video. The link box opens at the foot of the panel either way.
 
 #### 4.5.2 Streak status line — Phase 2
 
@@ -350,6 +354,23 @@ At full width the deck had a wide empty area under "Up next" and a practice sent
 - **Fallbacks:** no Continue card → the pointer or error above at a readable width, and the League card beside the deck only, as a plain card (top 3). No League card → Continue at a readable width and the deck at full width.
 - **The deck** keeps its container query: card and "Up next" side by side when it is at least 48rem wide (1440px screens), stacked below that (1024–1279px).
 - **Narrow League lists** (beside two cards on a 1024px screen) hide the avatar initials (`@max-[17rem]`), so names have room; rank and name still identify a row.
+
+#### 4.5.11 One amber action: the hero follows the Today list (D15) — done 2026-11-26
+
+The amber "Start a new video" was the loudest thing on the page, but on most days the least urgent: the Today list above it said what to finish, and the brightest button pointed at something new. The header's New video is on every page anyway.
+
+- **One amber action at a time** (`todayPlan().next`, `src/lib/dashboard/today.ts`):
+  - something left → the **first open Today row** is amber ("start here"); the others stay quiet; "Start a new video" is a quiet link;
+  - nothing left (all done, or nothing known to do) → **"Start a new video"** is the amber button (the same element, so focus stays put);
+  - still loading (any of the week, Continue or the word stats pending) → nothing is amber yet, so the amber never hops from row to row as sources answer.
+- **"N min to today's goal"** (`goalToday`): the first row while the goal isn't met. Minutes left are rounded up, so the shown minutes (rounded down) plus the minutes left make the goal, and it never says "0 min". It jumps to the Continue card (`#continue-card`, focused) — resuming counts toward the goal. With nothing unfinished it **starts a new video** instead (a disclosure button for the hero's link box), and is then the hero's only new-video control. Unknown Continue or week → no row. Word reviews carry no time, so they never count as practising toward the goal.
+- **Rows wrap** rather than being cut off on a narrow phone.
+- **The level bar** (lifetime progress, not today's) moves to the left column under the weekly track; the columns line up at the top. The hero is about 60px shorter (≈ 315–360px at 1440px).
+- Order and rules otherwise as §4.5.9: practice time, then minutes / sentences / words, "All done for today ✓" only when every source answered with nothing left.
+- Also: the Continue card's dot no longer pulses forever (D12's motion rule).
+- **Follow-up (same day):**
+  - **One New video dialog.** "Start a new video" and the minutes row (nothing unfinished) open the header's **New video** dialog, not a box inside the hero: `NewVideoDialogProvider` (`src/components/NewVideoDialog.tsx`, mounted once in `Providers.tsx`) owns the dialog and the half-typed link, so a link typed after opening it from the hero is still there when the header's button opens it, and the other way round. Focus returns to whatever opened it. Outside the provider (a component rendered on its own) `useNewVideoDialog` gives the caller a dialog of its own. The hero's inline link box is gone; the first-run hero keeps its field.
+  - **Aligned rows.** Every Today row has the same box (it bleeds 0.625rem past the panel's content edge and pads it back, with a 1px border, amber or transparent), so the circles, labels and arrows line up with "Practice time", the minutes on the right and "Start a new video" below, amber row or not.
 
 ## 5. Phases
 

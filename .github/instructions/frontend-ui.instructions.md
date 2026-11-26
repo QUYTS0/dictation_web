@@ -24,17 +24,21 @@ The product plan behind the current Dashboard is `.claude/dashboard-redesign-pla
 
 - `/dashboard` is the signed-in home. Primary destinations sit in the header nav:
   Dashboard, My Learning, Vocabulary, Bookmarks, History, Leaderboard.
-- **Starting a new video** is always one step away, in three places that share one form
+- **Starting a new video** is always one step away, and every way in shares one form
   (`src/components/AddVideoForm.tsx`, one `/api/video/resolve` flow):
-  1. the header's **New video** button (`AddVideoDialog`, on every signed-in page),
-  2. the Dashboard hero's **Start a new video** button, which opens the link box inside the hero,
-  3. the **first-run hero**, for a learner with nothing yet (no videos, sessions or words).
-  Do not add a separate URL input at the top of the Dashboard; the hero already is that.
+  1. the app's ONE **New video** dialog (`NewVideoDialogProvider` in `Providers.tsx`, opened with
+     `useNewVideoDialog().open`; it keeps a half-typed link). The header's **New video** button
+     opens it on every signed-in page, and so do the Dashboard hero's **Start a new video** (a
+     quiet link while today's tasks are left, the amber button once nothing is) and the Today
+     list's "N min to today's goal" when nothing is unfinished;
+  2. the **first-run hero**, for a learner with nothing yet (no videos, sessions or words), with
+     the field inline.
+  Do not add another URL input or a second dialog; open the shared one.
 - Dashboard order (`src/app/dashboard/page.tsx`). Keep it.
   1. Monday recap banner (first visit of a league week only)
-  2. Hero: welcome, streak status, weekly consistency track | **Today list** (practice time
-     toward the goal, then what else is left today, then "All done for today ✓"), level bar,
-     Start a new video
+  2. Hero: welcome, streak status, weekly consistency track, level bar | **Today list** (practice
+     time toward the goal, then what is left today — minutes to the goal, sentences, words — then
+     "All done for today ✓"), Start a new video
   3. Continue learning (resume + its sentences to look at again), and below it
   4. the Review deck, both 8 columns, with the League card running beside both (4 columns, two
      rows; it takes their height and lists as many whole rows as fit). With no Continue card it
@@ -51,7 +55,8 @@ The product plan behind the current Dashboard is `.claude/dashboard-redesign-pla
     card;
   - review words ("Start review"): the review deck.
   The hero's Today list only says what's left today, and each row jumps to (and focuses) the
-  card that owns the task. There is no "Next up" card: it was removed because it always repeated
+  card that owns the task. **One amber action at a time:** the first open Today row while
+  something is left; "Start a new video" only once nothing is. There is no "Next up" card: it was removed because it always repeated
   one of these cards.
 
 ## Data honesty (non-negotiable)

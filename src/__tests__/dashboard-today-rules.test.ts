@@ -1,11 +1,12 @@
 /**
  * The Dashboard's "what's left today" rules (src/lib/dashboard/today.ts,
- * plan §4.5.9), which replaced the Next up decision: the sentences of the
- * Continue round, the Today list's rows and "All done", and unknown data
- * never read as "nothing left".
+ * plan §4.5.9, §4.5.11), which replaced the Next up decision: the sentences
+ * of the Continue round, the minutes still to practise, the Today list's rows
+ * and "All done", the hero's one amber action, and unknown data never read
+ * as "nothing left".
  */
-import { sentencesHeadline, sentencesToReview, todayPlan, toSource, vocabularyHeadline, type Source, type TodayInputs } from "@/lib/dashboard/today";
-import type { LibraryItem } from "@/lib/types/learning";
+import { goalToday, sentencesHeadline, sentencesToReview, todayPlan, toSource, vocabularyHeadline, type GoalToday, type Source, type TodayInputs } from "@/lib/dashboard/today";
+import type { DashboardWeek, LibraryItem } from "@/lib/types/learning";
 
 const ready = <T,>(data: T): Source<T> => ({ status: "ready", data });
 const PENDING = { status: "pending" } as const;
@@ -46,11 +47,16 @@ function item(over: Partial<LibraryItem> = {}, acc = { correct: 5, practiced: 8 
 }
 
 const THREE = { roundId: "r1", videoId: "v1", title: "Talk", count: 3 };
+const MET = ready<GoalToday>({ met: true, minutesLeft: 0 });
+const LEFT = (minutesLeft: number) => ready<GoalToday>({ met: false, minutesLeft });
+const NEEDS = item(); // 3 sentences need another look
+const CLEAN = item({}, { correct: 8, practiced: 8 });
+// Default: goal met, nothing unfinished, nothing due — i.e. all done.
 const inputs = (over: Partial<TodayInputs> = {}): TodayInputs => ({
-  sentences: ready(null),
+  resume: ready(null),
   words: ready({ due: 0, reviewable: 0 }),
   wordsReviewedToday: 0,
-  goalMet: false,
+  goal: MET,
   ...over,
 });
 
@@ -70,13 +76,44 @@ describe("sentencesToReview: only the Continue item's active, current round", ()
   });
 });
 
+describe("goalToday: minutes still to practise", () => {
+  const week = (activeSec: number, goalMinutes = 20): DashboardWeek => ({
+    timeZone: "UTC",
+    today: "2026-11-25",
+    weekStart: "2026-11-23",
+    goalMinutes,
+    goalIsDefault: false,
+    days: [{ date: "2026-11-25", practiced: activeSec > 0, activeSec }],
+  });
+  it("rounded up, so the shown (rounded-down) minutes plus the minutes left make the goal", () => {
+    expect(goalToday(week(12 * 60 + 36))).toEqual({ met: false, minutesLeft: 8 }); // shown 12 / 20
+    expect(goalToday(week(0))).toEqual({ met: false, minutesLeft: 20 });
+    expect(goalToday(week(20 * 60 - 1))).toEqual({ met: false, minutesLeft: 1 }); // never "0 min" to go
+  });
+  it("met → nothing left", () => {
+    expect(goalToday(week(20 * 60))).toEqual({ met: true, minutesLeft: 0 });
+    expect(goalToday(week(45 * 60))).toEqual({ met: true, minutesLeft: 0 });
+  });
+});
+
 describe("todayPlan: what's left today", () => {
-  it("sentences first, then words (the old Next up order)", () => {
-    const { rows } = todayPlan(inputs({ sentences: ready(THREE), words: ready({ due: 2, reviewable: 2 }) }));
+  it("minutes to the goal first, then sentences, then words", () => {
+    const { rows } = todayPlan(inputs({ goal: LEFT(8), resume: ready(NEEDS), words: ready({ due: 2, reviewable: 2 }) }));
     expect(rows).toEqual([
+      { kind: "practice", headline: "8 min to today's goal", via: "continue" },
       { kind: "sentences", headline: "3 sentences need another look" },
       { kind: "words", done: false, headline: "2 words are due" },
     ]);
+  });
+
+  it("practising needs a video: resume the unfinished one, else start one; unknown either way → no row", () => {
+    expect(todayPlan(inputs({ goal: LEFT(5), resume: ready(CLEAN) })).rows).toEqual([{ kind: "practice", headline: "5 min to today's goal", via: "continue" }]);
+    expect(todayPlan(inputs({ goal: LEFT(5), resume: ready(null) })).rows).toEqual([{ kind: "practice", headline: "5 min to today's goal", via: "new-video" }]);
+    for (const unknown of [PENDING, ERROR]) {
+      expect(todayPlan(inputs({ goal: LEFT(5), resume: unknown })).rows).toEqual([]);
+      expect(todayPlan(inputs({ goal: unknown, resume: ready(CLEAN) })).rows).toEqual([]);
+    }
+    expect(todayPlan(inputs({ goal: MET, resume: ready(CLEAN) })).rows).toEqual([]); // goal met: nothing to add
   });
 
   it("words: due wins over new; new-only has its own factual line", () => {
@@ -93,25 +130,49 @@ describe("todayPlan: what's left today", () => {
   });
 
   it("all done: goal met, no sentences, words clear (reviewed or none)", () => {
-    expect(todayPlan(inputs({ goalMet: true })).allDone).toBe(true);
-    expect(todayPlan(inputs({ goalMet: true, wordsReviewedToday: 5 })).allDone).toBe(true);
-    expect(todayPlan(inputs({ goalMet: false })).allDone).toBe(false);
-    expect(todayPlan(inputs({ goalMet: true, sentences: ready(THREE) })).allDone).toBe(false);
-    expect(todayPlan(inputs({ goalMet: true, words: ready({ due: 1, reviewable: 1 }) })).allDone).toBe(false);
+    expect(todayPlan(inputs()).allDone).toBe(true);
+    expect(todayPlan(inputs({ wordsReviewedToday: 5 })).allDone).toBe(true);
+    expect(todayPlan(inputs({ resume: ready(CLEAN) })).allDone).toBe(true); // unfinished, but nothing to look at again
+    expect(todayPlan(inputs({ goal: LEFT(3) })).allDone).toBe(false);
+    expect(todayPlan(inputs({ resume: ready(NEEDS) })).allDone).toBe(false);
+    expect(todayPlan(inputs({ words: ready({ due: 1, reviewable: 1 }) })).allDone).toBe(false);
   });
 
   it("unknown is never 'nothing left': a pending or failed source shows no row and blocks 'All done'", () => {
     for (const unknown of [PENDING, ERROR]) {
-      expect(todayPlan(inputs({ goalMet: true, sentences: unknown })).allDone).toBe(false);
-      expect(todayPlan(inputs({ goalMet: true, words: unknown })).allDone).toBe(false);
-      expect(todayPlan(inputs({ sentences: unknown, words: unknown })).rows).toEqual([]);
+      expect(todayPlan(inputs({ resume: unknown })).allDone).toBe(false);
+      expect(todayPlan(inputs({ words: unknown })).allDone).toBe(false);
+      expect(todayPlan(inputs({ goal: unknown })).allDone).toBe(false); // week loading or unavailable
+      expect(todayPlan(inputs({ resume: unknown, words: unknown })).rows).toEqual([]);
     }
-    expect(todayPlan(inputs({ goalMet: null })).allDone).toBe(false); // week unavailable
+  });
+});
+
+describe("todayPlan: the hero's one amber action", () => {
+  it("something left → the first open row", () => {
+    expect(todayPlan(inputs({ goal: LEFT(8), resume: ready(NEEDS) })).next).toBe("row");
+    expect(todayPlan(inputs({ words: ready({ due: 2, reviewable: 2 }) })).next).toBe("row");
+  });
+
+  it("nothing left → 'Start a new video' (all done, or nothing known to do)", () => {
+    expect(todayPlan(inputs()).next).toBe("new-video");
+    expect(todayPlan(inputs({ wordsReviewedToday: 4 })).next).toBe("new-video"); // a ticked row is not open
+    // A failed source has answered: nothing known is left, so a new video is the way on, but never "All done".
+    const failed = todayPlan(inputs({ words: ERROR }));
+    expect(failed.next).toBe("new-video");
+    expect(failed.allDone).toBe(false);
+  });
+
+  it("still loading → nothing singled out yet (no amber hopping from row to row as sources answer)", () => {
+    expect(todayPlan(inputs({ resume: PENDING, words: ready({ due: 2, reviewable: 2 }) })).next).toBeNull();
+    expect(todayPlan(inputs({ goal: PENDING })).next).toBeNull();
+    expect(todayPlan(inputs({ words: PENDING })).next).toBeNull();
   });
 });
 
 describe("copy and sources", () => {
   it("headlines are factual; singular forms; no order or batch claims", () => {
+    expect(todayPlan(inputs({ goal: LEFT(1), resume: ready(CLEAN) })).rows[0]).toMatchObject({ headline: "1 min to today's goal" });
     expect(sentencesHeadline(1)).toBe("1 sentence needs another look");
     expect(sentencesHeadline(3)).toBe("3 sentences need another look");
     expect(vocabularyHeadline("due", 1)).toBe("1 word is due");

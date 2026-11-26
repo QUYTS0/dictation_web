@@ -259,9 +259,55 @@ describe("WeeklyTrack + day details (plan §4.5.5, Phase 4)", () => {
 // ---------------------------------------------------------------- today's target
 
 describe("TodayTarget (D3) in the Today list", () => {
-  const plan = (week: DashboardWeek | undefined, onChangeGoal = jest.fn()) => (
-    <TodayPlan week={week} weekPending={false} rows={[]} allDone={false} onChangeGoal={onChangeGoal} changeGoalRef={null} onJump={jest.fn()} />
+  const plan = (week: DashboardWeek | undefined, onChangeGoal = jest.fn(), over: Partial<React.ComponentProps<typeof TodayPlan>> = {}) => (
+    <TodayPlan
+      week={week}
+      weekPending={false}
+      rows={[]}
+      allDone={false}
+      highlightFirst={false}
+      onChangeGoal={onChangeGoal}
+      changeGoalRef={null}
+      onJump={jest.fn()}
+      onStartNewVideo={jest.fn()}
+      {...over}
+    />
   );
+
+  it("the first OPEN row is the one amber 'start here' — only once every source has answered (highlightFirst)", () => {
+    const open = [
+      { kind: "sentences", headline: "3 sentences need another look" },
+      { kind: "words", done: false, headline: "2 words are due" },
+    ] as const;
+    const { rerender } = render(plan(WEEK, jest.fn(), { rows: [...open] }));
+    expect(document.querySelectorAll("[data-next]")).toHaveLength(0); // still loading: nothing singled out
+    rerender(plan(WEEK, jest.fn(), { rows: [...open], highlightFirst: true }));
+    expect(screen.getByTestId("today-row-sentences")).toHaveAttribute("data-next", "true");
+    expect(screen.getByTestId("today-row-sentences")).toHaveClass("bg-reward");
+    expect(screen.getByTestId("today-row-words")).not.toHaveAttribute("data-next");
+    expect(document.querySelectorAll("[data-next]")).toHaveLength(1);
+    // A ticked row is done, never "start here".
+    rerender(plan(WEEK, jest.fn(), { rows: [{ kind: "words", done: true, reviewed: 4 }], highlightFirst: true }));
+    expect(document.querySelectorAll("[data-next]")).toHaveLength(0);
+  });
+
+  it("minutes to the goal: jumps to Continue — or, with nothing unfinished, opens the New video dialog", () => {
+    const onJump = jest.fn();
+    const onStartNewVideo = jest.fn();
+    const { rerender } = render(plan(WEEK, jest.fn(), { rows: [{ kind: "practice", headline: "4 min to today's goal", via: "continue" }], highlightFirst: true, onJump }));
+    const jump = screen.getByTestId("today-row-practice");
+    expect(jump).toHaveAccessibleName("4 min to today's goal, go to Continue learning");
+    expect(jump).toHaveAttribute("href", "#continue-card");
+    expect(jump).toHaveAttribute("data-next", "true");
+    fireEvent.click(jump);
+    expect(onJump).toHaveBeenCalledWith("practice");
+
+    rerender(plan(WEEK, jest.fn(), { rows: [{ kind: "practice", headline: "4 min to today's goal", via: "new-video" }], highlightFirst: true, onStartNewVideo }));
+    const start = screen.getByRole("button", { name: "4 min to today's goal, start a new video" });
+    expect(start).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(start);
+    expect(onStartNewVideo).toHaveBeenCalledTimes(1);
+  });
 
   it("practice time of the goal, a bar, and a way to change the goal — no 'met' label before it's met", () => {
     const onChangeGoal = jest.fn();
@@ -301,7 +347,10 @@ describe("Dashboard hero and Learning performance with the week", () => {
     const hero = await screen.findByTestId("dashboard-welcome");
     await within(hero).findByTestId("weekly-track");
     expect(within(hero).getByTestId("today-target-value")).toHaveTextContent("11 of 15 minutes");
-    expect(within(hero).getByRole("button", { name: "Start a new video" })).toBeInTheDocument();
+    // Nothing unfinished and 4 minutes to go: practising starts with a new video, and that row
+    // is the hero's only new-video control (plan §4.5.11).
+    expect(await within(hero).findByRole("button", { name: "4 min to today's goal, start a new video" })).toHaveAttribute("data-next", "true");
+    expect(within(hero).queryByTestId("hero-new-video")).toBeNull();
 
     const bars = await screen.findByTestId("progress-week-bars");
     expect(within(screen.getByTestId("progress-active")).getByTestId("progress-week-bars")).toBe(bars);

@@ -84,12 +84,14 @@ export function ContinueLearningCard({ item, userId }: { item: LibraryItem; user
 
   return (
     <section
+      id="continue-card"
+      tabIndex={-1}
       aria-labelledby="continue-learning"
       data-testid="continue-learning"
-      className="h-full rounded-2xl border border-line bg-white p-5 shadow-xs sm:p-6"
+      className="h-full scroll-mt-28 rounded-2xl border border-line bg-white p-5 shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 sm:p-6"
     >
       <div className="mb-3 flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-primary-600 motion-safe:animate-pulse" aria-hidden="true" />
+        <span className="h-2 w-2 rounded-full bg-primary-600" aria-hidden="true" />
         <h2 id="continue-learning" className="text-xs font-bold uppercase tracking-wider text-primary-600">
           Pick up where you left off
         </h2>

@@ -1,17 +1,16 @@
 "use client";
 
-import { KeyboardEvent, Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { ArrowRight, X } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import AppHeader from "@/components/AppHeader";
 import AppFooter from "@/components/AppFooter";
-import { AddVideoForm } from "@/components/AddVideoForm";
+import { useNewVideoDialog } from "@/components/NewVideoDialog";
 import { useAuth } from "@/context/auth";
 import { PAGE_PADDING_CLASS, PAGE_WIDTH_CLASS } from "@/lib/layout/pageWidth";
-import { sentencesToReview, todayPlan, toSource } from "@/lib/dashboard/today";
-import { goalProgress } from "@/lib/dashboard/week";
+import { goalToday, todayPlan, toSource } from "@/lib/dashboard/today";
 import { prefersReducedMotion } from "@/lib/motion";
 import { AchievementsCase } from "./components/AchievementsCase";
 import { ContinueLearningCard } from "./components/ContinueLearningCard";
@@ -32,6 +31,9 @@ import { useLeaderboardQuery } from "@/lib/queries/leaderboard";
 import { useProfileQuery } from "@/lib/queries/profile";
 import { useVocabularyStatsQuery } from "@/lib/queries/vocabulary";
 
+/** Where each Today row goes: the card (or section) that owns the task. */
+const JUMP_TARGET_ID = { practice: "continue-card", sentences: "continue-sentences", words: "review-deck" } as const;
+
 /**
  * The Today list's jumps: scroll the card that owns the task into view
  * (honoring reduced motion), then focus it without a second jump, so its
@@ -48,10 +50,12 @@ function jumpToCard(id: string) {
  * The learner's home (.claude/dashboard-redesign-plan.md). It answers, in
  * this order:
  *   0. What's left today?        — the hero: welcome, streak status, this
- *                                  week's track, the Today list (practice
- *                                  time, then sentences / words left, each
- *                                  jumping to its card), level, and "Start a
- *                                  new video"; last week's recap above it
+ *                                  week's track and level; the Today list
+ *                                  (practice time, then minutes / sentences /
+ *                                  words left, each going to its card, the
+ *                                  first one amber) and "Start a new video"
+ *                                  (amber only once nothing is left); last
+ *                                  week's recap above it
  *   1. What should I continue?   — "Pick up where you left off" (ONE item,
  *                                  with its sentences to look at again)
  *   2. Words to review           — the review deck (graded in place)
@@ -67,14 +71,10 @@ function DashboardContent() {
   const pathname = usePathname();
   const { user, loading, openAuthModal } = useAuth();
   const userId = user?.id;
+  // The first-run hero's link field.
   const [url, setUrl] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
-  // Focus hand-offs across the disclosure's mount/unmount: focus the input
-  // once the form mounts, and return focus to the toggle on close.
-  const pendingInputFocus = useRef(false);
-  const returnFocusToToggle = useRef(false);
-  const addVideoInputRef = useRef<HTMLInputElement>(null);
-  const addToggleRef = useRef<HTMLButtonElement>(null);
+  // "Start a new video" opens the app's one New video dialog, the header's.
+  const newVideo = useNewVideoDialog();
 
   const summaryQuery = useDashboardSummaryQuery(userId);
   const summary = summaryQuery.data;
@@ -89,42 +89,17 @@ function DashboardContent() {
 
   useScrollRestoration(pathname, userId, !summaryQuery.isLoading && !continueQuery.isLoading);
 
-  useEffect(() => {
-    if (addOpen && pendingInputFocus.current) {
-      addVideoInputRef.current?.focus(); // right under the toggle: no scroll needed
-      pendingInputFocus.current = false;
-    } else if (!addOpen && returnFocusToToggle.current) {
-      returnFocusToToggle.current = false;
-      addToggleRef.current?.focus();
-    }
-  }, [addOpen]);
-
-  const openAddVideo = () => {
-    pendingInputFocus.current = true;
-    setAddOpen(true);
-  };
-  // Collapsing keeps whatever was typed (state lives here, not in the form).
-  const closeAddVideo = () => {
-    returnFocusToToggle.current = true;
-    setAddOpen(false);
-  };
-  const onAddKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeAddVideo();
-    }
-  };
-
   // The ONE resume item; its round's sentences to look at again live in its card.
   const continueTop = continueQuery.data?.items[0] ?? null;
   // The deck owns "Start review" (the Today list only jumps to it).
   const showVocabReviewButton = vocab.status === "ready" && vocab.data.reviewable > 0;
-  // What's left today (plan §4.5.9). Unknown sources stay unknown, never "nothing left".
+  // What's left today and the hero's one amber action (plan §4.5.9, §4.5.11).
+  // Unknown sources stay unknown, never "nothing left".
   const today = todayPlan({
-    sentences: continueQuery.data ? { status: "ready", data: sentencesToReview(continueTop) } : continueQuery.isError ? { status: "error" } : { status: "pending" },
+    resume: toSource({ data: continueQuery.data ? continueTop : undefined, isError: continueQuery.isError }),
     words: vocab,
     wordsReviewedToday: xp ? (xp.days.find((d) => d.date === xp.today)?.activity.wordsReviewed ?? 0) : null,
-    goalMet: weekQuery.data ? goalProgress(weekQuery.data).met : null,
+    goal: weekQuery.data ? { status: "ready", data: goalToday(weekQuery.data) } : weekQuery.isError ? { status: "error" } : { status: "pending" },
   });
 
   // Primary slot: the resume card, a load/error state, a pointer to My
@@ -176,29 +151,11 @@ function DashboardContent() {
     <div aria-busy="true" aria-label="Loading achievements" className="min-h-[260px] animate-pulse rounded-2xl border border-line bg-white" />
   ) : null;
 
-  const addPanel = (
-    <section id="add-video" className="scroll-mt-24" aria-labelledby="add-video-heading" onKeyDown={onAddKeyDown}>
-      <div className="mb-2 flex items-center justify-between">
-        <h2 id="add-video-heading" className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-          Start a new video
-        </h2>
-        <button
-          type="button"
-          onClick={closeAddVideo}
-          aria-label="Close add a video"
-          className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <AddVideoForm url={url} onUrlChange={setUrl} variant="dark" layout="stacked" inputId="add-video-url" inputRef={addVideoInputRef} />
-    </section>
-  );
-
   return (
     <div className="relative flex min-h-screen w-full flex-1 flex-col bg-page font-sans text-ink antialiased">
       <div className="flex flex-1 flex-col">
         <AppHeader active="dashboard" />
+        {newVideo.dialog}
 
         <main className={clsx("mx-auto flex w-full flex-1 flex-col gap-8 py-8 sm:gap-10", PAGE_WIDTH_CLASS.wide, PAGE_PADDING_CLASS.wide)}>
           {loading ? (
@@ -231,14 +188,10 @@ function DashboardContent() {
                   week={weekQuery.data}
                   weekPending={weekQuery.isPending}
                   xp={xp}
-                  todayRows={today.rows}
-                  todayAllDone={today.allDone}
-                  onJump={(target) => jumpToCard(target === "sentences" ? "continue-sentences" : "review-deck")}
+                  today={today}
+                  onJump={(target) => jumpToCard(JUMP_TARGET_ID[target])}
                   celebrationBurst={celebrationBurst}
-                  addOpen={addOpen}
-                  onToggleAdd={() => (addOpen ? closeAddVideo() : openAddVideo())}
-                  addToggleRef={addToggleRef}
-                  addPanel={addPanel}
+                  onStartNewVideo={newVideo.open}
                 />
               )}
 

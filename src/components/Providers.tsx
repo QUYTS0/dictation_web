@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { AuthProvider } from "@/context/auth";
 import { AchievementUnlockNotifier } from "@/components/AchievementUnlockNotifier";
 import { NavigationFlushObserver } from "@/components/NavigationFlushObserver";
+import { NewVideoDialogProvider } from "@/components/NewVideoDialog";
 import { ToastProvider } from "@/components/ToastProvider";
 import { practiceFlushCoordinator } from "@/lib/practiceFlushCoordinator";
 
@@ -33,7 +34,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         <ToastProvider>
           <NavigationFlushObserver />
           <AchievementUnlockNotifier />
-          {children}
+          <NewVideoDialogProvider>{children}</NewVideoDialogProvider>
         </ToastProvider>
       </AuthProvider>
     </QueryClientProvider>

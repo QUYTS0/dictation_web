@@ -1,10 +1,12 @@
 /**
  * The Dashboard (component tests, fetch mocked — not a real browser):
- *   - wide shared shell; the resume card beside the league, the review deck
- *     full width (the league joins it when there is no resume card);
- *   - each task has ONE home (plan §4.5.9): the sentences to look at again
- *     in the Continue card, the words in the review deck; the hero's Today
- *     list only says what's left and jumps there — no Next up card;
+ *   - wide shared shell; the resume card above the review deck with the
+ *     league running beside both (plan D14), one grid that never rebuilds a card;
+ *   - each task has ONE home (plan §4.5.9): resuming and the sentences to
+ *     look at again in the Continue card, the words in the review deck; the
+ *     hero's Today list only says what's left and jumps there — no Next up card;
+ *   - one amber action in the hero (plan §4.5.11): the first open Today row,
+ *     or "Start a new video" once nothing is left;
  *   - unknown data is never "nothing left"; "All done for today" only when
  *     every source answered;
  *   - exact cold-load request counts, no writes, no AI/provider calls;
@@ -555,7 +557,7 @@ describe("each task has one home; the Today list jumps to it", () => {
 // ---------------------------------------------------------------- the Today list
 
 describe("the Today list", () => {
-  it("practice time first, then sentences, then words", async () => {
+  it("practice time first, then the minutes still to go, sentences, words", async () => {
     extras.week = weekOf(300);
     responses.vocab = statsOf({ due: 2, reviewable: 2 });
     renderDashboard();
@@ -563,9 +565,21 @@ describe("the Today list", () => {
     await within(plan).findByTestId("today-row-words");
     expect(within(plan).getByTestId("today-target-value")).toHaveTextContent("5 of 15 minutes");
     expect(within(plan).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "10 min to today's goal",
       "3 sentences need another look",
       "2 words are due",
     ]);
+  });
+
+  it("the minutes row jumps to the Continue card and focuses it (resuming counts toward the goal)", async () => {
+    extras.week = weekOf(300);
+    renderDashboard();
+    const row = await screen.findByTestId("today-row-practice");
+    expect(row).toHaveAccessibleName("10 min to today's goal, go to Continue learning");
+    expect(row).toHaveAttribute("href", "#continue-card");
+    fireEvent.click(row);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(document.activeElement).toBe(screen.getByTestId("continue-learning"));
   });
 
   it("words reviewed today and none left → a ticked row, not a link", async () => {
@@ -633,32 +647,104 @@ describe("the Today list", () => {
   });
 });
 
+// ---------------------------------------------------------------- the hero's one amber action
+
+describe("the hero's one amber action (plan §4.5.11)", () => {
+  const amber = () => Array.from(hero().querySelectorAll("[data-next]"));
+
+  it("something left → the first open row is amber and 'Start a new video' is a quiet link", async () => {
+    extras.week = weekOf(300);
+    responses.vocab = statsOf({ due: 2, reviewable: 2 });
+    renderDashboard();
+    const practice = await screen.findByTestId("today-row-practice");
+    await waitFor(() => expect(practice).toHaveAttribute("data-next", "true"));
+    expect(amber()).toEqual([practice]);
+    const newVideo = within(hero()).getByRole("button", { name: "Start a new video" });
+    expect(newVideo).toHaveAttribute("data-testid", "hero-new-video");
+    expect(newVideo).not.toHaveAttribute("data-next");
+    expect(newVideo).not.toHaveClass("bg-reward");
+  });
+
+  it("goal met → the next open row (sentences) takes the amber", async () => {
+    extras.week = weekOf(20 * 60);
+    renderDashboard();
+    const sentences = await screen.findByTestId("today-row-sentences");
+    await waitFor(() => expect(amber()).toEqual([sentences]));
+  });
+
+  it("all done → 'Start a new video' becomes the amber button", async () => {
+    extras.week = weekOf(20 * 60);
+    responses.continue = page([CLEAN], "continue");
+    renderDashboard();
+    await screen.findByTestId("today-all-done");
+    const newVideo = within(hero()).getByRole("button", { name: "Start a new video" });
+    await waitFor(() => expect(newVideo).toHaveAttribute("data-next", "true"));
+    expect(newVideo).toHaveClass("bg-reward");
+    expect(amber()).toEqual([newVideo]);
+  });
+
+  it("nothing unfinished and minutes to go → the minutes row starts a new video, the hero's only new-video control", async () => {
+    const user = userEvent.setup();
+    extras.week = weekOf(300);
+    responses.continue = page([], "continue");
+    renderDashboard();
+    const row = await screen.findByRole("button", { name: "10 min to today's goal, start a new video" });
+    expect(row).toHaveAttribute("data-testid", "today-row-practice");
+    expect(within(hero()).queryByTestId("hero-new-video")).toBeNull();
+    expect(row).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(row);
+    const dialog = screen.getByRole("dialog", { name: "New video" }); // the header's dialog
+    expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "YouTube URL" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("still loading → nothing is amber yet; it settles once every source answers", async () => {
+    extras.week = weekOf(300);
+    const releaseContinue = gate("continue");
+    renderDashboard();
+    await screen.findByTestId("today-plan");
+    await act(async () => {});
+    expect(amber()).toEqual([]);
+    expect(within(hero()).getByRole("button", { name: "Start a new video" })).not.toHaveAttribute("data-next"); // quiet meanwhile
+    await act(async () => releaseContinue());
+    await waitFor(() => expect(amber()).toEqual([screen.getByTestId("today-row-practice")]));
+  });
+
+  it("the level bar sits with the week on the left, not in the Today panel", async () => {
+    extras.week = weekOf(300);
+    extras.xp = xpOf(0);
+    renderDashboard();
+    const level = await screen.findByTestId("hero-level");
+    const plan = screen.getByTestId("today-plan");
+    expect(plan.parentElement).not.toContainElement(level);
+    expect(screen.getByTestId("weekly-track").compareDocumentPosition(level) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
 // ---------------------------------------------------------------- start a new video
 
 describe("'Start a new video' (the hero's button)", () => {
-  it("opens the link box in place and focuses it; Escape collapses it, keeps the typed URL and returns focus to the button", async () => {
+  it("opens the header's New video dialog (no box of its own); Escape closes it, returns focus to the button and keeps the typed link", async () => {
     const user = userEvent.setup();
     renderDashboard();
     await screen.findByTestId("your-progress");
-    expect(document.getElementById("add-video")).toBeNull();
-    const toggle = within(hero()).getByRole("button", { name: "Start a new video" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    const input = document.getElementById("add-video-url") as HTMLInputElement;
-    expect(hero()).toContainElement(input); // inside the hero, not elsewhere
+    const button = within(hero()).getByRole("button", { name: "Start a new video" });
+    expect(button).toHaveAttribute("aria-haspopup", "dialog");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(button);
+    const dialog = screen.getByRole("dialog", { name: "New video" });
+    expect(hero()).not.toContainElement(dialog); // a modal, not a box inside the hero
+    const input = within(dialog).getByRole("textbox", { name: "YouTube URL" });
     expect(document.activeElement).toBe(input);
     expect(screen.getAllByRole("textbox", { name: "YouTube URL" })).toHaveLength(1); // never a second form
-    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled(); // right under the button — no scroll jump
     await user.type(input, "https://youtu.be/abc");
     await user.keyboard("{Escape}");
-    expect(document.getElementById("add-video")).toBeNull();
-    expect(document.activeElement).toBe(toggle);
-    await user.click(toggle);
-    expect((document.getElementById("add-video-url") as HTMLInputElement).value).toBe("https://youtu.be/abc");
-    // Clicking the button again collapses it too.
-    await user.click(toggle);
-    expect(document.getElementById("add-video")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await user.click(button);
+    expect(within(screen.getByRole("dialog", { name: "New video" })).getByRole("textbox", { name: "YouTube URL" })).toHaveValue("https://youtu.be/abc");
     expect(calls.some((c) => !c.startsWith("GET "))).toBe(false);
   });
 });

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import { Headphones, Plus } from "lucide-react";
 import UserButton from "@/components/UserButton";
-import { AddVideoDialog } from "@/components/AddVideoDialog";
+import { useNewVideoDialog } from "@/components/NewVideoDialog";
 import { StreakPill } from "@/components/StreakPill";
 import { XpPill } from "@/components/XpPill";
 import { useAuth } from "@/context/auth";
@@ -51,9 +51,8 @@ export default function AppHeader({ active }: AppHeaderProps) {
   const { user } = useAuth();
   const streak = useStreakQuery(user?.id).data;
   const xp = useXpQuery(user?.id).data;
-  const [addOpen, setAddOpen] = useState(false);
-  // Kept here so closing and reopening the dialog keeps a half-typed link.
-  const [addUrl, setAddUrl] = useState("");
+  // The app's one New video dialog (also opened by the Dashboard hero); it keeps a half-typed link.
+  const newVideo = useNewVideoDialog();
   const navRef = useRef<HTMLElement>(null);
 
   // When the tabs scroll (a phone, or a squeezed one-row header), bring the
@@ -127,7 +126,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
           {user && (
             <button
               type="button"
-              onClick={() => setAddOpen(true)}
+              onClick={newVideo.open}
               aria-haspopup="dialog"
               aria-label="New video"
               className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-primary-50 px-2.5 py-1.5 text-xs font-semibold text-primary-600 transition-colors hover:border-primary-500/40 hover:bg-primary-100 sm:px-3"
@@ -141,7 +140,7 @@ export default function AppHeader({ active }: AppHeaderProps) {
           <UserButton />
         </div>
       </div>
-      {addOpen && <AddVideoDialog url={addUrl} onUrlChange={setAddUrl} onClose={() => setAddOpen(false)} />}
+      {newVideo.dialog}
     </header>
   );
 }

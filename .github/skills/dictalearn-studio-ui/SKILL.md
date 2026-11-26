@@ -100,7 +100,7 @@ import { HERO_SURFACE_STYLE } from "@/app/dashboard/components/DashboardHero";
 | Primary button | `rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50` |
 | Secondary button | `rounded-lg border border-line bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-600 hover:bg-primary-100` |
 | Quiet button / link | `text-xs font-semibold text-primary-600 hover:text-primary-700` |
-| Hero CTA (amber) | `rounded-lg border border-reward/40 bg-reward px-3 py-2.5 text-sm font-semibold text-hero` |
+| Hero CTA (amber) | `AMBER_ACTION` in `TodayPlan.tsx` (`border border-reward/40 bg-reward font-semibold text-hero` + inset shadow) with `rounded-lg px-3 py-2.5 text-sm`. **One per hero**: the first open Today row, or "Start a new video" once nothing is left |
 | Icon button | `rounded-lg p-1.5 text-muted hover:bg-surface hover:text-ink` + `aria-label` |
 | Input | `rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-primary-500 focus:ring-2 focus:ring-primary-500/30` |
 | Progress bar | track `h-1.5 w-full overflow-hidden rounded-full bg-line`, fill `animate-progress-fill h-full rounded-full bg-primary-600` (`bg-success` when met) with an inline `width`; mark the bar `aria-hidden` and give the number as text |
